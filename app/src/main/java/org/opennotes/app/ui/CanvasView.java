@@ -76,6 +76,7 @@ public class CanvasView extends View {
     private float beautifySmoothing = 0.65f;
     private float smoothedX = 0f;
     private float smoothedY = 0f;
+    private float smoothedPressure = 0.5f;
     private long strokeStartTime = 0;
     private ShapeItem.Type currentShapeType = ShapeItem.Type.RECTANGLE;
 
@@ -1666,7 +1667,8 @@ public class CanvasView extends View {
         float rawY = event.getY();
         float canvasX = (rawX - panOffsetX) / scaleFactor;
         float canvasY = (rawY - panOffsetY) / scaleFactor + viewportOffsetY;
-        float pressure = event.getPressure();
+        int primaryToolType = event.getToolType(0);
+        float pressure = normalizeInputPressure(event.getPressure(), primaryToolType);
 
         // 2b. Laser Pointer Tool (ephemeral glowing presentation trail)
         if (currentTool == DrawingTool.LASER) {
@@ -1811,6 +1813,7 @@ public class CanvasView extends View {
             case MotionEvent.ACTION_DOWN:
                 smoothedX = canvasX;
                 smoothedY = canvasY;
+                smoothedPressure = pressure;
                 strokeStartTime = System.currentTimeMillis();
                 activeStroke = new Stroke(currentColor, currentStrokeWidth, currentTool);
                 activeStroke.addPoint(canvasX, canvasY, pressure);
@@ -1821,7 +1824,11 @@ public class CanvasView extends View {
 
             case MotionEvent.ACTION_MOVE:
                 if (activeStroke != null) {
-                    float filterWeight = 1.0f - (strokeStabilization * 0.70f);
+                    // Use light, low-latency filtering. The quadratic stroke renderer
+                    // already smooths sample geometry; heavy filtering here makes the
+                    // ink trail the pen and creates a sharp tail when the pen lifts.
+                    float filterWeight = 1.0f - (strokeStabilization * 0.18f);
+                    float pressureFilterWeight = 1.0f - (strokeStabilization * 0.35f);
                     int historySize = event.getHistorySize();
                     for (int i = 0; i < historySize; i++) {
                         float histRawX = event.getHistoricalX(i);
@@ -1831,12 +1838,16 @@ public class CanvasView extends View {
 
                         smoothedX = smoothedX + (histX - smoothedX) * filterWeight;
                         smoothedY = smoothedY + (histY - smoothedY) * filterWeight;
-                        activeStroke.addPoint(smoothedX, smoothedY, event.getHistoricalPressure(i));
+                        float historicalPressure = normalizeInputPressure(
+                                event.getHistoricalPressure(i), primaryToolType);
+                        smoothedPressure += (historicalPressure - smoothedPressure) * pressureFilterWeight;
+                        activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure);
                     }
                     smoothedX = smoothedX + (canvasX - smoothedX) * filterWeight;
                     smoothedY = smoothedY + (canvasY - smoothedY) * filterWeight;
+                    smoothedPressure += (pressure - smoothedPressure) * pressureFilterWeight;
 
-                    activeStroke.addPoint(smoothedX, smoothedY, pressure);
+                    activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure);
                     lastTouchX = smoothedX;
                     lastTouchY = smoothedY;
 
@@ -1847,14 +1858,32 @@ public class CanvasView extends View {
 
             case MotionEvent.ACTION_UP:
                 if (activeStroke != null) {
-                    activeStroke.addPoint(canvasX, canvasY, pressure);
+                    // Ease the final sample toward the actual pen-up location instead
+                    // of appending a raw point after filtered points. This prevents
+                    // the disconnected-looking tail that creates shoe-shaped ends.
+                    float endWeight = 1.0f - (strokeStabilization * 0.06f);
+                    smoothedX += (canvasX - smoothedX) * endWeight;
+                    smoothedY += (canvasY - smoothedY) * endWeight;
+                    smoothedPressure += (pressure - smoothedPressure) * 0.65f;
+                    activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure);
 
                     // Straight-Line Snapping Assist
                     if (straightLineAssist && activeStroke.points.size() > 5) {
                         DrawingPoint firstPt = activeStroke.points.get(0);
                         DrawingPoint lastPt = activeStroke.points.get(activeStroke.points.size() - 1);
                         float dist = (float) Math.hypot(lastPt.x - firstPt.x, lastPt.y - firstPt.y);
-                        if (dist > 60f) {
+                        float maxDeviation = 0f;
+                        if (dist > 0f) {
+                            for (DrawingPoint point : activeStroke.points) {
+                                float deviation = Math.abs((lastPt.y - firstPt.y) * point.x
+                                        - (lastPt.x - firstPt.x) * point.y
+                                        + lastPt.x * firstPt.y - lastPt.y * firstPt.x) / dist;
+                                maxDeviation = Math.max(maxDeviation, deviation);
+                            }
+                        }
+                        // Assist only when the user already drew an almost-straight
+                        // line; never flatten a curved letter or freehand stroke.
+                        if (dist > 60f && maxDeviation <= Math.max(6f, dist * 0.025f)) {
                             activeStroke.points.clear();
                             activeStroke.addPoint(firstPt.x, firstPt.y, 1.0f);
                             activeStroke.addPoint(lastPt.x, lastPt.y, 1.0f);
@@ -1893,6 +1922,12 @@ public class CanvasView extends View {
         }
 
         return super.onTouchEvent(event);
+    }
+
+    private float normalizeInputPressure(float pressure, int toolType) {
+        if (toolType != MotionEvent.TOOL_TYPE_STYLUS) return 0.5f;
+        if (Float.isNaN(pressure) || Float.isInfinite(pressure) || pressure <= 0f) return 0.5f;
+        return Math.max(0.05f, Math.min(1.0f, pressure));
     }
 
     private void handleTwoFingerPanZoom(MotionEvent event, int action) {
