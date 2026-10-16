@@ -78,58 +78,23 @@ public class InkNormalizer {
         final float cx = sumX / pointCount;
         final float cy = sumY / pointCount;
 
-        // 1. Calculate temporal progression vector from early strokes/points to late strokes/points
-        float progDx = 0f, progDy = 0f;
-        boolean hasProgression = false;
-        if (strokes.size() >= 2) {
-            float earlyX = 0f, earlyY = 0f; int earlyCount = 0;
-            float lateX = 0f, lateY = 0f; int lateCount = 0;
-            int nStrokes = strokes.size();
-            int split = Math.max(1, nStrokes / 3);
-            for (int i = 0; i < split; i++) {
-                RectF b = strokes.get(i).getBounds();
-                if (b != null && !b.isEmpty()) {
-                    earlyX += b.centerX(); earlyY += b.centerY(); earlyCount++;
-                }
-            }
-            for (int i = nStrokes - split; i < nStrokes; i++) {
-                RectF b = strokes.get(i).getBounds();
-                if (b != null && !b.isEmpty()) {
-                    lateX += b.centerX(); lateY += b.centerY(); lateCount++;
-                }
-            }
-            if (earlyCount > 0 && lateCount > 0) {
-                progDx = (lateX / lateCount) - (earlyX / earlyCount);
-                progDy = (lateY / lateCount) - (earlyY / earlyCount);
-                hasProgression = true;
-            }
-        } else if (allPoints.size() >= 8) {
-            int k = Math.max(2, allPoints.size() / 5);
-            float earlyX = 0f, earlyY = 0f;
-            float lateX = 0f, lateY = 0f;
-            for (int i = 0; i < k; i++) {
-                earlyX += allPoints.get(i).x; earlyY += allPoints.get(i).y;
-            }
-            for (int i = allPoints.size() - k; i < allPoints.size(); i++) {
-                lateX += allPoints.get(i).x; lateY += allPoints.get(i).y;
-            }
-            progDx = (lateX / k) - (earlyX / k);
-            progDy = (lateY / k) - (earlyY / k);
-            hasProgression = true;
-        }
+        // 1. Calculate baseline 0° metrics first
+        RectF b0 = getBounds(strokes);
+        float w0 = Math.max(1f, b0.width());
+        float h0 = Math.max(1f, b0.height());
+        float ar0 = w0 / h0;
+        float score0 = (w0 * w0) / (h0 * (float) Math.sqrt(w0 * h0));
 
-        float progDist = (float) Math.hypot(progDx, progDy);
-        float progAngle = hasProgression && progDist > 5f
-                ? (float) Math.toDegrees(Math.atan2(progDy, progDx))
-                : 0f;
+        // If stroke cluster is approximately square (aspect ratio < 1.30),
+        // it is a single upright character or symbol (e.g. "क", "म", "O", "A"). Do not rotate!
+        if (ar0 < 1.30f) return 0f;
 
-        // 2. Minimum Area Bounding Box / Aspect Ratio Sweep across angles [-85°, +90°]
+        // 2. Minimum Area Bounding Box / Aspect Ratio Sweep across angles [-80°, +80°]
         // Text lines have maximum width-to-height aspect ratio along the baseline!
         float bestAngle = 0f;
-        float maxScore = -1f;
-        float bestAspectRatio = 1f;
+        float maxScore = score0;
 
-        for (float deg = -85f; deg <= 90f; deg += 2.5f) {
+        for (float deg = -80f; deg <= 80f; deg += 2.5f) {
             double rad = Math.toRadians(-deg);
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);
@@ -150,27 +115,11 @@ public class InkNormalizer {
 
             float w = Math.max(1f, maxX - minX);
             float h = Math.max(1f, maxY - minY);
-            float ar = w / h;
-            float area = w * h;
-
-            // Score favors high aspect ratio (elongated baseline) and compact bounding area
-            float score = (w * w) / (h * (float) Math.sqrt(area));
-
-            // Temporal progression alignment bonus if the user wrote multiple strokes/points along a direction
-            if (hasProgression && progDist >= 18f) {
-                float diff = Math.abs(normalizeAngleDiff(deg, progAngle));
-                if (diff < 45f) {
-                    score *= (1.0f + (1.0f - diff / 45f) * 0.4f);
-                } else if (diff > 135f) {
-                    // Suppress 180-degree inverted direction
-                    score *= 0.5f;
-                }
-            }
+            float score = (w * w) / (h * (float) Math.sqrt(w * h));
 
             if (score > maxScore) {
                 maxScore = score;
                 bestAngle = deg;
-                bestAspectRatio = ar;
             }
         }
 
@@ -199,10 +148,6 @@ public class InkNormalizer {
             float w = Math.max(1f, maxX - minX);
             float h = Math.max(1f, maxY - minY);
             float score = (w * w) / (h * (float) Math.sqrt(w * h));
-            if (hasProgression && progDist >= 18f) {
-                float diff = Math.abs(normalizeAngleDiff(deg, progAngle));
-                if (diff < 45f) score *= (1.0f + (1.0f - diff / 45f) * 0.4f);
-            }
             if (score > fineMaxScore) {
                 fineMaxScore = score;
                 refinedAngle = deg;
@@ -210,21 +155,14 @@ public class InkNormalizer {
         }
 
         // 4. Stability guards
-        // If angle is close to horizontal (+/- 3.5°), snap to 0° to avoid jitter on normal horizontal writing.
-        if (Math.abs(refinedAngle) < 3.5f) return 0f;
+        // Snap small angles within [-6°, +6°] to 0° to avoid jitter on normal horizontal writing
+        if (Math.abs(refinedAngle) <= 6.0f) return 0f;
 
-        // If stroke is approximately square (aspect ratio < 1.30) and has low progression distance,
-        // it is a single upright character or symbol (e.g. "क", "म", "O", "A"). Do not rotate!
-        if (bestAspectRatio < 1.30f && progDist < 25f) return 0f;
+        // Strong horizontal anchor: If 0° is already elongated (ar0 >= 1.40),
+        // rotated score must be substantially higher (> 1.35x) to justify rotation.
+        if (ar0 >= 1.40f && fineMaxScore < score0 * 1.35f) return 0f;
 
         return refinedAngle;
-    }
-
-    private static float normalizeAngleDiff(float a, float b) {
-        float diff = a - b;
-        while (diff > 180f) diff -= 360f;
-        while (diff < -180f) diff += 360f;
-        return diff;
     }
 
     /**
@@ -298,7 +236,7 @@ public class InkNormalizer {
         float slantAngle = isIndic ? 0f : detectSlantAngleDegrees(strokes);
         float writingAngle = detectWritingAngleDegrees(strokes);
 
-        if (Math.abs(writingAngle) < 3.5f && Math.abs(slantAngle) < 10f) {
+        if (Math.abs(writingAngle) < 6.0f && Math.abs(slantAngle) < 10f) {
             return new NormalizedInk(strokes, new OrientationTransform(0f, pivotX, pivotY, 0f));
         }
 

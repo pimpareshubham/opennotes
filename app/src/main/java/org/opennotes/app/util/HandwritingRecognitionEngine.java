@@ -355,14 +355,14 @@ public final class HandwritingRecognitionEngine {
         final float writingAngle = (normalized != null && normalized.transform != null)
                 ? normalized.transform.angleDegrees
                 : estimateWritingAngleDegrees(strokes);
-        final boolean isSlanted = Math.abs(writingAngle) >= 3.5f;
+        final boolean isSlanted = Math.abs(writingAngle) >= 6.0f;
 
         List<Stroke> primaryStrokes = (isSlanted && normalized != null && normalized.strokes != null && !normalized.strokes.isEmpty())
                 ? normalized.strokes
                 : strokes;
 
         final List<Stroke> effectivePrimary = primaryStrokes;
-        executeSingleRecognitionPass(context, effectivePrimary, strokes, writingAngle, preferredLanguage, contextText, new Callback() {
+        executeSingleRecognitionPass(context, effectivePrimary, strokes, isSlanted ? writingAngle : 0f, preferredLanguage, contextText, new Callback() {
             @Override
             public void onSuccess(RecognitionResult primaryResult) {
                 if (includeReviewSuggestions || primaryResult.alternatives.size() <= 1) {
@@ -1065,13 +1065,13 @@ public final class HandwritingRecognitionEngine {
     }
 
     private static List<String> rerankDevanagariCandidates(List<Stroke> strokes, List<String> candidates) {
-        if (strokes == null || strokes.isEmpty() || candidates == null || candidates.isEmpty()) {
+        if (strokes == null || strokes.isEmpty() || candidates == null || candidates.size() <= 1) {
             return candidates;
         }
 
         // Level strokes horizontally so diacritic geometric analysis aligns with thresholds
         float angle = InkNormalizer.detectWritingAngleDegrees(strokes);
-        List<Stroke> leveledStrokes = (Math.abs(angle) >= 3.5f)
+        List<Stroke> leveledStrokes = (Math.abs(angle) >= 6.0f)
                 ? transformedStrokeCopies(strokes, angle, false, false)
                 : strokes;
 
@@ -1080,10 +1080,10 @@ public final class HandwritingRecognitionEngine {
 
         float totalHeight = bounds.height();
         float totalWidth = bounds.width();
-        float upperThreshold = bounds.top + totalHeight * 0.30f;
+        float upperThreshold = bounds.top + totalHeight * 0.32f;
         float lowerThreshold = bounds.bottom - totalHeight * 0.25f;
-        float leftThreshold = bounds.left + totalWidth * 0.40f;
-        float rightThreshold = bounds.left + totalWidth * 0.45f;
+        float leftThreshold = bounds.left + totalWidth * 0.38f;
+        float rightThreshold = bounds.left + totalWidth * 0.48f;
 
         boolean hasUpperMatraStroke = false;
         boolean hasKanaStroke = false;
@@ -1110,49 +1110,49 @@ public final class HandwritingRecognitionEngine {
                 }
             }
 
-            // 1. Anusvar Dot (अनुस्वार - ं): Small dot or short tap in top region
-            boolean isDotSize = (sb.width() < totalWidth * 0.26f && sb.height() < totalHeight * 0.26f)
-                    && (ptCount <= 6 || arcLen < totalHeight * 0.35f);
-            if (isDotSize && sb.bottom <= upperThreshold + totalHeight * 0.12f) {
-                hasAnusvarDot = true;
-                hasUpperMatraStroke = true;
+            // 1. Shirorekha (Horizontal headline across characters):
+            // Wide horizontal bar (width > 38% totalWidth and width/height >= 2.5).
+            // A shirorekha is a natural structural feature of Devanagari, NOT an upper matra!
+            boolean isShirorekha = (sb.width() > totalWidth * 0.38f && (sb.width() / Math.max(1f, sb.height())) >= 2.5f);
+            if (isShirorekha) {
                 continue;
             }
 
-            // 2. Upper Matra (मात्रा - े, ै, ो, ौ): Slanted line sitting predominantly above or at upperThreshold
-            if (sb.top < upperThreshold) {
-                if (sb.bottom <= upperThreshold + totalHeight * 0.22f) {
-                    hasUpperMatraStroke = true;
-                } else if (pts != null) {
-                    for (DrawingPoint p : pts) {
-                        if (p.y < bounds.top + totalHeight * 0.20f) {
-                            hasUpperMatraStroke = true;
-                            break;
-                        }
-                    }
-                }
+            // 2. Anusvar Dot (अनुस्वार - ं): Small dot or short tap in top region
+            boolean isDotSize = (sb.width() < totalWidth * 0.25f && sb.height() < totalHeight * 0.25f)
+                    && (ptCount <= 8 || arcLen < totalHeight * 0.30f);
+            if (isDotSize && sb.bottom <= upperThreshold + totalHeight * 0.10f) {
+                hasAnusvarDot = true;
+                continue;
             }
 
-            // 3. Pahili Velanti (पहिली वेलांटी - ि): Vertical stem on the left of the consonant
-            if (sb.right <= leftThreshold && sb.height() >= totalHeight * 0.35f) {
+            // 3. Upper Matra (मात्रा - े, ै, ो, ौ): Slanted/diagonal line in upper region (NOT the horizontal shirorekha!)
+            if (sb.top < upperThreshold && sb.height() >= totalHeight * 0.12f) {
+                hasUpperMatraStroke = true;
+            }
+
+            // 4. Pahili Velanti (पहिली वेलांटी - ि): Vertical stem on the left of the consonant
+            if (sb.right <= leftThreshold && sb.height() >= totalHeight * 0.38f
+                    && (sb.height() / Math.max(1f, sb.width())) >= 1.4f) {
                 hasPahiliVelantiStroke = true;
             }
 
-            // 4. Kana (काणा - ा) vs Dusri Velanti (दुसरी वेलांटी - ी):
+            // 5. Kana (काणा - ा) vs Dusri Velanti (दुसरी वेलांटी - ी):
             // Both have a vertical downstroke on the right side of the character.
             // A Kana is straight vertical (no backward arch over the consonant).
             // A Dusri Velanti has an arch at the top curving to the LEFT over the consonant!
-            if (sb.left >= rightThreshold && sb.height() >= totalHeight * 0.35f) {
+            if (sb.left >= rightThreshold && sb.height() >= totalHeight * 0.38f
+                    && (sb.height() / Math.max(1f, sb.width())) >= 1.4f) {
                 boolean hasLeftwardArch = false;
                 if (pts != null && ptCount >= 3) {
                     float stemX = sb.right;
                     float minTopX = stemX;
                     for (DrawingPoint p : pts) {
-                        if (p.y < upperThreshold) {
+                        if (p.y <= upperThreshold) {
                             minTopX = Math.min(minTopX, p.x);
                         }
                     }
-                    if (minTopX < stemX - totalWidth * 0.25f) {
+                    if (minTopX < stemX - totalWidth * 0.22f) {
                         hasLeftwardArch = true;
                     }
                 }
@@ -1164,59 +1164,16 @@ public final class HandwritingRecognitionEngine {
                 }
             }
 
-            // 5. Lower Ukar (उकार - ु, ू): Dips below lower baseline
+            // 6. Lower Ukar (उकार - ु, ू): Dips below lower baseline
             if (sb.bottom >= lowerThreshold && sb.top > bounds.top + totalHeight * 0.45f) {
                 hasLowerUkarStroke = true;
             }
         }
 
-        // Global check across all points for upper matra (e.g. if drawn in a compound stroke)
-        if (!hasUpperMatraStroke) {
-            for (Stroke s : leveledStrokes) {
-                if (s == null) continue;
-                List<DrawingPoint> pts = s.getRecognitionPoints();
-                if (pts == null || pts.isEmpty()) pts = s.points;
-                if (pts == null) continue;
-                for (DrawingPoint p : pts) {
-                    if (p.y < bounds.top + totalHeight * 0.18f) {
-                        hasUpperMatraStroke = true;
-                        break;
-                    }
-                }
-                if (hasUpperMatraStroke) break;
-            }
-        }
-
-        // Candidate Synthesis:
-        // Guarantee that if the user wrote a diacritic combination, the matching candidate exists in the pool!
-        List<String> pool = new ArrayList<>(candidates);
-        String baseChar = extractPrimaryDevanagariConsonant(candidates);
-        if (baseChar != null && !baseChar.isEmpty()) {
-            if (hasKanaStroke && hasUpperMatraStroke) {
-                // Kana + Upper Matra -> को / कौ
-                addIfMissing(pool, baseChar + "\u094b"); // \u094b = ो (e.g. को)
-                addIfMissing(pool, baseChar + "\u094c"); // \u094c = ौ (e.g. कौ)
-            } else if (hasKanaStroke && !hasUpperMatraStroke && !hasDusriVelantiStroke && !hasPahiliVelantiStroke) {
-                // Pure Kana -> का
-                addIfMissing(pool, baseChar + "\u093e"); // \u093e = ा (e.g. का)
-            } else if (hasPahiliVelantiStroke) {
-                // Pahili Velanti -> कि
-                addIfMissing(pool, baseChar + "\u093f"); // \u093f = ि (e.g. कि)
-            } else if (hasDusriVelantiStroke) {
-                // Dusri Velanti -> की
-                addIfMissing(pool, baseChar + "\u0940"); // \u0940 = ी (e.g. की)
-            } else if (hasAnusvarDot) {
-                // Anusvar -> कं, बं
-                addIfMissing(pool, baseChar + "\u0902"); // \u0902 = ं (e.g. बं, कं)
-            } else if (hasUpperMatraStroke && !hasKanaStroke) {
-                // Upper Matra -> के, बे, कै
-                addIfMissing(pool, baseChar + "\u0947"); // \u0947 = े (e.g. बे, के)
-                addIfMissing(pool, baseChar + "\u0948"); // \u0948 = ै (e.g. कै, बै)
-            } else if (hasLowerUkarStroke) {
-                // Ukar -> कु, कू
-                addIfMissing(pool, baseChar + "\u0941"); // \u0941 = ु
-                addIfMissing(pool, baseChar + "\u0942"); // \u0942 = ू
-            }
+        // Only re-rank if there is a distinct detected feature to avoid perturbing high-confidence base output
+        if (!hasUpperMatraStroke && !hasKanaStroke && !hasPahiliVelantiStroke
+                && !hasDusriVelantiStroke && !hasLowerUkarStroke && !hasAnusvarDot) {
+            return candidates;
         }
 
         final boolean fUpper = hasUpperMatraStroke;
@@ -1226,107 +1183,72 @@ public final class HandwritingRecognitionEngine {
         final boolean fLower = hasLowerUkarStroke;
         final boolean fAnusvar = hasAnusvarDot;
 
+        // Re-score ONLY the legitimate candidates returned by ML Kit! Never inject synthetic strings!
+        List<String> pool = new ArrayList<>(candidates);
         pool.sort((c1, c2) -> {
-            int score1 = scoreDevanagariMatch(c1, fUpper, fKana, fPahili, fDusri, fLower, fAnusvar);
-            int score2 = scoreDevanagariMatch(c2, fUpper, fKana, fPahili, fDusri, fLower, fAnusvar);
+            int score1 = scoreDevanagariMatch(c1, pool.indexOf(c1), fUpper, fKana, fPahili, fDusri, fLower, fAnusvar);
+            int score2 = scoreDevanagariMatch(c2, pool.indexOf(c2), fUpper, fKana, fPahili, fDusri, fLower, fAnusvar);
             return Integer.compare(score2, score1);
         });
 
         return pool;
     }
 
-    private static void addIfMissing(List<String> list, String item) {
-        if (item != null && !item.isEmpty() && !list.contains(item)) {
-            list.add(0, item);
-        }
-    }
-
-    private static String extractPrimaryDevanagariConsonant(List<String> candidates) {
-        if (candidates == null) return null;
-        for (String c : candidates) {
-            if (c == null || c.trim().isEmpty()) continue;
-            String trimmed = c.trim();
-            for (int i = 0; i < trimmed.length(); i++) {
-                char ch = trimmed.charAt(i);
-                if ((ch >= '\u0915' && ch <= '\u0939') || (ch >= '\u0905' && ch <= '\u0914')) {
-                    return String.valueOf(ch);
-                }
-            }
-        }
-        return null;
-    }
-
-    private static int scoreDevanagariMatch(String text, boolean hasUpper, boolean hasKana,
+    private static int scoreDevanagariMatch(String text, int rankIndex, boolean hasUpper, boolean hasKana,
                                             boolean hasPahiliVelanti, boolean hasDusriVelanti,
                                             boolean hasLower, boolean hasAnusvar) {
         if (text == null) return 0;
-        int score = 0;
+        // Base confidence from ML Kit's own model: candidate 0 gets 100, candidate 1 gets 85, etc.
+        int score = Math.max(0, 100 - rankIndex * 15);
 
         boolean textHasPureKana = text.contains("\u093e"); // का, बा
         boolean textHasOorAu = containsAny(text, "\u094b", "\u094c"); // को, कौ
         boolean textHasPahiliVelanti = text.contains("\u093f"); // कि, बि
         boolean textHasDusriVelanti = text.contains("\u0940"); // की, बी
-        boolean textHasAnyVelanti = textHasPahiliVelanti || textHasDusriVelanti;
         boolean textHasPureUpper = containsAny(text, "\u0947", "\u0948", "\u0945"); // के, कै
         boolean textHasAnusvar = containsAny(text, "\u0902", "\u0901", "\u0903"); // कं, बं
         boolean textHasLowerUkar = containsAny(text, "\u0941", "\u0942", "\u0943"); // कु, कू
-        boolean isBareConsonant = !textHasPureKana && !textHasOorAu && !textHasAnyVelanti
-                && !textHasPureUpper && !textHasAnusvar && !textHasLowerUkar;
 
-        // 1. Kana + Upper Matra (को, कौ)
-        if (hasKana && hasUpper) {
-            if (textHasOorAu) score += 95;
-            else if (textHasPureKana) score -= 45;
-            else if (textHasPureUpper) score -= 45;
-            else if (textHasAnyVelanti) score -= 85;
-            else if (isBareConsonant) score -= 110;
-        }
-        // 2. Pure Kana (का, बा) - NO upper matra, NO velanti arch, NO left stem
-        else if (hasKana && !hasUpper && !hasDusriVelanti && !hasPahiliVelanti) {
-            if (textHasPureKana) score += 95;
-            if (textHasAnyVelanti) score -= 90; // User explicitly said: "sometimes it's adding velanti even though i tried to add a kana"
-            if (textHasOorAu) score -= 50;
-            if (textHasPureUpper) score -= 60;
-            if (isBareConsonant) score -= 95;
-        }
-        // 3. Pahili Velanti (कि, बि) - left vertical stem with arch
-        else if (hasPahiliVelanti) {
-            if (textHasPahiliVelanti) score += 95;
-            if (textHasDusriVelanti) score += 30;
-            if (textHasPureKana) score -= 85;
-            if (isBareConsonant) score -= 95;
-        }
-        // 4. Dusri Velanti (की, बी) - right vertical stem with leftward arch
-        else if (hasDusriVelanti) {
-            if (textHasDusriVelanti) score += 95;
-            if (textHasPahiliVelanti) score += 30;
-            if (textHasPureKana) score -= 85;
-            if (isBareConsonant) score -= 95;
-        }
-        // 5. Anusvar Dot (कं, बं)
-        else if (hasAnusvar && !hasKana) {
-            if (textHasAnusvar) score += 95;
-            if (textHasPureUpper) score += 40;
-            if (textHasPureKana) score -= 65;
-            if (textHasAnyVelanti) score -= 85;
-            if (isBareConsonant) score -= 95;
-        }
-        // 6. Upper Matra Only (के, बे, कै)
-        else if (hasUpper && !hasKana) {
-            if (textHasPureUpper) score += 90;
-            if (textHasAnusvar) score += 40;
-            if (textHasPureKana) score -= 65;
-            if (textHasAnyVelanti) score -= 85;
-            if (textHasOorAu) score -= 40;
-            if (isBareConsonant) score -= 95;
+        // 1. Pure Kana vs Dusri Velanti (resolves: "sometimes it's adding velanti even though i tried to add a kana")
+        if (hasKana && !hasDusriVelanti && !hasPahiliVelanti && !hasUpper) {
+            if (textHasPureKana) score += 45;
+            if (textHasDusriVelanti || textHasPahiliVelanti) score -= 50;
+        } else if (hasDusriVelanti) {
+            if (textHasDusriVelanti) score += 45;
+            if (textHasPureKana) score -= 40;
         }
 
-        // 7. Lower Ukar (कु, कू)
-        if (hasLower) {
-            if (textHasLowerUkar) score += 85;
-            else if (isBareConsonant) score -= 75;
+        // 2. Pahili Velanti vs Dusri Velanti
+        if (hasPahiliVelanti) {
+            if (textHasPahiliVelanti) score += 45;
+            if (textHasDusriVelanti) score -= 30;
+        }
+
+        // 3. Anusvar Dot (कं vs क)
+        if (hasAnusvar) {
+            if (textHasAnusvar) score += 50;
         } else {
-            if (textHasLowerUkar) score -= 40;
+            if (textHasAnusvar) score -= 35;
+        }
+
+        // 4. Upper Matra (के, कै vs क)
+        if (hasUpper && !hasKana) {
+            if (textHasPureUpper) score += 45;
+        } else if (!hasUpper && !hasKana) {
+            if (textHasPureUpper || textHasOorAu) score -= 45;
+        }
+
+        // 5. Kana + Upper Matra (को, कौ)
+        if (hasKana && hasUpper) {
+            if (textHasOorAu) score += 50;
+            if (textHasPureKana) score -= 25;
+        }
+
+        // 6. Lower Ukar (कु, कू)
+        if (hasLower) {
+            if (textHasLowerUkar) score += 45;
+        } else {
+            if (textHasLowerUkar) score -= 25;
         }
 
         return score;

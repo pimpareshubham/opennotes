@@ -1183,11 +1183,11 @@ public class CanvasView extends View {
             textPaint.setTextSize(result.fontSize);
             textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
             float spaceWidth = textPaint.measureText(" ");
-            float rotation = result.angleDegrees;
+            float rotation = Math.abs(result.angleDegrees) <= 5.0f ? 0f : result.angleDegrees;
             float curX = (result.startX != 0f || result.startY != 0f) ? result.startX : result.bounds.left;
             float baselineY = (result.startX != 0f || result.startY != 0f) ? result.startY : result.bounds.bottom - 4f;
 
-            if (Math.abs(rotation) > 0.5f || words.length <= 1) {
+            if (Math.abs(rotation) > 5.0f || words.length <= 1) {
                 convertedTexts.add(new TextItem(fullText, curX, baselineY, textColor, result.fontSize, fontKey, rotation));
             } else {
                 float totalWordsWidth = 0f;
@@ -3193,34 +3193,48 @@ public class CanvasView extends View {
                     if (!pendingAutoConvertStrokes.isEmpty()) {
                         RectF lastWordBounds = getStrokesBounds(pendingAutoConvertStrokes);
                         if (!lastWordBounds.isEmpty() && hasEnoughInkForAutoConversion(pendingAutoConvertStrokes)) {
-                            float estHeight = Math.max(40f, lastWordBounds.height());
+                            float estHeight = Math.max(35f, lastWordBounds.height());
                             boolean isIndic = "MARATHI".equalsIgnoreCase(beautifyLanguage) || "HINDI".equalsIgnoreCase(beautifyLanguage);
 
-                            // Check if this new touch is in the diacritic/matra/kana/ukar envelope of the current letter/word:
-                            // - Upper matra / anuswar: above top by up to 1.8x height
-                            // - Lower ukar: below bottom by up to 1.3x height
-                            // - Right kana / velanti: right by up to 1.8x height
-                            // - Left velanti: left by up to 1.4x height
-                            boolean isInDiacriticEnvelope = (canvasX >= lastWordBounds.left - estHeight * 1.4f)
-                                    && (canvasX <= lastWordBounds.right + estHeight * 1.8f)
-                                    && (canvasY >= lastWordBounds.top - estHeight * 1.8f)
-                                    && (canvasY <= lastWordBounds.bottom + Math.max(45f, estHeight * 1.3f));
+                            boolean isNextWord;
+                            boolean isNextLine;
+                            boolean isDistantJump;
 
-                            // If it's within the diacritic/kana envelope or we only have 1-2 strokes in Indic,
-                            // this stroke belongs to the SAME character/word. NEVER auto-convert here!
-                            if (!isInDiacriticEnvelope && (!isIndic || pendingAutoConvertStrokes.size() > 2)) {
-                                float wordGapThreshold = Math.max(90f, estHeight * 1.4f);
-                                float lineJumpThreshold = Math.max(80f, estHeight * 1.3f);
-                                boolean isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
-                                boolean isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold);
-                                boolean isDistantJump = (canvasY < lastWordBounds.top - estHeight * 2.2f)
-                                        || (canvasX < lastWordBounds.left - 120f && canvasY > lastWordBounds.bottom + 20f);
+                            if (isIndic) {
+                                // In Devanagari (Marathi/Hindi), strokes for the same character can be drawn nearby:
+                                // upper matra/anuswar at top, lower ukar at bottom, kana/velanti on sides.
+                                boolean isInDiacriticEnvelope = (canvasX >= lastWordBounds.left - estHeight * 0.9f)
+                                        && (canvasX <= lastWordBounds.right + Math.max(45f, estHeight * 0.9f))
+                                        && (canvasY >= lastWordBounds.top - Math.max(50f, estHeight * 1.0f))
+                                        && (canvasY <= lastWordBounds.bottom + Math.max(45f, estHeight * 0.8f));
 
-                                if (isNextWord || isNextLine || isDistantJump) {
-                                    List<Stroke> completedWord = new ArrayList<>(pendingAutoConvertStrokes);
-                                    pendingAutoConvertStrokes.clear();
-                                    convertStrokesToText(completedWord);
+                                if (isInDiacriticEnvelope && pendingAutoConvertStrokes.size() <= 4) {
+                                    isNextWord = false;
+                                    isNextLine = false;
+                                    isDistantJump = false;
+                                } else {
+                                    float wordGapThreshold = Math.max(70f, estHeight * 1.1f);
+                                    float lineJumpThreshold = Math.max(65f, estHeight * 1.1f);
+                                    isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
+                                    isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold);
+                                    isDistantJump = (canvasY < lastWordBounds.top - estHeight * 2.0f)
+                                            || (canvasX < lastWordBounds.left - 100f && canvasY > lastWordBounds.bottom + 20f);
                                 }
+                            } else {
+                                // Clean, natural English word separation:
+                                float wordGapThreshold = Math.max(50f, estHeight * 0.75f);
+                                float lineJumpThreshold = Math.max(45f, estHeight * 0.75f);
+                                isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
+                                isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold)
+                                        || (canvasX < lastWordBounds.left - 50f && canvasY > lastWordBounds.top + 25f);
+                                isDistantJump = (canvasY < lastWordBounds.top - 60f)
+                                        || (canvasX < lastWordBounds.left - 90f);
+                            }
+
+                            if (isNextWord || isNextLine || isDistantJump) {
+                                List<Stroke> completedWord = new ArrayList<>(pendingAutoConvertStrokes);
+                                pendingAutoConvertStrokes.clear();
+                                convertStrokesToText(completedWord);
                             }
                         }
                     }
@@ -3355,8 +3369,9 @@ public class CanvasView extends View {
                             autoConvertHandler.removeCallbacks(autoConvertRunnable);
                             boolean isIndic = "MARATHI".equalsIgnoreCase(beautifyLanguage) || "HINDI".equalsIgnoreCase(beautifyLanguage);
                             int strokeCount = pendingAutoConvertStrokes.size();
-                            // Give generous, comfortable time for Indic scripts so users can add kana, matra, or anuswar without rush
-                            long delay = isIndic ? (strokeCount <= 2 ? 4500L : 3800L) : 3000L;
+                            // English: prompt 1300ms pause so words don't pile up.
+                            // Indic: 2800ms to allow adding kana, matra, or anuswar without rushing.
+                            long delay = isIndic ? (strokeCount <= 2 ? 3000L : 2500L) : 1300L;
                             autoConvertHandler.postDelayed(autoConvertRunnable, delay);
                         }
                     }
