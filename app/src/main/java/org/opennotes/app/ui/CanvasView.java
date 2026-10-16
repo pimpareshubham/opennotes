@@ -685,9 +685,11 @@ public class CanvasView extends View {
                     @Override
                     public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult res) {
                         if (currentPage != requestedPage || res == null || res.text.trim().isEmpty()) return;
-                        String fontKey = beautifyFontKey;
-                        if (fontKey == null || fontKey.isEmpty()) {
-                            fontKey = "ENGLISH".equalsIgnoreCase(res.language)
+                        final String selectedFontKey;
+                        if (beautifyFontKey != null && !beautifyFontKey.isEmpty()) {
+                            selectedFontKey = beautifyFontKey;
+                        } else {
+                            selectedFontKey = "ENGLISH".equalsIgnoreCase(res.language)
                                     ? org.opennotes.app.util.TypefaceManager.FONT_CAVEAT
                                     : org.opennotes.app.util.TypefaceManager.FONT_KALAM;
                         }
@@ -697,12 +699,12 @@ public class CanvasView extends View {
                                     .setTitle("Choose recognized text")
                                     .setItems(candidates, (dialog, which) -> applyRecognizedText(
                                             requestedPage, requestedStrokes, res, textColor,
-                                            fontKey, candidates[which].toString()))
+                                            selectedFontKey, candidates[which].toString()))
                                     .setNegativeButton("Keep handwriting", null)
                                     .show();
                         } else {
                             applyRecognizedText(requestedPage, requestedStrokes, res,
-                                    textColor, fontKey, res.text);
+                                    textColor, selectedFontKey, res.text);
                         }
                     }
 
