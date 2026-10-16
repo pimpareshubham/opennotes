@@ -1125,6 +1125,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         popup.getMenu().add(0, 4, 3, "Palm Rejection (Stylus Only)");
         popup.getMenu().add(0, 5, 4, "✨ Auto-Beautification Settings");
         popup.getMenu().add(0, 6, 5, "Clear Canvas");
+        popup.getMenu().add(0, 7, 6, "Select All Handwriting");
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -1153,6 +1154,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             .setPositiveButton("Clear", (d, w) -> canvasView.clearAll())
                             .setNegativeButton("Cancel", null)
                             .show();
+                    return true;
+                case 7:
+                    if (!canvasView.selectAllHandwriting()) {
+                        Toast.makeText(this, "There is no handwriting on this page to select", Toast.LENGTH_SHORT).show();
+                    }
                     return true;
             }
             return false;

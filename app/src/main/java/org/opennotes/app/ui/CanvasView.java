@@ -29,6 +29,7 @@ import org.opennotes.app.model.TextItem;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
 
@@ -666,8 +667,9 @@ public class CanvasView extends View {
         final List<Stroke> requestedStrokes = new ArrayList<>(strokesToConvert);
         final Page requestedPage = currentPage;
         final int textColor = currentColor;
+        final String preContext = recognitionPreContext(requestedPage, requestedStrokes);
         org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
-                getContext(), requestedStrokes, beautifyLanguage,
+                getContext(), requestedStrokes, beautifyLanguage, preContext,
                 new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
                     @Override
                     public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult res) {
@@ -705,6 +707,48 @@ public class CanvasView extends View {
                                 android.widget.Toast.LENGTH_LONG).show();
                     }
                 });
+    }
+
+    private String recognitionPreContext(Page page, List<Stroke> strokes) {
+        RectF inkBounds = new RectF();
+        boolean found = false;
+        for (Stroke stroke : strokes) {
+            if (stroke == null) continue;
+            List<DrawingPoint> points = stroke.getRecognitionPoints();
+            if (points == null) continue;
+            for (DrawingPoint point : points) {
+                if (!found) {
+                    inkBounds.set(point.x, point.y, point.x, point.y);
+                    found = true;
+                } else {
+                    inkBounds.union(point.x, point.y);
+                }
+            }
+        }
+        if (!found || page.texts == null || page.texts.isEmpty()) return "";
+
+        List<TextItem> preceding = new ArrayList<>();
+        float baseline = inkBounds.bottom - 4f;
+        float lineTolerance = Math.max(24f, inkBounds.height() * 0.65f);
+        for (TextItem item : page.texts) {
+            if (item == null || item.text == null || item.text.isEmpty()) continue;
+            if (item.x >= inkBounds.left || Math.abs(item.y - baseline) > lineTolerance) continue;
+            if (item.getBounds().right > inkBounds.left + Math.max(8f, item.fontSize * 0.15f)) continue;
+            preceding.add(item);
+        }
+        if (preceding.isEmpty()) return "";
+        Collections.sort(preceding, (left, right) -> Float.compare(left.x, right.x));
+        StringBuilder context = new StringBuilder();
+        for (TextItem item : preceding) {
+            if (context.length() > 0) context.append(' ');
+            context.append(item.text);
+        }
+        int codePointCount = context.codePointCount(0, context.length());
+        if (codePointCount > 20) {
+            int start = context.offsetByCodePoints(0, codePointCount - 20);
+            return context.substring(start);
+        }
+        return context.toString();
     }
 
     private void applyRecognizedText(Page requestedPage, List<Stroke> requestedStrokes,
@@ -1502,6 +1546,30 @@ public class CanvasView extends View {
         lassoPath.reset();
         lassoPoints.clear();
         notifyLassoSelection();
+    }
+
+    /** Select every handwritten stroke on the current page using lasso semantics. */
+    public boolean selectAllHandwriting() {
+        if (currentPage == null || currentPage.strokes == null || currentPage.strokes.isEmpty()) {
+            return false;
+        }
+        selectedStrokes.clear();
+        selectedStrokes.addAll(currentPage.strokes);
+        selectedShapes.clear();
+        lassoPath.reset();
+        lassoPoints.clear();
+        selectionBounds.setEmpty();
+        for (Stroke stroke : selectedStrokes) {
+            if (stroke == null) continue;
+            RectF bounds = stroke.getBounds();
+            if (bounds == null || bounds.isEmpty()) continue;
+            if (selectionBounds.isEmpty()) selectionBounds.set(bounds);
+            else selectionBounds.union(bounds);
+        }
+        hasLassoSelection = !selectionBounds.isEmpty();
+        invalidate();
+        notifyLassoSelection();
+        return hasLassoSelection;
     }
 
     public boolean hasSelection() {

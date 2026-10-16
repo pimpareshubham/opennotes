@@ -79,7 +79,14 @@ public final class HandwritingRecognitionEngine {
      */
     public static void recognizeStrokes(Context context, List<Stroke> strokes,
                                         String preferredLanguage, Callback callback) {
+        recognizeStrokes(context, strokes, preferredLanguage, "", callback);
+    }
+
+    public static void recognizeStrokes(Context context, List<Stroke> strokes,
+                                        String preferredLanguage, String preContext,
+                                        Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
+        final String contextText = preContext == null ? "" : preContext;
         WORKER.execute(() -> {
             try {
                 final RectF bounds = boundsOf(strokes);
@@ -97,9 +104,10 @@ public final class HandwritingRecognitionEngine {
                 DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(identifier).build();
                 RemoteModelManager manager = RemoteModelManager.getInstance();
                 manager.isModelDownloaded(model).addOnSuccessListener(isDownloaded -> {
-                    if (isDownloaded) runRecognition(model, strokes, preferredLanguage, bounds, callback);
+                    if (isDownloaded) runRecognition(model, strokes, preferredLanguage,
+                            contextText, bounds, callback);
                     else requestModelDownloadApproval(context, manager, model, tag,
-                            strokes, preferredLanguage, bounds, callback);
+                            strokes, preferredLanguage, contextText, bounds, callback);
                 }).addOnFailureListener(error -> postFailure(callback, error));
             } catch (Exception error) {
                 postFailure(callback, error);
@@ -110,10 +118,11 @@ public final class HandwritingRecognitionEngine {
     private static void requestModelDownloadApproval(Context context, RemoteModelManager manager,
                                                      DigitalInkRecognitionModel model, String tag,
                                                      List<Stroke> strokes, String language,
+                                                     String preContext,
                                                      RectF bounds, Callback callback) {
         AppSettings settings = AppSettings.getInstance(context);
         Runnable beginDownload = () -> downloadThenRecognize(
-                manager, model, tag, strokes, language, bounds, callback);
+                manager, model, tag, strokes, language, preContext, bounds, callback);
         if (settings.hasAcceptedHandwritingModelDownload(tag)) {
             beginDownload.run();
             return;
@@ -171,6 +180,7 @@ public final class HandwritingRecognitionEngine {
     private static void downloadThenRecognize(RemoteModelManager manager,
                                              DigitalInkRecognitionModel model,
                                              String tag, List<Stroke> strokes, String language,
+                                             String preContext,
                                              RectF bounds, Callback callback) {
         final Task<Void> downloadTask;
         synchronized (MODEL_DOWNLOADS) {
@@ -190,7 +200,7 @@ public final class HandwritingRecognitionEngine {
                     .addOnSuccessListener(isDownloaded -> {
                         removeCompletedDownload(tag, downloadTask);
                         if (isDownloaded) {
-                            runRecognition(model, strokes, language, bounds, callback);
+                            runRecognition(model, strokes, language, preContext, bounds, callback);
                         } else {
                             postFailure(callback, new IllegalStateException(
                                     "The language model download finished but the model is not installed yet. Please try again."));
@@ -213,7 +223,8 @@ public final class HandwritingRecognitionEngine {
     }
 
     private static void runRecognition(DigitalInkRecognitionModel model, List<Stroke> strokes,
-                                       String language, RectF bounds, Callback callback) {
+                                       String language, String preContext,
+                                       RectF bounds, Callback callback) {
         try {
             Ink.Builder inkBuilder = Ink.builder();
             long lastInkTime = -1L;
@@ -242,21 +253,22 @@ public final class HandwritingRecognitionEngine {
             Ink ink = inkBuilder.build();
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(5).build());
-            RecognitionContext recognitionContext = RecognitionContext.builder()
-                    .setWritingArea(new WritingArea(Math.max(1f, bounds.width()), Math.max(1f, bounds.height())))
-                    .build();
+            RecognitionContext.Builder contextBuilder = RecognitionContext.builder()
+                    .setWritingArea(new WritingArea(Math.max(1f, bounds.width()), Math.max(1f, bounds.height())));
+            if (!preContext.isEmpty()) contextBuilder.setPreContext(preContext);
+            RecognitionContext recognitionContext = contextBuilder.build();
             recognizer.recognize(ink, recognitionContext)
                     .addOnSuccessListener(result -> {
                         String text = firstCandidate(result);
                         if (text.trim().isEmpty()) {
                             recognizeWithoutWritingArea(recognizer, ink, language,
-                                    bounds, callback, null);
+                                    preContext, bounds, callback, null);
                         } else {
                             completeRecognition(recognizer, result, language, bounds, callback);
                         }
                     })
                     .addOnFailureListener(error -> recognizeWithoutWritingArea(
-                            recognizer, ink, language, bounds, callback, error));
+                            recognizer, ink, language, preContext, bounds, callback, error));
         } catch (Exception error) {
             postFailure(callback, error);
         }
@@ -264,10 +276,18 @@ public final class HandwritingRecognitionEngine {
 
     /** Retry without the optional writing-area hint, which may be a poor fit for selected ink. */
     private static void recognizeWithoutWritingArea(DigitalInkRecognizer recognizer, Ink ink,
-                                                    String language, RectF bounds,
+                                                    String language, String preContext, RectF bounds,
                                                     Callback callback, Exception firstError) {
         try {
-            recognizer.recognize(ink)
+            Task<com.google.mlkit.vision.digitalink.common.RecognitionResult> retryTask;
+            if (preContext.isEmpty()) {
+                retryTask = recognizer.recognize(ink);
+            } else {
+                RecognitionContext context = RecognitionContext.builder()
+                        .setPreContext(preContext).build();
+                retryTask = recognizer.recognize(ink, context);
+            }
+            retryTask
                     .addOnSuccessListener(result -> {
                         String text = firstCandidate(result);
                         if (text.trim().isEmpty()) {
