@@ -2,6 +2,7 @@ package org.opennotes.app.util;
 
 import android.content.Context;
 import android.graphics.Typeface;
+import android.util.Log;
 
 import android.net.Uri;
 import java.io.File;
@@ -22,6 +23,8 @@ import java.util.Map;
  * - Custom External TTF / OTF Fonts imported by user from device storage
  */
 public class TypefaceManager {
+
+    private static volatile String lastFontImportError;
 
     public static final String FONT_KALAM = "KALAM";
     public static final String FONT_CAVEAT = "CAVEAT";
@@ -89,7 +92,11 @@ public class TypefaceManager {
     }
 
     public static String importCustomFont(Context context, Uri fontUri, String originalName) {
-        if (fontUri == null) return null;
+        lastFontImportError = null;
+        if (fontUri == null) {
+            lastFontImportError = "No font file was selected.";
+            return null;
+        }
         try {
             File dir = getFontsDirectory(context);
             String safeName = (originalName != null && !originalName.trim().isEmpty())
@@ -117,10 +124,15 @@ public class TypefaceManager {
                 sCache.put(key, tf);
                 return key;
             }
+            lastFontImportError = "The selected font file could not be opened by the Android document provider.";
         } catch (Exception e) {
-            e.printStackTrace();
+            lastFontImportError = Log.getStackTraceString(e);
         }
         return null;
+    }
+
+    public static String getLastFontImportError() {
+        return lastFontImportError;
     }
 
     public static synchronized Typeface getTypeface(Context context, String fontKey) {

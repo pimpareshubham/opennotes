@@ -49,6 +49,7 @@ import org.opennotes.app.model.Notebook;
 import org.opennotes.app.model.Page;
 import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
+import org.opennotes.app.util.ErrorDialog;
 import org.opennotes.app.util.TypefaceManager;
 
 import java.io.File;
@@ -999,7 +1000,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                                 showExportSuccessDialog(pdfFile, "application/pdf");
                             }
                         } catch (Exception e) {
-                            Toast.makeText(this, "PDF Export failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            ErrorDialog.show(this, "PDF export failed", e);
                         }
                     } else {
                         try {
@@ -1008,7 +1009,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                                 showExportSuccessDialog(imgFile, "image/png");
                             }
                         } catch (Exception e) {
-                            Toast.makeText(this, "Image Export failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                            ErrorDialog.show(this, "Image export failed", e);
                         }
                     }
                 })
@@ -1060,7 +1061,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(intent);
         } catch (Exception e) {
-            shareFile(file, mimeType);
+            ErrorDialog.show(this, "Could not open exported file", e);
         }
     }
 
@@ -1073,7 +1074,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
             startActivity(Intent.createChooser(intent, "Share Exported Note"));
         } catch (Exception ex) {
-            Toast.makeText(this, "Export complete: " + file.getName(), Toast.LENGTH_LONG).show();
+            ErrorDialog.show(this, "Could not share exported file", ex);
         }
     }
 
@@ -1580,7 +1581,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             Toast.makeText(this, "✓ Custom Font Imported: " + fontName + "\nReady for auto-beautification & text conversion", Toast.LENGTH_LONG).show();
             showAutoBeautifySettingsDialog();
         } else {
-            Toast.makeText(this, "Failed to import font. Please select a valid .ttf or .otf file.", Toast.LENGTH_LONG).show();
+            String details = TypefaceManager.getLastFontImportError();
+            ErrorDialog.show(this, "Font import failed", details == null
+                    ? "The selected file could not be imported. Choose a readable .ttf or .otf font file."
+                    : details);
         }
     }
 
@@ -1636,7 +1640,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 }
             }
         } catch (Exception e) {
-            Toast.makeText(this, "Failed to load image: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            ErrorDialog.show(this, "Image could not be loaded", e);
         }
     }
 
@@ -1750,7 +1754,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 statusView.setText("▶ Playing audio memo...");
                 voicePlayer.setOnCompletionListener(mp -> statusView.setText("✓ Playback finished"));
             } catch (Exception e) {
-                statusView.setText("Playback preview: " + e.getMessage());
+                ErrorDialog.show(this, "Could not play voice note", e);
             }
         }
     }

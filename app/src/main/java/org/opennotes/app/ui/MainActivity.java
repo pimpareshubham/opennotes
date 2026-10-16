@@ -35,6 +35,7 @@ import org.opennotes.app.db.AppSettings;
 import org.opennotes.app.db.NotesDbHelper;
 import org.opennotes.app.export.PdfExporter;
 import org.opennotes.app.model.Notebook;
+import org.opennotes.app.util.ErrorDialog;
 import org.opennotes.app.model.PaperTemplate;
 
 import java.io.File;
@@ -509,7 +510,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 startActivity(Intent.createChooser(shareIntent, "Share Notebook PDF"));
             }
         } catch (Exception e) {
-            Toast.makeText(this, "Export failed: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            ErrorDialog.show(this, "Notebook export failed", e);
         }
     }
 
