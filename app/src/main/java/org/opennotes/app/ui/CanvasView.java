@@ -526,35 +526,33 @@ public class CanvasView extends View {
             }
         }
 
-        // 2. Chaikin's Corner-Cutting Algorithm for Calligraphic Curve Smoothing
-        int iterations = (beautifySmoothing > 0.5f) ? 2 : 1;
-        List<DrawingPoint> smoothed = new ArrayList<>(stroke.points);
-
-        for (int it = 0; it < iterations; it++) {
-            if (smoothed.size() < 3) break;
-            List<DrawingPoint> nextPass = new ArrayList<>();
-            nextPass.add(smoothed.get(0));
-
-            for (int i = 0; i < smoothed.size() - 1; i++) {
-                DrawingPoint p0 = smoothed.get(i);
-                DrawingPoint p1 = smoothed.get(i + 1);
-
-                float qx = 0.75f * p0.x + 0.25f * p1.x;
-                float qy = 0.75f * p0.y + 0.25f * p1.y;
-                float qp = 0.75f * p0.pressure + 0.25f * p1.pressure;
-
-                float rx = 0.25f * p0.x + 0.75f * p1.x;
-                float ry = 0.25f * p0.y + 0.75f * p1.y;
-                float rp = 0.25f * p0.pressure + 0.75f * p1.pressure;
-
-                long qTime = interpolatePointTime(p0, p1, 0.25f);
-                long rTime = interpolatePointTime(p0, p1, 0.75f);
-                nextPass.add(new DrawingPoint(qx, qy, qp, qTime));
-                nextPass.add(new DrawingPoint(rx, ry, rp, rTime));
+        // Gently relax interior samples in place. The renderer already uses
+        // quadratic segments, so subdividing every sample (which used to grow
+        // each stroke by 2x or 4x) only increased redraw and save costs.
+        List<DrawingPoint> smoothed = stroke.points;
+        if (smoothed.size() >= 3) {
+            float neighborWeight = 0.16f * beautifySmoothing;
+            float centerWeight = 1f - neighborWeight * 2f;
+            DrawingPoint first = smoothed.get(0);
+            float previousX = first.x;
+            float previousY = first.y;
+            float previousPressure = first.pressure;
+            for (int i = 1; i < smoothed.size() - 1; i++) {
+                DrawingPoint current = smoothed.get(i);
+                DrawingPoint next = smoothed.get(i + 1);
+                float originalX = current.x;
+                float originalY = current.y;
+                float originalPressure = current.pressure;
+                current.x = previousX * neighborWeight + originalX * centerWeight
+                        + next.x * neighborWeight;
+                current.y = previousY * neighborWeight + originalY * centerWeight
+                        + next.y * neighborWeight;
+                current.pressure = previousPressure * neighborWeight + originalPressure * centerWeight
+                        + next.pressure * neighborWeight;
+                previousX = originalX;
+                previousY = originalY;
+                previousPressure = originalPressure;
             }
-
-            nextPass.add(smoothed.get(smoothed.size() - 1));
-            smoothed = nextPass;
         }
 
         // 3. Prune tiny accidental stylus-lift hook artifact if detected
@@ -582,14 +580,7 @@ public class CanvasView extends View {
             }
         }
 
-        stroke.points.clear();
-        stroke.points.addAll(smoothed);
         stroke.markDirty();
-    }
-
-    private long interpolatePointTime(DrawingPoint from, DrawingPoint to, float fraction) {
-        if (from.timeMillis < 0L || to.timeMillis < 0L) return -1L;
-        return from.timeMillis + Math.round((to.timeMillis - from.timeMillis) * fraction);
     }
 
     private boolean isAutoConvertTextEnabled = false;

@@ -1778,7 +1778,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             currentPage.canvasHeight = canvasView.getContentHeight();
             final Page snapshot = currentPage.createSnapshot();
             saveExecutor.execute(() -> dbHelper.savePage(snapshot));
-        }, 150);
+        }, 600);
     }
 
     private void saveCurrentPage() {
