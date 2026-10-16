@@ -1,6 +1,8 @@
 package org.opennotes.app.export;
 
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -10,6 +12,7 @@ import android.graphics.pdf.PdfDocument;
 import org.opennotes.app.db.NotesDbHelper;
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.DrawingTool;
+import org.opennotes.app.model.ImageItem;
 import org.opennotes.app.model.Notebook;
 import org.opennotes.app.model.Page;
 import org.opennotes.app.model.PaperTemplate;
@@ -29,17 +32,28 @@ public class PdfExporter {
         Notebook nb = db.getNotebook(notebookId);
         List<Page> pages = db.getPagesForNotebook(notebookId);
 
-        // Ultra-HD RAW 300 DPI A4 dimensions (2480 x 3508)
+        // Ultra-HD RAW 300 DPI A4 base dimensions (2480 x 3508)
         int defaultPageWidth = 2480;
-        int defaultPageHeight = 3508;
 
         PdfDocument document = new PdfDocument();
 
         for (int i = 0; i < pages.size(); i++) {
             Page page = pages.get(i);
-            int pageWidth = defaultPageWidth;
-            float contentH = calculatePageContentBottom(page);
-            int pageHeight = Math.max(1200, (int) (defaultPageWidth * (contentH / 1080f)));
+            RectF bounds = calculatePageContentBounds(page);
+            float contentW = bounds.width();
+            float contentH = bounds.height();
+
+            int pageWidth;
+            int pageHeight;
+            if (contentW > contentH) {
+                // Landscape orientation
+                pageWidth = 3508;
+                pageHeight = Math.max(1200, (int) Math.ceil(pageWidth * (contentH / contentW)));
+            } else {
+                // Portrait orientation
+                pageWidth = defaultPageWidth;
+                pageHeight = Math.max(1200, (int) Math.ceil(pageWidth * (contentH / contentW)));
+            }
 
             PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, i + 1).create();
             PdfDocument.Page pdfPage = document.startPage(pageInfo);
@@ -50,106 +64,177 @@ public class PdfExporter {
             canvas.drawColor(bgColor);
 
             boolean isDark = isColorDark(bgColor);
-            drawTemplate(canvas, page.template, pageWidth, pageHeight, isDark);
 
-            // Scaling from screen canvas coordinates (1080 x contentH) to 300 DPI RAW print resolution
-            float scaleX = (float) pageWidth / 1080f;
+            // Calculate uniform scaling & centering to guarantee 100% of canvas content is included
+            float scaleX = (float) pageWidth / contentW;
             float scaleY = (float) pageHeight / contentH;
-            canvas.save();
-            canvas.scale(scaleX, scaleY);
+            float uniformScale = Math.min(scaleX, scaleY);
 
-            // Draw Shapes
-            for (ShapeItem s : page.shapes) {
+            float extraX = (pageWidth - contentW * uniformScale) * 0.5f;
+            float extraY = (pageHeight - contentH * uniformScale) * 0.5f;
+
+            canvas.save();
+            canvas.translate(extraX, extraY);
+            canvas.scale(uniformScale, uniformScale);
+            canvas.translate(-bounds.left, -bounds.top);
+
+            // Draw template background in canvas coordinates so lines register exactly with notes
+            drawTemplateInCanvasSpace(canvas, page.template, bounds, isDark, extraX, extraY, uniformScale);
+
+            // 1. Draw Images
+            if (page.images != null) {
+                for (ImageItem img : page.images) {
+                    if (img == null || img.imagePath == null) continue;
+                    File imgFile = new File(img.imagePath);
+                    if (!imgFile.exists()) continue;
+                    try {
+                        Bitmap bmp = BitmapFactory.decodeFile(img.imagePath);
+                        if (bmp != null) {
+                            canvas.drawBitmap(bmp, null, img.getBounds(), null);
+                        }
+                    } catch (Throwable ignored) {}
+                }
+            }
+
+            // 2. Draw Shapes
+            if (page.shapes != null) {
                 Paint sp = new Paint(Paint.ANTI_ALIAS_FLAG);
-                sp.setColor(s.color);
                 sp.setStyle(Paint.Style.STROKE);
-                sp.setStrokeWidth(s.strokeWidth);
                 sp.setStrokeCap(Paint.Cap.ROUND);
                 sp.setStrokeJoin(Paint.Join.ROUND);
 
-                switch (s.type) {
-                    case LINE:
-                        canvas.drawLine(s.startX, s.startY, s.endX, s.endY, sp);
-                        break;
-                    case ARROW:
-                        canvas.drawLine(s.startX, s.startY, s.endX, s.endY, sp);
-                        drawArrowHead(canvas, s.startX, s.startY, s.endX, s.endY, sp);
-                        break;
-                    case RECTANGLE:
-                        canvas.drawRect(Math.min(s.startX, s.endX), Math.min(s.startY, s.endY),
-                                Math.max(s.startX, s.endX), Math.max(s.startY, s.endY), sp);
-                        break;
-                    case CIRCLE:
-                        canvas.drawOval(new RectF(Math.min(s.startX, s.endX), Math.min(s.startY, s.endY),
-                                Math.max(s.startX, s.endX), Math.max(s.startY, s.endY)), sp);
-                        break;
-                    case TRIANGLE:
-                        drawTriangle(canvas, s.startX, s.startY, s.endX, s.endY, sp);
-                        break;
-                    case STAR:
-                        drawStar(canvas, s.startX, s.startY, s.endX, s.endY, sp);
-                        break;
-                    case COORDINATE_AXIS:
-                        drawCoordinateAxis(canvas, s.startX, s.startY, s.endX, s.endY, sp);
-                        break;
+                for (ShapeItem s : page.shapes) {
+                    if (s == null) continue;
+                    sp.setColor(s.color);
+                    sp.setStrokeWidth(s.strokeWidth);
+
+                    switch (s.type) {
+                        case LINE:
+                            canvas.drawLine(s.startX, s.startY, s.endX, s.endY, sp);
+                            break;
+                        case ARROW:
+                            canvas.drawLine(s.startX, s.startY, s.endX, s.endY, sp);
+                            drawArrowHead(canvas, s.startX, s.startY, s.endX, s.endY, sp);
+                            break;
+                        case RECTANGLE:
+                            canvas.drawRect(Math.min(s.startX, s.endX), Math.min(s.startY, s.endY),
+                                    Math.max(s.startX, s.endX), Math.max(s.startY, s.endY), sp);
+                            break;
+                        case CIRCLE:
+                            canvas.drawOval(new RectF(Math.min(s.startX, s.endX), Math.min(s.startY, s.endY),
+                                    Math.max(s.startX, s.endX), Math.max(s.startY, s.endY)), sp);
+                            break;
+                        case TRIANGLE:
+                            drawTriangle(canvas, s.startX, s.startY, s.endX, s.endY, sp);
+                            break;
+                        case STAR:
+                            drawStar(canvas, s.startX, s.startY, s.endX, s.endY, sp);
+                            break;
+                        case COORDINATE_AXIS:
+                            drawCoordinateAxis(canvas, s.startX, s.startY, s.endX, s.endY, sp);
+                            break;
+                        case TABLE:
+                            float tLeft = Math.min(s.startX, s.endX);
+                            float tTop = Math.min(s.startY, s.endY);
+                            float tRight = Math.max(s.startX, s.endX);
+                            float tBottom = Math.max(s.startY, s.endY);
+                            canvas.drawRect(tLeft, tTop, tRight, tBottom, sp);
+                            float rowHeight = (tBottom - tTop) / 3f;
+                            float colWidth = (tRight - tLeft) / 3f;
+                            for (int r = 1; r < 3; r++) {
+                                canvas.drawLine(tLeft, tTop + r * rowHeight, tRight, tTop + r * rowHeight, sp);
+                            }
+                            for (int c = 1; c < 3; c++) {
+                                canvas.drawLine(tLeft + c * colWidth, tTop, tLeft + c * colWidth, tBottom, sp);
+                            }
+                            break;
+                    }
                 }
             }
 
-            // Draw Texts with designated TTF / OTF font
-            Paint tp = new Paint(Paint.ANTI_ALIAS_FLAG);
-            for (TextItem t : page.texts) {
-                tp.setColor(t.color);
-                tp.setTextSize(t.fontSize);
-                tp.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(context, t.fontKey));
-                canvas.drawText(t.text, t.x, t.y, tp);
+            // 3. Draw Texts with designated TTF / OTF font & rotation support
+            if (page.texts != null) {
+                Paint tp = new Paint(Paint.ANTI_ALIAS_FLAG);
+                for (TextItem t : page.texts) {
+                    if (t == null || t.text == null || t.text.isEmpty()) continue;
+                    tp.setColor(t.color);
+                    tp.setTextSize(t.fontSize);
+                    tp.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(context, t.fontKey));
+                    if (Math.abs(t.rotationAngle) > 0.5f) {
+                        canvas.save();
+                        canvas.rotate(t.rotationAngle, t.x, t.y);
+                        canvas.drawText(t.text, t.x, t.y, tp);
+                        canvas.restore();
+                    } else {
+                        canvas.drawText(t.text, t.x, t.y, tp);
+                    }
+                }
             }
 
-            // Draw Strokes
-            Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-            strokePaint.setStyle(Paint.Style.STROKE);
-            strokePaint.setStrokeCap(Paint.Cap.ROUND);
-            strokePaint.setStrokeJoin(Paint.Join.ROUND);
+            // 4. Draw Strokes
+            if (page.strokes != null) {
+                Paint strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                strokePaint.setStyle(Paint.Style.STROKE);
+                strokePaint.setStrokeCap(Paint.Cap.ROUND);
+                strokePaint.setStrokeJoin(Paint.Join.ROUND);
 
-            for (Stroke stroke : page.strokes) {
-                if (stroke.points == null || stroke.points.isEmpty()) continue;
-                strokePaint.setColor(stroke.color);
+                Paint fountainPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                fountainPaint.setStyle(Paint.Style.FILL);
 
-                if (stroke.points.size() == 1) {
-                    DrawingPoint dot = stroke.points.get(0);
-                    strokePaint.setStyle(Paint.Style.FILL);
-                    canvas.drawCircle(dot.x, dot.y, Math.max(2.5f, stroke.width / 2.0f), strokePaint);
-                    strokePaint.setStyle(Paint.Style.STROKE);
-                    continue;
+                Paint brushPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+                brushPaint.setStyle(Paint.Style.FILL);
+
+                for (Stroke stroke : page.strokes) {
+                    if (stroke.points == null || stroke.points.isEmpty()) continue;
+
+                    if (stroke.tool == DrawingTool.FOUNTAIN) {
+                        fountainPaint.setColor(stroke.color);
+                        fountainPaint.setAlpha(255);
+                        canvas.drawPath(stroke.getPressurePath(1.0f), fountainPaint);
+                        continue;
+                    } else if (stroke.tool == DrawingTool.BRUSH) {
+                        brushPaint.setColor(stroke.color);
+                        brushPaint.setAlpha(220);
+                        canvas.drawPath(stroke.getPressurePath(1.0f), brushPaint);
+                        continue;
+                    }
+
+                    strokePaint.setColor(stroke.color);
+
+                    if (stroke.points.size() == 1) {
+                        DrawingPoint dot = stroke.points.get(0);
+                        strokePaint.setStyle(Paint.Style.FILL);
+                        float dotRadius = Math.max(1.0f, stroke.width / 2.0f);
+                        if (stroke.tool == DrawingTool.HIGHLIGHTER) {
+                            strokePaint.setAlpha(100);
+                            dotRadius = stroke.width * 1.5f;
+                        } else if (stroke.tool == DrawingTool.PENCIL) {
+                            strokePaint.setAlpha(180);
+                            dotRadius = Math.max(1.0f, stroke.width * 0.35f);
+                        } else {
+                            strokePaint.setAlpha(255);
+                        }
+                        canvas.drawCircle(dot.x, dot.y, dotRadius, strokePaint);
+                        strokePaint.setStyle(Paint.Style.STROKE);
+                        continue;
+                    }
+
+                    if (stroke.tool == DrawingTool.HIGHLIGHTER) {
+                        strokePaint.setAlpha(100);
+                        strokePaint.setStrokeWidth(stroke.width * 3.5f);
+                    } else if (stroke.tool == DrawingTool.PENCIL) {
+                        strokePaint.setAlpha(180);
+                        strokePaint.setStrokeWidth(Math.max(2.0f, stroke.width * 0.7f));
+                    } else {
+                        strokePaint.setAlpha(255);
+                        strokePaint.setStrokeWidth(stroke.width);
+                    }
+
+                    Path path = stroke.getPath();
+                    if (path != null) {
+                        canvas.drawPath(path, strokePaint);
+                    }
                 }
-
-                if (stroke.tool == DrawingTool.HIGHLIGHTER) {
-                    strokePaint.setAlpha(90);
-                    strokePaint.setStrokeWidth(stroke.width * 3.5f);
-                } else if (stroke.tool == DrawingTool.BRUSH) {
-                    strokePaint.setAlpha(200);
-                    strokePaint.setStrokeWidth(stroke.width * 1.5f);
-                } else if (stroke.tool == DrawingTool.PENCIL) {
-                    strokePaint.setAlpha(190);
-                    strokePaint.setStrokeWidth(Math.max(2.0f, stroke.width * 0.75f));
-                } else if (stroke.tool == DrawingTool.FOUNTAIN) {
-                    strokePaint.setAlpha(255);
-                    strokePaint.setStrokeWidth(stroke.width * 1.2f);
-                } else {
-                    strokePaint.setAlpha(255);
-                    strokePaint.setStrokeWidth(stroke.width);
-                }
-
-                Path path = new Path();
-                DrawingPoint first = stroke.points.get(0);
-                path.moveTo(first.x, first.y);
-                for (int pIdx = 1; pIdx < stroke.points.size(); pIdx++) {
-                    DrawingPoint p0 = stroke.points.get(pIdx - 1);
-                    DrawingPoint p1 = stroke.points.get(pIdx);
-                    path.quadTo(p0.x, p0.y, (p0.x + p1.x) / 2.0f, (p0.y + p1.y) / 2.0f);
-                }
-                DrawingPoint last = stroke.points.get(stroke.points.size() - 1);
-                path.lineTo(last.x, last.y);
-                canvas.drawPath(path, strokePaint);
             }
 
             canvas.restore();
@@ -238,43 +323,81 @@ public class PdfExporter {
         canvas.drawLine(x2, y2, xB, yB, paint);
     }
 
-    private static void drawTemplate(Canvas canvas, PaperTemplate template, int width, int height, boolean isDark) {
+    private static void drawTemplateInCanvasSpace(Canvas canvas, PaperTemplate template, RectF bounds, boolean isDark, float extraX, float extraY, float scale) {
         if (template == PaperTemplate.BLANK) return;
 
         Paint linePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        linePaint.setColor(isDark ? 0x2EFFFFFF : 0xFFE2E8F0);
-        linePaint.setStrokeWidth(1.0f);
+        linePaint.setColor(isDark ? 0x22FFFFFF : 0xFFE2E8F0);
+        linePaint.setStrokeWidth(1.2f);
+
+        Paint marginPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        marginPaint.setColor(isDark ? 0x55F87171 : 0xFFFCA5A5);
+        marginPaint.setStrokeWidth(1.8f);
+
+        float viewLeft = bounds.left - extraX / scale;
+        float viewRight = bounds.right + extraX / scale;
+        float viewTop = bounds.top - extraY / scale;
+        float viewBottom = bounds.bottom + extraY / scale;
 
         if (template == PaperTemplate.RULED) {
-            float lineSpacing = 30f;
-            float startY = 60f;
-            for (float y = startY; y < height; y += lineSpacing) {
-                canvas.drawLine(0, y, width, y, linePaint);
+            float lineSpacing = 60f;
+            float marginX = 140f;
+            if (marginX >= viewLeft && marginX <= viewRight) {
+                canvas.drawLine(marginX, viewTop, marginX, viewBottom, marginPaint);
+            }
+            float firstLineY = ((float) Math.floor((viewTop - lineSpacing) / lineSpacing)) * lineSpacing;
+            for (float y = firstLineY; y <= viewBottom + lineSpacing; y += lineSpacing) {
+                canvas.drawLine(viewLeft, y, viewRight, y, linePaint);
             }
         } else if (template == PaperTemplate.GRID) {
-            float gridSize = 25f;
-            for (float x = 0; x < width; x += gridSize) {
-                canvas.drawLine(x, 0, x, height, linePaint);
+            float gridSize = 50f;
+            float firstX = ((float) Math.floor((viewLeft - gridSize) / gridSize)) * gridSize;
+            float firstY = ((float) Math.floor((viewTop - gridSize) / gridSize)) * gridSize;
+            for (float x = firstX; x <= viewRight + gridSize; x += gridSize) {
+                canvas.drawLine(x, viewTop, x, viewBottom, linePaint);
             }
-            for (float y = 0; y < height; y += gridSize) {
-                canvas.drawLine(0, y, width, y, linePaint);
+            for (float y = firstY; y <= viewBottom + gridSize; y += gridSize) {
+                canvas.drawLine(viewLeft, y, viewRight, y, linePaint);
             }
         } else if (template == PaperTemplate.DOTS) {
-            float dotSpacing = 25f;
+            float dotSpacing = 50f;
             Paint dotPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             dotPaint.setColor(isDark ? 0x33FFFFFF : 0xFFCBD5E1);
             dotPaint.setStyle(Paint.Style.FILL);
-            for (float x = dotSpacing; x < width; x += dotSpacing) {
-                for (float y = dotSpacing; y < height; y += dotSpacing) {
-                    canvas.drawCircle(x, y, 1.5f, dotPaint);
+            float firstX = ((float) Math.floor((viewLeft - dotSpacing) / dotSpacing)) * dotSpacing;
+            float firstY = ((float) Math.floor((viewTop - dotSpacing) / dotSpacing)) * dotSpacing;
+            for (float x = firstX; x <= viewRight + dotSpacing; x += dotSpacing) {
+                for (float y = firstY; y <= viewBottom + dotSpacing; y += dotSpacing) {
+                    canvas.drawCircle(x, y, 1.8f, dotPaint);
                 }
+            }
+        } else if (template == PaperTemplate.CORNELL) {
+            float headerY = 140f;
+            float marginX = 240f;
+            if (headerY >= viewTop && headerY <= viewBottom) {
+                canvas.drawLine(viewLeft, headerY, viewRight, headerY, linePaint);
+            }
+            if (marginX >= viewLeft && marginX <= viewRight) {
+                canvas.drawLine(marginX, Math.max(headerY, viewTop), marginX, viewBottom, marginPaint);
+            }
+            float lineSpacing = 55f;
+            float firstY = Math.max(headerY + lineSpacing, ((float) Math.floor((viewTop - lineSpacing) / lineSpacing)) * lineSpacing);
+            float minLineX = Math.max(marginX, viewLeft);
+            for (float y = firstY; y <= viewBottom + lineSpacing; y += lineSpacing) {
+                canvas.drawLine(minLineX, y, viewRight, y, linePaint);
             }
         }
     }
 
-    public static float calculatePageContentBottom(Page page) {
-        if (page == null) return 1528f;
-        float maxBottom = 0f;
+    public static RectF calculatePageContentBounds(Page page) {
+        if (page == null) {
+            return new RectF(0f, 0f, 1080f, 1528f);
+        }
+
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE;
+        float maxY = -Float.MAX_VALUE;
         boolean hasContent = false;
 
         if (page.strokes != null) {
@@ -282,7 +405,10 @@ public class PdfExporter {
                 if (s == null) continue;
                 RectF b = s.getBounds();
                 if (b != null && !b.isEmpty()) {
-                    maxBottom = Math.max(maxBottom, b.bottom + s.width * 0.5f);
+                    minX = Math.min(minX, b.left);
+                    minY = Math.min(minY, b.top);
+                    maxX = Math.max(maxX, b.right);
+                    maxY = Math.max(maxY, b.bottom);
                     hasContent = true;
                 }
             }
@@ -291,32 +417,79 @@ public class PdfExporter {
         if (page.shapes != null) {
             for (ShapeItem sh : page.shapes) {
                 if (sh == null) continue;
-                maxBottom = Math.max(maxBottom, Math.max(sh.startY, sh.endY) + sh.strokeWidth);
-                hasContent = true;
+                RectF b = sh.getBounds();
+                if (b != null && !b.isEmpty()) {
+                    minX = Math.min(minX, b.left);
+                    minY = Math.min(minY, b.top);
+                    maxX = Math.max(maxX, b.right);
+                    maxY = Math.max(maxY, b.bottom);
+                    hasContent = true;
+                }
             }
         }
 
         if (page.texts != null) {
             for (TextItem t : page.texts) {
                 if (t == null) continue;
-                maxBottom = Math.max(maxBottom, t.y + t.fontSize + 10f);
-                hasContent = true;
+                RectF b = t.getBounds();
+                if (b != null && !b.isEmpty()) {
+                    minX = Math.min(minX, b.left);
+                    minY = Math.min(minY, b.top);
+                    maxX = Math.max(maxX, b.right);
+                    maxY = Math.max(maxY, b.bottom);
+                    hasContent = true;
+                }
             }
         }
 
         if (page.images != null) {
-            for (org.opennotes.app.model.ImageItem img : page.images) {
+            for (ImageItem img : page.images) {
                 if (img == null) continue;
-                maxBottom = Math.max(maxBottom, img.y + img.height);
-                hasContent = true;
+                RectF b = img.getBounds();
+                if (b != null && !b.isEmpty()) {
+                    minX = Math.min(minX, b.left);
+                    minY = Math.min(minY, b.top);
+                    maxX = Math.max(maxX, b.right);
+                    maxY = Math.max(maxY, b.bottom);
+                    hasContent = true;
+                }
             }
         }
 
         if (!hasContent) {
-            return page.canvasHeight > 0 ? page.canvasHeight : 1528f;
+            float fallbackH = page.canvasHeight > 0 ? page.canvasHeight : 1528f;
+            return new RectF(0f, 0f, 1080f, fallbackH);
         }
 
-        // Add 80px bottom breathing room
-        return Math.max(600f, maxBottom + 80f);
+        // Add generous 90px margin/breathing room all around the content
+        float pad = 90f;
+        float left = minX - pad;
+        float top = minY - pad;
+        float right = maxX + pad;
+        float bottom = maxY + pad;
+
+        float width = right - left;
+        float height = bottom - top;
+
+        // Ensure minimum standard page dimensions
+        float minWidth = 1080f;
+        if (width < minWidth) {
+            float diff = minWidth - width;
+            left -= diff / 2f;
+            right += diff / 2f;
+            width = minWidth;
+        }
+
+        float minHeight = (height >= width) ? Math.max(1528f, width * 1.35f) : Math.max(800f, minWidth * 0.70f);
+        if (height < minHeight) {
+            float diff = minHeight - height;
+            bottom += diff;
+        }
+
+        return new RectF(left, top, right, bottom);
+    }
+
+    public static float calculatePageContentBottom(Page page) {
+        return calculatePageContentBounds(page).bottom;
     }
 }

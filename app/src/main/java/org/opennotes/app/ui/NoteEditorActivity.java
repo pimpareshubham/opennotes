@@ -151,7 +151,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     // Floating Contextual Lasso Action Bar
     private HorizontalScrollView lassoFloatingActionBar;
-    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoConvertText, btnLassoTeach;
+    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoRotate, btnLassoConvertText, btnLassoTeach;
 
     // Fullscreen Zen mode
     private ImageView btnExitFullscreen;
@@ -361,6 +361,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnLassoStyle = findViewById(R.id.btnLassoStyle);
         btnLassoDuplicate = findViewById(R.id.btnLassoDuplicate);
         btnLassoColor = findViewById(R.id.btnLassoColor);
+        btnLassoRotate = findViewById(R.id.btnLassoRotate);
         btnLassoConvertText = findViewById(R.id.btnLassoConvertText);
         btnLassoTeach = findViewById(R.id.btnLassoTeach);
 
@@ -911,6 +912,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 canvasView.setSelectionColor(color);
             });
         });
+        if (btnLassoRotate != null) {
+            btnLassoRotate.setOnClickListener(v -> showLassoRotateDialog());
+        }
         if (btnLassoConvertText != null) {
             btnLassoConvertText.setOnClickListener(v -> {
                 canvasView.convertSelectionToText();
@@ -1360,6 +1364,114 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private void showLassoRotateDialog() {
+        if (canvasView == null || !canvasView.hasSelection()) {
+            Toast.makeText(this, "Select text or handwriting with lasso first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        View view = LayoutInflater.from(this).inflate(R.layout.dialog_lasso_tilt, null);
+        TextView textCurrentAngle = view.findViewById(R.id.textCurrentAngle);
+        SeekBar seekAngle = view.findViewById(R.id.seekAngle);
+
+        TextView btnStepMinus15 = view.findViewById(R.id.btnStepMinus15);
+        TextView btnStepMinus5 = view.findViewById(R.id.btnStepMinus5);
+        TextView btnStepMinus1 = view.findViewById(R.id.btnStepMinus1);
+        TextView btnStepReset = view.findViewById(R.id.btnStepReset);
+        TextView btnStepPlus1 = view.findViewById(R.id.btnStepPlus1);
+        TextView btnStepPlus5 = view.findViewById(R.id.btnStepPlus5);
+        TextView btnStepPlus15 = view.findViewById(R.id.btnStepPlus15);
+
+        TextView btnPresetHorizontal = view.findViewById(R.id.btnPresetHorizontal);
+        TextView btnPresetSlantUp = view.findViewById(R.id.btnPresetSlantUp);
+        TextView btnPresetSlantDown = view.findViewById(R.id.btnPresetSlantDown);
+        TextView btnPresetDiagUp = view.findViewById(R.id.btnPresetDiagUp);
+        TextView btnPresetVertical = view.findViewById(R.id.btnPresetVertical);
+
+        Button btnCancel = view.findViewById(R.id.btnTiltCancel);
+        Button btnApply = view.findViewById(R.id.btnTiltApply);
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(view)
+                .create();
+
+        float initialAngle = canvasView.getSelectionRotation();
+        final float[] currentAngle = {initialAngle};
+        canvasView.beginLiveRotation();
+
+        class AngleUpdater {
+            void setAngle(float newAngle) {
+                while (newAngle > 180f) newAngle -= 360f;
+                while (newAngle < -180f) newAngle += 360f;
+                float delta = newAngle - currentAngle[0];
+                canvasView.updateLiveRotation(delta);
+                currentAngle[0] = newAngle;
+
+                int rounded = Math.round(newAngle);
+                if (rounded == 0) {
+                    textCurrentAngle.setText("0°");
+                } else {
+                    textCurrentAngle.setText(String.format(java.util.Locale.US, "%+d°", rounded));
+                }
+
+                int progress = Math.max(0, Math.min(360, Math.round(newAngle + 180f)));
+                if (seekAngle.getProgress() != progress) {
+                    seekAngle.setProgress(progress);
+                }
+            }
+        }
+        AngleUpdater updater = new AngleUpdater();
+
+        int initRounded = Math.round(initialAngle);
+        textCurrentAngle.setText(initRounded == 0 ? "0°" : String.format(java.util.Locale.US, "%+d°", initRounded));
+        seekAngle.setProgress(Math.max(0, Math.min(360, Math.round(initialAngle + 180f))));
+
+        seekAngle.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (fromUser) {
+                    float target = progress - 180f;
+                    if (Math.abs(target) <= 3f) target = 0f;
+                    updater.setAngle(target);
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+
+        btnStepMinus15.setOnClickListener(v -> updater.setAngle(currentAngle[0] - 15f));
+        btnStepMinus5.setOnClickListener(v -> updater.setAngle(currentAngle[0] - 5f));
+        btnStepMinus1.setOnClickListener(v -> updater.setAngle(currentAngle[0] - 1f));
+        btnStepReset.setOnClickListener(v -> updater.setAngle(0f));
+        btnStepPlus1.setOnClickListener(v -> updater.setAngle(currentAngle[0] + 1f));
+        btnStepPlus5.setOnClickListener(v -> updater.setAngle(currentAngle[0] + 5f));
+        btnStepPlus15.setOnClickListener(v -> updater.setAngle(currentAngle[0] + 15f));
+
+        btnPresetHorizontal.setOnClickListener(v -> updater.setAngle(0f));
+        btnPresetSlantUp.setOnClickListener(v -> updater.setAngle(12f));
+        btnPresetSlantDown.setOnClickListener(v -> updater.setAngle(-12f));
+        btnPresetDiagUp.setOnClickListener(v -> updater.setAngle(45f));
+        btnPresetVertical.setOnClickListener(v -> updater.setAngle(90f));
+
+        final boolean[] applied = {false};
+        btnApply.setOnClickListener(v -> {
+            applied[0] = true;
+            canvasView.finishLiveRotation();
+            dialog.dismiss();
+            Toast.makeText(this, "Angle set to " + Math.round(currentAngle[0]) + "°", Toast.LENGTH_SHORT).show();
+        });
+
+        btnCancel.setOnClickListener(v -> dialog.dismiss());
+
+        dialog.setOnDismissListener(d -> {
+            if (!applied[0]) {
+                canvasView.cancelLiveRotation();
+            }
+        });
+
+        dialog.show();
     }
 
     private void updateLassoActionAvailability() {

@@ -210,13 +210,19 @@ public class CanvasView extends View {
 
     // Undo / Redo history
     private static class ActionRecord {
-        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, REMOVE_TEXT, ADD_IMAGE, REMOVE_IMAGE, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT }
+        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, REMOVE_TEXT, ADD_IMAGE, REMOVE_IMAGE, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT, ROTATE_SELECTION }
         Type type;
         Stroke stroke;
         ShapeItem shape;
         TextItem text;
         ImageItem image;
         float moveDx, moveDy;
+        float rotateAngle;
+        float rotateCenterX, rotateCenterY;
+        List<Stroke> rotatedStrokes;
+        List<ShapeItem> rotatedShapes;
+        List<TextItem> rotatedTexts;
+        List<ImageItem> rotatedImages;
         List<Stroke> movedStrokes;
         List<ShapeItem> movedShapes;
         List<TextItem> movedTexts;
@@ -278,6 +284,19 @@ public class CanvasView extends View {
     private Paint lassoPaint;
     private Paint selectionBoxPaint;
     private Paint selectionHandlePaint;
+    private Paint selectionRotateHandlePaint;
+    private Paint selectionRotateBorderPaint;
+
+    // Hand pan tool dedicated tracking
+    private float handPanStartX, handPanStartY;
+    private float handInitialPanX, handInitialPanY;
+    private boolean handPanDragging = false;
+
+    // Selection rotation tracking
+    private boolean isRotatingSelection = false;
+    private float rotationCenterX, rotationCenterY;
+    private float lastRotationTouchAngle;
+    private float currentLiveRotation = 0f;
 
     // Zero-lag high performance rendering buffers
     private final RectF visibleViewport = new RectF();
@@ -456,6 +475,15 @@ public class CanvasView extends View {
         selectionHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         selectionHandlePaint.setStyle(Paint.Style.FILL);
         selectionHandlePaint.setColor(0xFF38BDF8);
+
+        selectionRotateHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        selectionRotateHandlePaint.setStyle(Paint.Style.FILL);
+        selectionRotateHandlePaint.setColor(0xFFA855F7);
+
+        selectionRotateBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        selectionRotateBorderPaint.setStyle(Paint.Style.STROKE);
+        selectionRotateBorderPaint.setColor(0xFFFFFFFF);
+        selectionRotateBorderPaint.setStrokeWidth(2.0f);
 
         predictedInkPaint.setStyle(Paint.Style.STROKE);
         predictedInkPaint.setStrokeCap(Paint.Cap.ROUND);
@@ -1300,6 +1328,10 @@ public class CanvasView extends View {
                 translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts, rec.movedImages,
                         -rec.moveDx, -rec.moveDy);
                 break;
+            case ROTATE_SELECTION:
+                rotateItemsAround(rec.rotatedStrokes, rec.rotatedShapes, rec.rotatedTexts, rec.rotatedImages,
+                        rec.rotateCenterX, rec.rotateCenterY, -rec.rotateAngle);
+                break;
             case ADD_SELECTION:
                 removeRecordedSelection(rec);
                 break;
@@ -1372,6 +1404,10 @@ public class CanvasView extends View {
             case MOVE_SELECTION:
                 translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts, rec.movedImages,
                         rec.moveDx, rec.moveDy);
+                break;
+            case ROTATE_SELECTION:
+                rotateItemsAround(rec.rotatedStrokes, rec.rotatedShapes, rec.rotatedTexts, rec.rotatedImages,
+                        rec.rotateCenterX, rec.rotateCenterY, rec.rotateAngle);
                 break;
             case ADD_SELECTION:
                 addRecordedSelection(rec);
@@ -1785,6 +1821,17 @@ public class CanvasView extends View {
                 canvas.drawCircle(selectionBounds.right, selectionBounds.top, handleRadius, selectionHandlePaint);
                 canvas.drawCircle(selectionBounds.left, selectionBounds.bottom, handleRadius, selectionHandlePaint);
                 canvas.drawCircle(selectionBounds.right, selectionBounds.bottom, handleRadius, selectionHandlePaint);
+
+                // Draw Rotation Stalk and Handle Knob
+                float cx = selectionBounds.centerX();
+                float stalkLength = 34f / Math.max(0.5f, scaleFactor);
+                float rotKnobY = selectionBounds.top - stalkLength;
+                float rotKnobRadius = 9f / Math.max(0.5f, scaleFactor);
+
+                canvas.drawLine(cx, selectionBounds.top, cx, rotKnobY, selectionBoxPaint);
+                canvas.drawCircle(cx, rotKnobY, rotKnobRadius, selectionRotateHandlePaint);
+                selectionRotateBorderPaint.setStrokeWidth(2f / Math.max(0.5f, scaleFactor));
+                canvas.drawCircle(cx, rotKnobY, rotKnobRadius, selectionRotateBorderPaint);
             }
 
             // 9. Draw Laser Pointer Presentation Trail & Glowing Tip
@@ -2776,6 +2823,163 @@ public class CanvasView extends View {
         }
     }
 
+    private void rotateItemsAround(List<Stroke> strokes, List<ShapeItem> shapes,
+                                   List<TextItem> texts, List<ImageItem> images,
+                                   float cx, float cy, float angleDelta) {
+        if (Math.abs(angleDelta) < 0.001f) return;
+        double rad = Math.toRadians(angleDelta);
+        float cos = (float) Math.cos(rad);
+        float sin = (float) Math.sin(rad);
+
+        if (strokes != null) {
+            for (Stroke s : strokes) {
+                if (s == null) continue;
+                if (s.points != null) {
+                    for (DrawingPoint pt : s.points) {
+                        float dx = pt.x - cx;
+                        float dy = pt.y - cy;
+                        pt.x = cx + dx * cos - dy * sin;
+                        pt.y = cy + dx * sin + dy * cos;
+                    }
+                }
+                if (s.recognitionPoints != null) {
+                    for (DrawingPoint pt : s.recognitionPoints) {
+                        float dx = pt.x - cx;
+                        float dy = pt.y - cy;
+                        pt.x = cx + dx * cos - dy * sin;
+                        pt.y = cy + dx * sin + dy * cos;
+                    }
+                }
+                s.markDirty();
+            }
+        }
+
+        if (shapes != null) {
+            for (ShapeItem sh : shapes) {
+                if (sh == null) continue;
+                float dx1 = sh.startX - cx;
+                float dy1 = sh.startY - cy;
+                sh.startX = cx + dx1 * cos - dy1 * sin;
+                sh.startY = cy + dx1 * sin + dy1 * cos;
+
+                float dx2 = sh.endX - cx;
+                float dy2 = sh.endY - cy;
+                sh.endX = cx + dx2 * cos - dy2 * sin;
+                sh.endY = cy + dx2 * sin + dy2 * cos;
+                sh.markDirty();
+            }
+        }
+
+        if (texts != null) {
+            for (TextItem item : texts) {
+                if (item == null) continue;
+                float dx = item.x - cx;
+                float dy = item.y - cy;
+                item.x = cx + dx * cos - dy * sin;
+                item.y = cy + dx * sin + dy * cos;
+                item.rotationAngle = (item.rotationAngle + angleDelta) % 360f;
+                if (item.rotationAngle > 180f) item.rotationAngle -= 360f;
+                if (item.rotationAngle < -180f) item.rotationAngle += 360f;
+                item.markDirty();
+            }
+        }
+
+        if (images != null) {
+            for (ImageItem img : images) {
+                if (img == null) continue;
+                float dx = img.x - cx;
+                float dy = img.y - cy;
+                img.x = cx + dx * cos - dy * sin;
+                img.y = cy + dx * sin + dy * cos;
+                img.markDirty();
+            }
+        }
+        strokeSpatialIndexDirty = true;
+    }
+
+    public float getSelectionRotation() {
+        if (!selectedTexts.isEmpty()) {
+            return selectedTexts.get(0).rotationAngle;
+        }
+        return 0f;
+    }
+
+    public void rotateSelection(float angleDelta) {
+        if (!hasSelection() || Math.abs(angleDelta) < 0.001f) return;
+        float cx = selectionBounds.centerX();
+        float cy = selectionBounds.centerY();
+        rotateItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages, cx, cy, angleDelta);
+
+        ActionRecord record = new ActionRecord();
+        record.type = ActionRecord.Type.ROTATE_SELECTION;
+        record.rotateAngle = angleDelta;
+        record.rotateCenterX = cx;
+        record.rotateCenterY = cy;
+        record.rotatedStrokes = new ArrayList<>(selectedStrokes);
+        record.rotatedShapes = new ArrayList<>(selectedShapes);
+        record.rotatedTexts = new ArrayList<>(selectedTexts);
+        record.rotatedImages = new ArrayList<>(selectedImages);
+        undoStack.push(record);
+        redoStack.clear();
+
+        updateSelectionBounds();
+        invalidate();
+        notifyChange();
+        notifyLassoSelection();
+    }
+
+    public void beginLiveRotation() {
+        currentLiveRotation = 0f;
+    }
+
+    public void updateLiveRotation(float angleDeltaFromLast) {
+        if (!hasSelection() || Math.abs(angleDeltaFromLast) < 0.001f) return;
+        float cx = selectionBounds.centerX();
+        float cy = selectionBounds.centerY();
+        rotateItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages, cx, cy, angleDeltaFromLast);
+        currentLiveRotation += angleDeltaFromLast;
+        updateSelectionBounds();
+        invalidate();
+        notifyLassoSelection();
+    }
+
+    public void finishLiveRotation() {
+        if (Math.abs(currentLiveRotation) > 0.01f && hasSelection()) {
+            ActionRecord record = new ActionRecord();
+            record.type = ActionRecord.Type.ROTATE_SELECTION;
+            record.rotateAngle = currentLiveRotation;
+            record.rotateCenterX = selectionBounds.centerX();
+            record.rotateCenterY = selectionBounds.centerY();
+            record.rotatedStrokes = new ArrayList<>(selectedStrokes);
+            record.rotatedShapes = new ArrayList<>(selectedShapes);
+            record.rotatedTexts = new ArrayList<>(selectedTexts);
+            record.rotatedImages = new ArrayList<>(selectedImages);
+            undoStack.push(record);
+            redoStack.clear();
+            notifyChange();
+        }
+        currentLiveRotation = 0f;
+    }
+
+    public void cancelLiveRotation() {
+        if (Math.abs(currentLiveRotation) > 0.001f && hasSelection()) {
+            float cx = selectionBounds.centerX();
+            float cy = selectionBounds.centerY();
+            rotateItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages, cx, cy, -currentLiveRotation);
+            updateSelectionBounds();
+            invalidate();
+            notifyLassoSelection();
+        }
+        currentLiveRotation = 0f;
+    }
+
+    public void setSelectionAbsoluteAngle(float targetAngle) {
+        if (!hasSelection()) return;
+        float current = getSelectionRotation();
+        float delta = targetAngle - current;
+        rotateSelection(delta);
+    }
+
     private void finishSelectionMove() {
         if (Math.abs(selectionMoveDx) > 0.001f || Math.abs(selectionMoveDy) > 0.001f) {
             ActionRecord record = new ActionRecord();
@@ -2838,6 +3042,62 @@ public class CanvasView extends View {
             setInputFrameRatePreference(true);
         } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             setInputFrameRatePreference(false);
+        }
+
+        // 0. Single-finger & multi-finger Canvas Hand Move Tool (Bypasses Palm & StylusOnly rejection)
+        if (currentTool == DrawingTool.HAND) {
+            if (getParent() != null) {
+                if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                    getParent().requestDisallowInterceptTouchEvent(false);
+                } else {
+                    getParent().requestDisallowInterceptTouchEvent(true);
+                }
+            }
+            if (isViewportLocked) return true;
+
+            // Two-finger pinch-zoom and pan support while in Hand mode
+            if (pointerCount >= 2) {
+                handPanDragging = false;
+                scaleDetector.onTouchEvent(event);
+                handleTwoFingerPanZoom(event, action);
+                return true;
+            }
+
+            // Single-finger (or stylus/mouse) dragging
+            float touchX = event.getX(0);
+            float touchY = event.getY(0);
+            switch (action) {
+                case MotionEvent.ACTION_DOWN:
+                    handPanStartX = touchX;
+                    handPanStartY = touchY;
+                    handInitialPanX = panOffsetX;
+                    handInitialPanY = panOffsetY;
+                    handPanDragging = true;
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (handPanDragging) {
+                        panOffsetX = handInitialPanX + (touchX - handPanStartX);
+                        panOffsetY = handInitialPanY + (touchY - handPanStartY);
+                        invalidate();
+                        notifyLassoSelection();
+                    } else {
+                        handPanStartX = touchX;
+                        handPanStartY = touchY;
+                        handInitialPanX = panOffsetX;
+                        handInitialPanY = panOffsetY;
+                        handPanDragging = true;
+                    }
+                    return true;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                case MotionEvent.ACTION_POINTER_UP:
+                    handPanDragging = false;
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    handPanDragging = false;
+                    return true;
+            }
+            return true;
         }
 
         int stylusPointerIndex = findStylusPointerIndex(event);
@@ -2938,31 +3198,6 @@ public class CanvasView extends View {
             inputPointerIndex = event.getActionIndex();
         }
 
-        // Single-finger Hand Pan Tool
-        if (currentTool == DrawingTool.HAND) {
-            if (!isViewportLocked) {
-                float touchX = event.getX(inputPointerIndex);
-                float touchY = event.getY(inputPointerIndex);
-                switch (action) {
-                    case MotionEvent.ACTION_DOWN:
-                        twoFingerStartX = touchX;
-                        twoFingerStartY = touchY;
-                        initialPanOffsetX = panOffsetX;
-                        initialPanOffsetY = panOffsetY;
-                        return true;
-                    case MotionEvent.ACTION_MOVE:
-                        panOffsetX = initialPanOffsetX + (touchX - twoFingerStartX);
-                        panOffsetY = initialPanOffsetY + (touchY - twoFingerStartY);
-                        invalidate();
-                        notifyLassoSelection();
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                    case MotionEvent.ACTION_CANCEL:
-                        return true;
-                }
-            }
-            return true;
-        }
 
         // Map touch coordinates to natural unscaled canvas coordinates
         float rawX = event.getX(inputPointerIndex);
@@ -3027,6 +3262,22 @@ public class CanvasView extends View {
         if (currentTool == DrawingTool.LASSO) {
             switch (action) {
                 case MotionEvent.ACTION_DOWN:
+                    if (hasLassoSelection && !selectionBounds.isEmpty()) {
+                        float cx = selectionBounds.centerX();
+                        float stalkLength = 34f / Math.max(0.5f, scaleFactor);
+                        float rotKnobY = selectionBounds.top - stalkLength;
+                        float hitRadius = 28f / Math.max(0.5f, scaleFactor);
+                        float hdx = canvasX - cx;
+                        float hdy = canvasY - rotKnobY;
+                        if (hdx * hdx + hdy * hdy <= hitRadius * hitRadius) {
+                            isRotatingSelection = true;
+                            rotationCenterX = cx;
+                            rotationCenterY = selectionBounds.centerY();
+                            lastRotationTouchAngle = (float) Math.toDegrees(Math.atan2(canvasY - rotationCenterY, canvasX - rotationCenterX));
+                            beginLiveRotation();
+                            return true;
+                        }
+                    }
                     if (hasLassoSelection && selectionBounds.contains(canvasX, canvasY)) {
                         isMovingSelection = true;
                         lassoMoveStartX = canvasX;
@@ -3045,7 +3296,15 @@ public class CanvasView extends View {
                     return true;
 
                 case MotionEvent.ACTION_MOVE:
-                    if (isMovingSelection) {
+                    if (isRotatingSelection) {
+                        float currentAngle = (float) Math.toDegrees(Math.atan2(canvasY - rotationCenterY, canvasX - rotationCenterX));
+                        float delta = currentAngle - lastRotationTouchAngle;
+                        if (delta > 180f) delta -= 360f;
+                        else if (delta < -180f) delta += 360f;
+                        updateLiveRotation(delta);
+                        lastRotationTouchAngle = currentAngle;
+                        postInvalidateOnAnimation();
+                    } else if (isMovingSelection) {
                         float dx = canvasX - lassoMoveStartX;
                         float dy = canvasY - lassoMoveStartY;
                         translateItems(selectedStrokes, selectedShapes, selectedTexts, dx, dy);
@@ -3067,7 +3326,12 @@ public class CanvasView extends View {
                     return true;
 
                 case MotionEvent.ACTION_UP:
-                    if (isMovingSelection) {
+                    if (isRotatingSelection) {
+                        isRotatingSelection = false;
+                        finishLiveRotation();
+                        notifyChange();
+                        notifyLassoSelection();
+                    } else if (isMovingSelection) {
                         float finalDx = canvasX - lassoMoveStartX;
                         float finalDy = canvasY - lassoMoveStartY;
                         if (Math.abs(finalDx) > 0.001f || Math.abs(finalDy) > 0.001f) {
@@ -3499,11 +3763,16 @@ public class CanvasView extends View {
 
     private void cancelInProgressGesture() {
         boolean movedSelection = isMovingSelection;
+        if (isRotatingSelection) {
+            isRotatingSelection = false;
+            finishLiveRotation();
+        }
         activeStroke = null;
         activeInputPointerId = -1;
         isDrawingShape = false;
         isDrawingLasso = false;
         isMovingSelection = false;
+        isRotatingSelection = false;
         isPanning = false;
         lassoPath.reset();
         lassoPoints.clear();
@@ -3959,79 +4228,172 @@ public class CanvasView extends View {
         }
     }
 
-    public float getActualContentBottom() {
-        if (currentPage == null) return getHeight() > 0 ? getHeight() : 1528f;
-        float maxBottom = 0f;
+    public RectF getPageContentBounds() {
+        return getPageContentBounds(currentPage);
+    }
+
+    public RectF getPageContentBounds(Page page) {
+        if (page == null) {
+            float fallbackW = Math.max(1080f, (float) Math.max(1, getWidth()));
+            float fallbackH = Math.max(1528f, (float) Math.max(1, getHeight()));
+            return new RectF(0f, 0f, fallbackW, fallbackH);
+        }
+
+        float minX = Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE;
+        float maxY = -Float.MAX_VALUE;
         boolean hasContent = false;
 
-        if (currentPage.strokes != null) {
-            for (Stroke s : currentPage.strokes) {
+        if (page.strokes != null) {
+            for (Stroke s : page.strokes) {
                 if (s == null) continue;
                 RectF b = s.getBounds();
                 if (b != null && !b.isEmpty()) {
-                    maxBottom = Math.max(maxBottom, b.bottom + s.width * 0.5f);
+                    minX = Math.min(minX, b.left);
+                    minY = Math.min(minY, b.top);
+                    maxX = Math.max(maxX, b.right);
+                    maxY = Math.max(maxY, b.bottom);
                     hasContent = true;
                 }
             }
         }
 
-        if (currentPage.shapes != null) {
-            for (ShapeItem sh : currentPage.shapes) {
+        if (page.shapes != null) {
+            for (ShapeItem sh : page.shapes) {
                 if (sh == null) continue;
-                maxBottom = Math.max(maxBottom, Math.max(sh.startY, sh.endY) + sh.strokeWidth);
-                hasContent = true;
+                RectF b = sh.getBounds();
+                if (b != null && !b.isEmpty()) {
+                    minX = Math.min(minX, b.left);
+                    minY = Math.min(minY, b.top);
+                    maxX = Math.max(maxX, b.right);
+                    maxY = Math.max(maxY, b.bottom);
+                    hasContent = true;
+                }
             }
         }
 
-        if (currentPage.texts != null) {
-            for (TextItem t : currentPage.texts) {
+        if (page.texts != null) {
+            for (TextItem t : page.texts) {
                 if (t == null) continue;
-                maxBottom = Math.max(maxBottom, t.y + t.fontSize + 10f);
-                hasContent = true;
+                RectF b = t.getBounds();
+                if (b != null && !b.isEmpty()) {
+                    minX = Math.min(minX, b.left);
+                    minY = Math.min(minY, b.top);
+                    maxX = Math.max(maxX, b.right);
+                    maxY = Math.max(maxY, b.bottom);
+                    hasContent = true;
+                }
             }
         }
 
-        if (currentPage.images != null) {
-            for (ImageItem img : currentPage.images) {
+        if (page.images != null) {
+            for (ImageItem img : page.images) {
                 if (img == null) continue;
-                maxBottom = Math.max(maxBottom, img.y + img.height);
-                hasContent = true;
+                RectF b = img.getBounds();
+                if (b != null && !b.isEmpty()) {
+                    minX = Math.min(minX, b.left);
+                    minY = Math.min(minY, b.top);
+                    maxX = Math.max(maxX, b.right);
+                    maxY = Math.max(maxY, b.bottom);
+                    hasContent = true;
+                }
             }
         }
 
         if (!hasContent) {
-            return Math.max(getHeight(), 1528f);
+            float fallbackW = Math.max(1080f, (float) Math.max(1, getWidth()));
+            float fallbackH = Math.max(1528f, (float) Math.max(1, getHeight()));
+            return new RectF(0f, 0f, fallbackW, fallbackH);
         }
 
-        // Add 80px bottom breathing room
-        return Math.max(600f, maxBottom + 80f);
+        float pad = 90f;
+        float left = minX - pad;
+        float top = minY - pad;
+        float right = maxX + pad;
+        float bottom = maxY + pad;
+
+        float width = right - left;
+        float height = bottom - top;
+
+        float minWidth = Math.max(1080f, (float) Math.max(1, getWidth()));
+        if (width < minWidth) {
+            float diff = minWidth - width;
+            left -= diff / 2f;
+            right += diff / 2f;
+            width = minWidth;
+        }
+
+        float minHeight = (height >= width) ? Math.max(1528f, width * 1.35f) : Math.max(800f, minWidth * 0.70f);
+        if (height < minHeight) {
+            float diff = minHeight - height;
+            bottom += diff;
+        }
+
+        return new RectF(left, top, right, bottom);
+    }
+
+    public float getActualContentBottom() {
+        return getPageContentBounds().bottom;
     }
 
     public Bitmap renderToBitmap() {
-        int canvasW = Math.max(1, getWidth());
-        float exportHeight = getActualContentBottom();
-        int targetWidth = Math.max(1080, canvasW);
-        float scale = (float) targetWidth / canvasW;
-        int targetHeight = Math.max(600, (int) (exportHeight * scale));
-        return renderToBitmap(targetWidth, targetHeight, exportHeight);
+        RectF bounds = getPageContentBounds();
+        float contentW = bounds.width();
+        float contentH = bounds.height();
+
+        int targetWidth;
+        int targetHeight;
+        if (contentW > contentH) {
+            targetWidth = 2560;
+            targetHeight = Math.max(800, (int) Math.ceil(targetWidth * (contentH / contentW)));
+        } else {
+            targetWidth = 1800;
+            targetHeight = Math.max(1000, (int) Math.ceil(targetWidth * (contentH / contentW)));
+        }
+
+        return renderToBitmap(targetWidth, targetHeight, bounds);
     }
 
     public Bitmap renderToBitmap(int targetWidth, int targetHeight) {
-        return renderToBitmap(targetWidth, targetHeight, getActualContentBottom());
+        return renderToBitmap(targetWidth, targetHeight, getPageContentBounds());
     }
 
     public Bitmap renderToBitmap(int targetWidth, int targetHeight, float effectiveHeight) {
-        float scaleX = (float) targetWidth / (float) Math.max(1, getWidth());
-        float scaleY = (float) targetHeight / Math.max(1, effectiveHeight);
+        RectF bounds = getPageContentBounds();
+        return renderToBitmap(targetWidth, targetHeight, bounds);
+    }
+
+    public Bitmap renderToBitmap(int targetWidth, int targetHeight, RectF contentBounds) {
+        if (contentBounds == null) contentBounds = getPageContentBounds();
+        float contentW = contentBounds.width();
+        float contentH = contentBounds.height();
+
+        float scaleX = (float) targetWidth / contentW;
+        float scaleY = (float) targetHeight / contentH;
+        float uniformScale = Math.min(scaleX, scaleY);
+
+        float extraX = (targetWidth - contentW * uniformScale) * 0.5f;
+        float extraY = (targetHeight - contentH * uniformScale) * 0.5f;
 
         Bitmap bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
-        canvas.scale(scaleX, scaleY);
 
         boolean isDark = isColorDark(pageBackgroundColor);
         canvas.drawColor(pageBackgroundColor);
-        visibleViewport.set(0, 0, Math.max(getWidth(), targetWidth) * 2f, effectiveHeight);
-        drawPaperTemplate(canvas, getWidth(), effectiveHeight, isDark, scaleX);
+
+        canvas.save();
+        canvas.translate(extraX, extraY);
+        canvas.scale(uniformScale, uniformScale);
+        canvas.translate(-contentBounds.left, -contentBounds.top);
+
+        float viewLeft = contentBounds.left - extraX / uniformScale;
+        float viewRight = contentBounds.right + extraX / uniformScale;
+        float viewTop = contentBounds.top - extraY / uniformScale;
+        float viewBottom = contentBounds.bottom + extraY / uniformScale;
+
+        visibleViewport.set(viewLeft, viewTop, viewRight, viewBottom);
+        drawPaperTemplate(canvas, (int) (viewRight - viewLeft), viewBottom - viewTop, isDark, uniformScale);
 
         if (currentPage != null) {
             if (currentPage.images != null) {
@@ -4039,27 +4401,34 @@ public class CanvasView extends View {
                     drawImage(canvas, img);
                 }
             }
-            for (ShapeItem shape : currentPage.shapes) {
-                drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth);
-            }
-            for (TextItem item : currentPage.texts) {
-                textPaint.setColor(item.color);
-                textPaint.setTextSize(item.fontSize);
-                textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), item.fontKey));
-                if (Math.abs(item.rotationAngle) > 0.5f) {
-                    canvas.save();
-                    canvas.rotate(item.rotationAngle, item.x, item.y);
-                    canvas.drawText(item.text, item.x, item.y, textPaint);
-                    canvas.restore();
-                } else {
-                    canvas.drawText(item.text, item.x, item.y, textPaint);
+            if (currentPage.shapes != null) {
+                for (ShapeItem shape : currentPage.shapes) {
+                    drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth);
                 }
             }
-            for (Stroke stroke : currentPage.strokes) {
-                drawStroke(canvas, stroke);
+            if (currentPage.texts != null) {
+                for (TextItem item : currentPage.texts) {
+                    textPaint.setColor(item.color);
+                    textPaint.setTextSize(item.fontSize);
+                    textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), item.fontKey));
+                    if (Math.abs(item.rotationAngle) > 0.5f) {
+                        canvas.save();
+                        canvas.rotate(item.rotationAngle, item.x, item.y);
+                        canvas.drawText(item.text, item.x, item.y, textPaint);
+                        canvas.restore();
+                    } else {
+                        canvas.drawText(item.text, item.x, item.y, textPaint);
+                    }
+                }
+            }
+            if (currentPage.strokes != null) {
+                for (Stroke stroke : currentPage.strokes) {
+                    drawStroke(canvas, stroke);
+                }
             }
         }
 
+        canvas.restore();
         return bitmap;
     }
 }
