@@ -718,36 +718,7 @@ public class CanvasView extends View {
     public void applyAutoBeautification(Stroke stroke) {
         if (stroke == null || stroke.points.size() < 3) return;
 
-        // 1. Devanagari Shirorekha (Top Line) Snapping for Hindi / Marathi
-        if (isShirorekhaSnapEnabled && ("MARATHI".equalsIgnoreCase(beautifyLanguage) || "HINDI".equalsIgnoreCase(beautifyLanguage))) {
-            DrawingPoint firstPt = stroke.points.get(0);
-            DrawingPoint lastPt = stroke.points.get(stroke.points.size() - 1);
-            float dx = Math.abs(lastPt.x - firstPt.x);
-            float dy = Math.abs(lastPt.y - firstPt.y);
-            float totalDist = (float) Math.hypot(dx, dy);
 
-            if (totalDist > 28f && (dy / Math.max(1f, dx)) < 0.24f) {
-                float avgY = 0f;
-                for (DrawingPoint pt : stroke.points) avgY += pt.y;
-                avgY /= stroke.points.size();
-
-                boolean isFlat = true;
-                for (DrawingPoint pt : stroke.points) {
-                    if (Math.abs(pt.y - avgY) > 22f) {
-                        isFlat = false;
-                        break;
-                    }
-                }
-
-                if (isFlat) {
-                    for (DrawingPoint pt : stroke.points) {
-                        pt.y = avgY;
-                    }
-                    stroke.markDirty();
-                    return;
-                }
-            }
-        }
 
         // Gently relax interior samples in place. The renderer already uses
         // quadratic segments, so subdividing every sample (which used to grow
@@ -3322,27 +3293,26 @@ public class CanvasView extends View {
                     activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
                     activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure, event.getEventTime());
 
-                    // Straight-Line Snapping Assist
-                    if (straightLineAssist && activeStroke.points.size() > 5) {
+                    // Straight-Line Snapping Assist: strictly for long deliberate ruler divider lines,
+                    // NEVER hijack or flatten handwriting strokes or letters into slashes!
+                    if (straightLineAssist && !isAutoConvertTextEnabled && activeStroke.points.size() > 10) {
                         DrawingPoint firstPt = activeStroke.points.get(0);
                         DrawingPoint lastPt = activeStroke.points.get(activeStroke.points.size() - 1);
                         float dist = (float) Math.hypot(lastPt.x - firstPt.x, lastPt.y - firstPt.y);
-                        float maxDeviation = 0f;
-                        if (dist > 0f) {
+                        if (dist > 250f) {
+                            float maxDeviation = 0f;
                             for (DrawingPoint point : activeStroke.points) {
                                 float deviation = Math.abs((lastPt.y - firstPt.y) * point.x
                                         - (lastPt.x - firstPt.x) * point.y
                                         + lastPt.x * firstPt.y - lastPt.y * firstPt.x) / dist;
                                 maxDeviation = Math.max(maxDeviation, deviation);
                             }
-                        }
-                        // Assist only when the user already drew an almost-straight
-                        // line; never flatten a curved letter or freehand stroke.
-                        if (dist > 60f && maxDeviation <= Math.max(6f, dist * 0.025f)) {
-                            activeStroke.points.clear();
-                            activeStroke.addPoint(firstPt.x, firstPt.y, 1.0f, firstPt.timeMillis);
-                            activeStroke.addPoint(lastPt.x, lastPt.y, 1.0f, lastPt.timeMillis);
-                            activeStroke.markDirty();
+                            if (maxDeviation <= Math.max(4f, dist * 0.015f)) {
+                                activeStroke.points.clear();
+                                activeStroke.addPoint(firstPt.x, firstPt.y, 1.0f, firstPt.timeMillis);
+                                activeStroke.addPoint(lastPt.x, lastPt.y, 1.0f, lastPt.timeMillis);
+                                activeStroke.markDirty();
+                            }
                         }
                     }
 
