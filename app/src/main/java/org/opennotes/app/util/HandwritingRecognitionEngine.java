@@ -236,28 +236,67 @@ public final class HandwritingRecognitionEngine {
                     .build();
             recognizer.recognize(ink, recognitionContext)
                     .addOnSuccessListener(result -> {
-                        try {
-                            String text = result.getCandidates().isEmpty()
-                                    ? "" : result.getCandidates().get(0).getText();
-                            if (text.trim().isEmpty()) {
-                                postFailure(callback, new IllegalArgumentException("Could not confidently read these strokes. The handwriting was kept."));
-                            } else {
-                                String lang = isLatin(language) ? "ENGLISH"
-                                        : ("HINDI".equalsIgnoreCase(language) ? "HINDI" : "MARATHI");
-                                float fontSize = Math.max(26f, Math.min(92f, bounds.height() * 0.85f));
-                                MAIN.post(() -> callback.onSuccess(
-                                        new RecognitionResult(text, lang, new RectF(bounds), fontSize)));
-                            }
-                        } finally {
+                        String text = firstCandidate(result);
+                        if (text.trim().isEmpty()) {
+                            recognizeWithoutWritingArea(recognizer, ink, language,
+                                    bounds, callback, null);
+                        } else {
+                            completeRecognition(recognizer, text, language, bounds, callback);
+                        }
+                    })
+                    .addOnFailureListener(error -> recognizeWithoutWritingArea(
+                            recognizer, ink, language, bounds, callback, error));
+        } catch (Exception error) {
+            postFailure(callback, error);
+        }
+    }
+
+    /** Retry without the optional writing-area hint, which may be a poor fit for selected ink. */
+    private static void recognizeWithoutWritingArea(DigitalInkRecognizer recognizer, Ink ink,
+                                                    String language, RectF bounds,
+                                                    Callback callback, Exception firstError) {
+        try {
+            recognizer.recognize(ink)
+                    .addOnSuccessListener(result -> {
+                        String text = firstCandidate(result);
+                        if (text.trim().isEmpty()) {
                             recognizer.close();
+                            IllegalArgumentException error = new IllegalArgumentException(
+                                    "No handwriting text was recognized. Try writing one line at a time and check the selected language.");
+                            if (firstError != null) error.addSuppressed(firstError);
+                            postFailure(callback, error);
+                        } else {
+                            completeRecognition(recognizer, text, language, bounds, callback);
                         }
                     })
                     .addOnFailureListener(error -> {
                         recognizer.close();
+                        if (firstError != null) error.addSuppressed(firstError);
                         postFailure(callback, error);
                     });
         } catch (Exception error) {
+            recognizer.close();
+            if (firstError != null) error.addSuppressed(firstError);
             postFailure(callback, error);
+        }
+    }
+
+    private static String firstCandidate(com.google.mlkit.vision.digitalink.recognition.RecognitionResult result) {
+        if (result == null || result.getCandidates().isEmpty()) return "";
+        String text = result.getCandidates().get(0).getText();
+        return text == null ? "" : text;
+    }
+
+    private static void completeRecognition(DigitalInkRecognizer recognizer, String text,
+                                            String language, RectF bounds, Callback callback) {
+        try {
+            String lang = isLatin(language) ? "ENGLISH"
+                    : ("HINDI".equalsIgnoreCase(language) ? "HINDI" : "MARATHI");
+            float fontSize = Math.max(26f, Math.min(92f, bounds.height() * 0.85f));
+            MAIN.post(() -> callback.onSuccess(
+                    new RecognitionResult(text, lang, new RectF(bounds), fontSize)));
+        } finally {
+            recognizer.close();
         }
     }
 
