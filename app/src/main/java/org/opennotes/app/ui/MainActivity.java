@@ -77,6 +77,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        FullscreenMode.apply(this);
         setContentView(R.layout.activity_main);
 
         dbHelper = NotesDbHelper.getInstance(this);
@@ -113,6 +114,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     @Override
     protected void onResume() {
         super.onResume();
+        FullscreenMode.apply(this);
         loadNotebooks();
     }
 

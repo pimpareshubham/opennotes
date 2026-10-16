@@ -163,6 +163,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        FullscreenMode.apply(this);
         setContentView(R.layout.activity_note_editor);
 
         imagePickerLauncher = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
@@ -1799,6 +1800,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             try { voicePlayer.release(); voicePlayer = null; } catch (Exception ignored) {}
         }
         saveCurrentPage();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        FullscreenMode.apply(this);
     }
 
     @Override
