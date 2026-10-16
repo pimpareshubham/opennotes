@@ -608,39 +608,46 @@ public class CanvasView extends View {
 
     public void convertStrokesToText(List<Stroke> strokesToConvert) {
         if (currentPage == null || strokesToConvert == null || strokesToConvert.isEmpty()) return;
+        final List<Stroke> requestedStrokes = new ArrayList<>(strokesToConvert);
+        final Page requestedPage = currentPage;
+        final int textColor = currentColor;
+        org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
+                getContext(), requestedStrokes, beautifyLanguage,
+                new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
+                    @Override
+                    public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult res) {
+                        if (currentPage != requestedPage || res == null || res.text.trim().isEmpty()) return;
+                        List<Stroke> stillPresent = new ArrayList<>();
+                        for (Stroke stroke : requestedStrokes) {
+                            if (requestedPage.strokes.contains(stroke)) stillPresent.add(stroke);
+                        }
+                        if (stillPresent.isEmpty()) return;
 
-        org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult res =
-                org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(strokesToConvert, beautifyLanguage);
-        if (res == null || res.text == null || res.text.trim().isEmpty()) return;
+                        String fontKey = beautifyFontKey;
+                        if (fontKey == null || fontKey.isEmpty()) {
+                            fontKey = "ENGLISH".equalsIgnoreCase(res.language)
+                                    ? org.opennotes.app.util.TypefaceManager.FONT_CAVEAT
+                                    : org.opennotes.app.util.TypefaceManager.FONT_KALAM;
+                        }
+                        requestedPage.strokes.removeAll(stillPresent);
+                        TextItem textItem = new TextItem(res.text, res.bounds.left,
+                                res.bounds.bottom - 4f, textColor, res.fontSize, fontKey);
+                        requestedPage.texts.add(textItem);
+                        ActionRecord rec = new ActionRecord();
+                        rec.type = ActionRecord.Type.CONVERT_TO_TEXT;
+                        rec.prevStrokes = stillPresent;
+                        rec.text = textItem;
+                        undoStack.push(rec);
+                        redoStack.clear();
+                        invalidate();
+                        notifyChange();
+                    }
 
-        // Choose appropriate font for detected script if not manually overridden
-        String fontKey = beautifyFontKey;
-        if (fontKey == null || fontKey.isEmpty()) {
-            if ("ENGLISH".equalsIgnoreCase(res.language)) {
-                fontKey = org.opennotes.app.util.TypefaceManager.FONT_CAVEAT;
-            } else {
-                fontKey = org.opennotes.app.util.TypefaceManager.FONT_KALAM;
-            }
-        }
-
-        // Remove the handwritten strokes
-        currentPage.strokes.removeAll(strokesToConvert);
-
-        // Position converted text precisely at the handwritten bounding box
-        float textX = res.bounds.left;
-        float textY = res.bounds.bottom - 4f; // baseline
-        TextItem textItem = new TextItem(res.text, textX, textY, currentColor, res.fontSize, fontKey);
-        currentPage.texts.add(textItem);
-
-        ActionRecord rec = new ActionRecord();
-        rec.type = ActionRecord.Type.CONVERT_TO_TEXT;
-        rec.prevStrokes = new ArrayList<>(strokesToConvert);
-        rec.text = textItem;
-        undoStack.push(rec);
-        redoStack.clear();
-
-        invalidate();
-        notifyChange();
+                    @Override
+                    public void onFailure(Exception error) {
+                        // Keep the user's ink unchanged if model download or recognition fails.
+                    }
+                });
     }
 
     public float getZoomPercent() {

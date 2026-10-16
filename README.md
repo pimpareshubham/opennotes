@@ -3,26 +3,24 @@
 [![Android](https://img.shields.io/badge/Platform-Android_8.0+-3DDC84?logo=android&logoColor=white)](#)
 [![API](https://img.shields.io/badge/API-26%20--%2034+-blue.svg)](#)
 [![License](https://img.shields.io/badge/License-Apache_2.0-orange.svg)](#)
-[![Privacy](https://img.shields.io/badge/Privacy-100%25_Offline-success.svg)](#)
-[![Performance](https://img.shields.io/badge/FPS-60%2F120_Zero_Latency-brightgreen.svg)](#)
+[![Privacy](https://img.shields.io/badge/Recognition-On--device-success.svg)](#)
 
-A high-performance, studio-grade digital notebook designed for Android tablets and phones. Tailored for stylus drawing, student lecture notes, calligraphy, and mathematical sketches with **zero lag**, **infinite canvas**, and **real-time multilingual handwriting recognition**.
+A digital notebook designed for Android tablets and phones, with stylus drawing, student lecture notes, calligraphy, an expandable canvas, and on-device handwriting recognition.
 
 ---
 
 ## ✨ Key Features
 
-### ⚡ 1. Zero-Latency Infinite Canvas & Spatial Viewport Culling
+### ⚡ 1. Expandable Canvas & Spatial Viewport Culling
 - **Infinite Vertical Document Pages**: Notes expand downward seamlessly as you write.
 - **Display-List Geometry Caching**: Every committed stroke pre-caches its `Path` and bounding box; redraws run at an instantaneous $O(1)$ GPU rate without point recalculations.
 - **Spatial Viewport Culling**: Off-screen strokes and shapes are skipped before rendering. Paper templates (Ruled, Grid, Dots, Cornell) render only lines inside the active viewport, keeping frame rates locked at 60/120 FPS even on documents with thousands of strokes.
 - **Zero-Allocation Rendering**: Eliminated in-loop object allocations (`Path`, `Paint`) during continuous drawing to prevent Garbage Collector (GC) stalls.
 
-### 🧠 2. Real-Time Multilingual Handwriting-to-Font Recognition
-- **Devanagari Shirorekha (शिरोरेखा) Detection**: Automatically identifies Devanagari script (Marathi & Hindi) versus Latin script (English).
-- **Horizontal Character Clustering**: Groups adjacent and overlapping strokes into discrete character segments.
-- **Topological Feature Analysis**: Extracts structural loops, stems, connectors, S-curves, C-arcs, and diagonals to accurately classify letters without guesswork.
-- **Safety Confidence Guard (<52%)**: Ambiguous drawings, formulas, and sketches remain as authentic handwritten ink—never substituted with random words.
+### 🧠 2. On-Device Handwriting Recognition
+- Uses ML Kit Digital Ink Recognition for English, Hindi, and Marathi instead of geometric character guessing.
+- Recognition runs asynchronously; original handwriting stays on the page if recognition fails.
+- Language models download on first use and run on-device afterward. The first download requires an internet connection.
 - **Undo/Redo Support**: Converted text can be undone with a single tap, immediately restoring the original handwriting.
 
 ### 🔤 3. External TTF & OTF Custom Font Import
