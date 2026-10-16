@@ -77,7 +77,6 @@ public class CanvasView extends View {
     private float smoothedX = 0f;
     private float smoothedY = 0f;
     private float smoothedPressure = 0.5f;
-    private long strokeStartTime = 0;
     private ShapeItem.Type currentShapeType = ShapeItem.Type.RECTANGLE;
 
     // Laser pointer presentation mode (ephemeral glowing trail)
@@ -547,8 +546,10 @@ public class CanvasView extends View {
                 float ry = 0.25f * p0.y + 0.75f * p1.y;
                 float rp = 0.25f * p0.pressure + 0.75f * p1.pressure;
 
-                nextPass.add(new DrawingPoint(qx, qy, qp));
-                nextPass.add(new DrawingPoint(rx, ry, rp));
+                long qTime = interpolatePointTime(p0, p1, 0.25f);
+                long rTime = interpolatePointTime(p0, p1, 0.75f);
+                nextPass.add(new DrawingPoint(qx, qy, qp, qTime));
+                nextPass.add(new DrawingPoint(rx, ry, rp, rTime));
             }
 
             nextPass.add(smoothed.get(smoothed.size() - 1));
@@ -583,6 +584,11 @@ public class CanvasView extends View {
         stroke.points.clear();
         stroke.points.addAll(smoothed);
         stroke.markDirty();
+    }
+
+    private long interpolatePointTime(DrawingPoint from, DrawingPoint to, float fraction) {
+        if (from.timeMillis < 0L || to.timeMillis < 0L) return -1L;
+        return from.timeMillis + Math.round((to.timeMillis - from.timeMillis) * fraction);
     }
 
     private boolean isAutoConvertTextEnabled = false;
@@ -1471,8 +1477,9 @@ public class CanvasView extends View {
         for (Stroke s : selectedStrokes) {
             Stroke clone = new Stroke(s.color, s.width, s.tool);
             for (DrawingPoint pt : s.points) {
-                clone.addPoint(pt.x, pt.y, pt.pressure);
+                clone.addPoint(pt.x, pt.y, pt.pressure, pt.timeMillis);
             }
+            clone.copyRecognitionPointsFrom(s, 0f, 0f);
             clipboardStrokes.add(clone);
         }
         for (ShapeItem sh : selectedShapes) {
@@ -1488,8 +1495,9 @@ public class CanvasView extends View {
         for (Stroke s : clipboardStrokes) {
             Stroke clone = new Stroke(s.color, s.width, s.tool);
             for (DrawingPoint pt : s.points) {
-                clone.addPoint(pt.x + offset, pt.y + offset, pt.pressure);
+                clone.addPoint(pt.x + offset, pt.y + offset, pt.pressure, pt.timeMillis);
             }
+            clone.copyRecognitionPointsFrom(s, offset, offset);
             pastedStrokes.add(clone);
             currentPage.strokes.add(clone);
         }
@@ -1518,8 +1526,9 @@ public class CanvasView extends View {
         for (Stroke s : selectedStrokes) {
             Stroke clone = new Stroke(s.color, s.width, s.tool);
             for (DrawingPoint pt : s.points) {
-                clone.addPoint(pt.x + offset, pt.y + offset, pt.pressure);
+                clone.addPoint(pt.x + offset, pt.y + offset, pt.pressure, pt.timeMillis);
             }
+            clone.copyRecognitionPointsFrom(s, offset, offset);
             newStrokes.add(clone);
             currentPage.strokes.add(clone);
         }
@@ -1818,9 +1827,9 @@ public class CanvasView extends View {
                 smoothedX = canvasX;
                 smoothedY = canvasY;
                 smoothedPressure = pressure;
-                strokeStartTime = System.currentTimeMillis();
                 activeStroke = new Stroke(currentColor, currentStrokeWidth, currentTool);
-                activeStroke.addPoint(canvasX, canvasY, pressure);
+                activeStroke.addPoint(canvasX, canvasY, pressure, event.getEventTime());
+                activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
                 lastTouchX = canvasX;
                 lastTouchY = canvasY;
                 invalidate();
@@ -1839,19 +1848,23 @@ public class CanvasView extends View {
                         float histRawY = event.getHistoricalY(i);
                         float histX = (histRawX - panOffsetX) / scaleFactor;
                         float histY = (histRawY - panOffsetY) / scaleFactor + viewportOffsetY;
+                        float historicalPressure = normalizeInputPressure(
+                                event.getHistoricalPressure(i), primaryToolType);
+                        activeStroke.addRecognitionPoint(histX, histY, historicalPressure,
+                                event.getHistoricalEventTime(i));
 
                         smoothedX = smoothedX + (histX - smoothedX) * filterWeight;
                         smoothedY = smoothedY + (histY - smoothedY) * filterWeight;
-                        float historicalPressure = normalizeInputPressure(
-                                event.getHistoricalPressure(i), primaryToolType);
                         smoothedPressure += (historicalPressure - smoothedPressure) * pressureFilterWeight;
-                        activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure);
+                        activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure,
+                                event.getHistoricalEventTime(i));
                     }
                     smoothedX = smoothedX + (canvasX - smoothedX) * filterWeight;
                     smoothedY = smoothedY + (canvasY - smoothedY) * filterWeight;
                     smoothedPressure += (pressure - smoothedPressure) * pressureFilterWeight;
 
-                    activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure);
+                    activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
+                    activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure, event.getEventTime());
                     lastTouchX = smoothedX;
                     lastTouchY = smoothedY;
 
@@ -1869,7 +1882,8 @@ public class CanvasView extends View {
                     smoothedX += (canvasX - smoothedX) * endWeight;
                     smoothedY += (canvasY - smoothedY) * endWeight;
                     smoothedPressure += (pressure - smoothedPressure) * 0.65f;
-                    activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure);
+                    activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
+                    activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure, event.getEventTime());
 
                     // Straight-Line Snapping Assist
                     if (straightLineAssist && activeStroke.points.size() > 5) {
@@ -1889,8 +1903,8 @@ public class CanvasView extends View {
                         // line; never flatten a curved letter or freehand stroke.
                         if (dist > 60f && maxDeviation <= Math.max(6f, dist * 0.025f)) {
                             activeStroke.points.clear();
-                            activeStroke.addPoint(firstPt.x, firstPt.y, 1.0f);
-                            activeStroke.addPoint(lastPt.x, lastPt.y, 1.0f);
+                            activeStroke.addPoint(firstPt.x, firstPt.y, 1.0f, firstPt.timeMillis);
+                            activeStroke.addPoint(lastPt.x, lastPt.y, 1.0f, lastPt.timeMillis);
                             activeStroke.markDirty();
                         }
                     }

@@ -214,19 +214,28 @@ public final class HandwritingRecognitionEngine {
                                        String language, RectF bounds, Callback callback) {
         try {
             Ink.Builder inkBuilder = Ink.builder();
-            long time = 0L;
+            long lastInkTime = -1L;
             for (Stroke source : strokes) {
-                if (source == null || source.points == null || source.points.isEmpty()) continue;
+                if (source == null) continue;
+                List<DrawingPoint> inputPoints = source.getRecognitionPoints();
+                if (inputPoints == null || inputPoints.isEmpty()) continue;
                 Ink.Stroke.Builder strokeBuilder = Ink.Stroke.builder();
-                for (DrawingPoint point : source.points) {
+                for (DrawingPoint point : inputPoints) {
                     // ML Kit's writing area starts at (0, 0). Canvas strokes use page
                     // coordinates, so normalize them to the selected ink bounds first.
+                    // Retain actual event timing when captured. Legacy notes have
+                    // no timestamps, so give those points a monotonic fallback.
+                    long pointTime = point.timeMillis >= 0L
+                            ? point.timeMillis
+                            : (lastInkTime < 0L ? 0L : lastInkTime + 8L);
+                    if (lastInkTime >= 0L && pointTime <= lastInkTime) {
+                        pointTime = lastInkTime + 1L;
+                    }
                     strokeBuilder.addPoint(Ink.Point.create(
-                            point.x - bounds.left, point.y - bounds.top, time));
-                    time += 8L;
+                            point.x - bounds.left, point.y - bounds.top, pointTime));
+                    lastInkTime = pointTime;
                 }
                 inkBuilder.addStroke(strokeBuilder.build());
-                time += 120L; // Preserve a realistic pause between pen lifts.
             }
             Ink ink = inkBuilder.build();
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
@@ -304,8 +313,10 @@ public final class HandwritingRecognitionEngine {
         RectF bounds = new RectF();
         boolean found = false;
         for (Stroke stroke : strokes) {
-            if (stroke == null || stroke.points == null) continue;
-            for (DrawingPoint point : stroke.points) {
+            if (stroke == null) continue;
+            List<DrawingPoint> inputPoints = stroke.getRecognitionPoints();
+            if (inputPoints == null) continue;
+            for (DrawingPoint point : inputPoints) {
                 if (!found) {
                     bounds.set(point.x, point.y, point.x, point.y);
                     found = true;

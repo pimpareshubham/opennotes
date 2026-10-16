@@ -9,12 +9,15 @@ import java.util.List;
 
 public class Stroke {
     public List<DrawingPoint> points;
+    /** Original touch samples used for recognition before visual smoothing/snapping. */
+    public List<DrawingPoint> recognitionPoints;
     public int color;
     public float width;
     public DrawingTool tool;
 
     public Stroke(int color, float width, DrawingTool tool) {
         this.points = new ArrayList<>();
+        this.recognitionPoints = new ArrayList<>();
         this.color = color;
         this.width = width;
         this.tool = tool;
@@ -97,8 +100,33 @@ public class Stroke {
     }
 
     public void addPoint(float x, float y, float pressure) {
-        points.add(new DrawingPoint(x, y, pressure));
+        addPoint(x, y, pressure, -1L);
+    }
+
+    public void addPoint(float x, float y, float pressure, long timeMillis) {
+        points.add(new DrawingPoint(x, y, pressure, timeMillis));
         markDirty();
+    }
+
+    public void addRecognitionPoint(float x, float y, float pressure, long timeMillis) {
+        if (recognitionPoints == null) recognitionPoints = new ArrayList<>();
+        recognitionPoints.add(new DrawingPoint(x, y, pressure, timeMillis));
+    }
+
+    public List<DrawingPoint> getRecognitionPoints() {
+        return recognitionPoints != null && !recognitionPoints.isEmpty()
+                ? recognitionPoints : points;
+    }
+
+    public void copyRecognitionPointsFrom(Stroke source, float offsetX, float offsetY) {
+        List<DrawingPoint> sourcePoints = source.getRecognitionPoints();
+        if (sourcePoints == null || sourcePoints.isEmpty()) return;
+        if (recognitionPoints == null) recognitionPoints = new ArrayList<>();
+        else recognitionPoints.clear();
+        for (DrawingPoint point : sourcePoints) {
+            recognitionPoints.add(new DrawingPoint(point.x + offsetX, point.y + offsetY,
+                    point.pressure, point.timeMillis));
+        }
     }
 
     public JSONObject toJson() throws JSONException {
@@ -112,6 +140,11 @@ public class Stroke {
             arr.put(pt.toJson());
         }
         obj.put("points", arr);
+        if (recognitionPoints != null && !recognitionPoints.isEmpty()) {
+            JSONArray recognitionArr = new JSONArray();
+            for (DrawingPoint pt : recognitionPoints) recognitionArr.put(pt.toJson());
+            obj.put("recognitionPoints", recognitionArr);
+        }
         return obj;
     }
 
@@ -134,6 +167,13 @@ public class Stroke {
                 if (ptObj != null) {
                     stroke.points.add(DrawingPoint.fromJson(ptObj));
                 }
+            }
+        }
+        JSONArray recognitionArr = obj.optJSONArray("recognitionPoints");
+        if (recognitionArr != null) {
+            for (int i = 0; i < recognitionArr.length(); i++) {
+                JSONObject ptObj = recognitionArr.optJSONObject(i);
+                if (ptObj != null) stroke.recognitionPoints.add(DrawingPoint.fromJson(ptObj));
             }
         }
         return stroke;
