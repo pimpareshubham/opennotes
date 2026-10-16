@@ -400,6 +400,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
+    private void updateViewportLockIcon() {
+        if (btnLockViewport == null || canvasView == null) return;
+        boolean locked = canvasView.isViewportLocked();
+        btnLockViewport.setImageResource(locked ? R.drawable.ic_lock : R.drawable.ic_unlock);
+        btnLockViewport.setColorFilter(locked ? 0xFF38BDF8 : 0xFF94A3B8);
+        btnLockViewport.setContentDescription(locked ? "Viewport locked" : "Viewport unlocked");
+    }
+
     private void setupListeners() {
         btnBack.setOnClickListener(v -> {
             saveCurrentPage();
@@ -549,9 +557,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnLockViewport.setOnClickListener(v -> {
             boolean next = !canvasView.isViewportLocked();
             canvasView.setViewportLocked(next);
-            btnLockViewport.setColorFilter(next ? 0xFF38BDF8 : 0xFF94A3B8);
+            updateViewportLockIcon();
             Toast.makeText(this, next ? "Viewport Locked 🔒" : "Viewport Unlocked", Toast.LENGTH_SHORT).show();
         });
+        updateViewportLockIcon();
 
         btnResetZoom.setOnClickListener(v -> {
             canvasView.resetZoom();
