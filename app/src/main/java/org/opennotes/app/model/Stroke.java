@@ -30,7 +30,6 @@ public class Stroke {
     private transient android.graphics.Path cachedPressurePath;
     private transient boolean pressurePathDirty = true;
     private transient float pressurePathSensitivity = Float.NaN;
-    private transient float pressurePathCurrentWidth;
 
     public void markDirty() {
         pathDirty = true;
@@ -70,64 +69,196 @@ public class Stroke {
         pressurePathSensitivity = sensitivity;
         if (points == null || points.isEmpty()) {
             cachedPressurePath = path;
-            pressurePathCurrentWidth = 0f;
             pressurePathDirty = false;
             return;
         }
 
-        DrawingPoint first = points.get(0);
-        pressurePathCurrentWidth = getPressureWidth(first.pressure, sensitivity);
-        addPressureCircle(path, first.x, first.y, pressurePathCurrentWidth * 0.5f);
-        for (int i = 1; i < points.size(); i++) {
-            DrawingPoint previous = points.get(i - 1);
-            DrawingPoint current = points.get(i);
-            float targetWidth = getPressureWidth(current.pressure, sensitivity);
-            float previousWidth = pressurePathCurrentWidth;
-            pressurePathCurrentWidth = pressurePathCurrentWidth * 0.65f + targetWidth * 0.35f;
-            appendPressureSegment(path, previous, current,
-                    previousWidth, pressurePathCurrentWidth);
+        // 1. Single tap (period or dot)
+        if (points.size() == 1) {
+            DrawingPoint p0 = points.get(0);
+            float w0 = getPressureWidth(p0.pressure, sensitivity) * 0.35f;
+            float singleRadius = Math.max(0.8f, w0 * 0.5f);
+            path.addCircle(p0.x, p0.y, singleRadius, android.graphics.Path.Direction.CW);
+            cachedPressurePath = path;
+            pressurePathDirty = false;
+            return;
         }
+
+        // 2. Filter out consecutive duplicate / ultra-close samples (< 0.8px)
+        // to avoid numerical instability on tangents and normal vectors.
+        List<DrawingPoint> filtered = new ArrayList<>(points.size());
+        filtered.add(points.get(0));
+        for (int i = 1; i < points.size(); i++) {
+            DrawingPoint pt = points.get(i);
+            DrawingPoint prev = filtered.get(filtered.size() - 1);
+            float dx = pt.x - prev.x;
+            float dy = pt.y - prev.y;
+            if (dx * dx + dy * dy >= 0.64f || i == points.size() - 1) {
+                filtered.add(pt);
+            }
+        }
+
+        int count = filtered.size();
+        if (count == 1) {
+            DrawingPoint p0 = filtered.get(0);
+            float w0 = getPressureWidth(p0.pressure, sensitivity) * 0.35f;
+            float singleRadius = Math.max(0.8f, w0 * 0.5f);
+            path.addCircle(p0.x, p0.y, singleRadius, android.graphics.Path.Direction.CW);
+            cachedPressurePath = path;
+            pressurePathDirty = false;
+            return;
+        }
+
+        // 3. Compute continuous base widths with pressure
+        float[] widths = new float[count];
+        for (int i = 0; i < count; i++) {
+            widths[i] = getPressureWidth(filtered.get(i).pressure, sensitivity);
+        }
+
+        // Multi-point forward-backward smoothing on width so line width transitions like real ink
+        if (count > 2) {
+            float[] smoothedWidths = new float[count];
+            smoothedWidths[0] = widths[0];
+            smoothedWidths[count - 1] = widths[count - 1];
+            for (int i = 1; i < count - 1; i++) {
+                smoothedWidths[i] = 0.22f * widths[i - 1] + 0.56f * widths[i] + 0.22f * widths[i + 1];
+            }
+            System.arraycopy(smoothedWidths, 0, widths, 0, count);
+        }
+
+        // 4. Start & End Calligraphic Tapering:
+        // ELIMINATES start & end circular blobs/dots completely!
+        // Pen touches gently and lifts off into an elegant fine tip.
+        if (count >= 3) {
+            widths[0] *= 0.32f;
+            widths[1] *= 0.62f;
+            if (count > 4) widths[2] *= 0.84f;
+
+            widths[count - 1] *= 0.28f;
+            widths[count - 2] *= 0.58f;
+            if (count > 4) widths[count - 3] *= 0.82f;
+        } else {
+            widths[0] *= 0.40f;
+            widths[1] *= 0.40f;
+        }
+
+        // 5. Calligraphic Nib Angle Modulation for FOUNTAIN tool
+        // Fountain pen nib held at ~45°: downstrokes expand, cross-strokes are crisp & fine
+        if (tool == DrawingTool.FOUNTAIN) {
+            for (int i = 0; i < count; i++) {
+                float tx, ty;
+                if (i == 0) {
+                    tx = filtered.get(1).x - filtered.get(0).x;
+                    ty = filtered.get(1).y - filtered.get(0).y;
+                } else if (i == count - 1) {
+                    tx = filtered.get(count - 1).x - filtered.get(count - 2).x;
+                    ty = filtered.get(count - 1).y - filtered.get(count - 2).y;
+                } else {
+                    tx = filtered.get(i + 1).x - filtered.get(i - 1).x;
+                    ty = filtered.get(i + 1).y - filtered.get(i - 1).y;
+                }
+                float len = (float) Math.hypot(tx, ty);
+                if (len > 0.0001f) {
+                    tx /= len;
+                    ty /= len;
+                    float modulation = 0.72f + 0.52f * Math.abs(0.7071f * tx - 0.7071f * ty);
+                    widths[i] *= modulation;
+                }
+            }
+        }
+
+        // 6. Compute Left and Right Ribbon Boundaries
+        float[] leftX = new float[count];
+        float[] leftY = new float[count];
+        float[] rightX = new float[count];
+        float[] rightY = new float[count];
+        float[] tanX = new float[count];
+        float[] tanY = new float[count];
+
+        for (int i = 0; i < count; i++) {
+            float tx, ty;
+            if (i == 0) {
+                tx = filtered.get(1).x - filtered.get(0).x;
+                ty = filtered.get(1).y - filtered.get(0).y;
+            } else if (i == count - 1) {
+                tx = filtered.get(count - 1).x - filtered.get(count - 2).x;
+                ty = filtered.get(count - 1).y - filtered.get(count - 2).y;
+            } else {
+                tx = filtered.get(i + 1).x - filtered.get(i - 1).x;
+                ty = filtered.get(i + 1).y - filtered.get(i - 1).y;
+            }
+            float dist = (float) Math.hypot(tx, ty);
+            if (dist < 0.0001f) {
+                tx = 1f;
+                ty = 0f;
+            } else {
+                tx /= dist;
+                ty /= dist;
+            }
+            tanX[i] = tx;
+            tanY[i] = ty;
+
+            float normX = -ty;
+            float normY = tx;
+            float halfW = Math.max(0.6f, widths[i] * 0.5f);
+
+            DrawingPoint pt = filtered.get(i);
+            leftX[i] = pt.x + normX * halfW;
+            leftY[i] = pt.y + normY * halfW;
+            rightX[i] = pt.x - normX * halfW;
+            rightY[i] = pt.y - normY * halfW;
+        }
+
+        // 7. Construct Single Continuous Smooth Bezier Envelope
+        // No circles inside the stroke! No segmented joints!
+        path.moveTo(leftX[0], leftY[0]);
+
+        // Left Boundary Spine (Forward Quadratic Beziers)
+        for (int i = 0; i < count - 1; i++) {
+            float midX = (leftX[i] + leftX[i + 1]) * 0.5f;
+            float midY = (leftY[i] + leftY[i + 1]) * 0.5f;
+            path.quadTo(leftX[i], leftY[i], midX, midY);
+        }
+        path.lineTo(leftX[count - 1], leftY[count - 1]);
+
+        // End Cap (Smooth Tapered Tip from Left to Right at Stroke End)
+        DrawingPoint lastPt = filtered.get(count - 1);
+        float endTipRadius = Math.max(0.6f, widths[count - 1] * 0.5f);
+        float endTipX = lastPt.x + tanX[count - 1] * endTipRadius;
+        float endTipY = lastPt.y + tanY[count - 1] * endTipRadius;
+        path.quadTo(endTipX, endTipY, rightX[count - 1], rightY[count - 1]);
+
+        // Right Boundary Spine (Backward Quadratic Beziers)
+        for (int i = count - 1; i > 0; i--) {
+            float midX = (rightX[i] + rightX[i - 1]) * 0.5f;
+            float midY = (rightY[i] + rightY[i - 1]) * 0.5f;
+            path.quadTo(rightX[i], rightY[i], midX, midY);
+        }
+        path.lineTo(rightX[0], rightY[0]);
+
+        // Start Cap (Smooth Tapered Tip from Right to Left at Stroke Start)
+        DrawingPoint firstPt = filtered.get(0);
+        float startTipRadius = Math.max(0.6f, widths[0] * 0.5f);
+        float startTipX = firstPt.x - tanX[0] * startTipRadius;
+        float startTipY = firstPt.y - tanY[0] * startTipRadius;
+        path.quadTo(startTipX, startTipY, leftX[0], leftY[0]);
+
+        path.close();
+
         cachedPressurePath = path;
         pressurePathDirty = false;
     }
 
     private float getPressureWidth(float pressure, float sensitivity) {
-        float safePressure = pressure <= 0.05f ? 0.5f : pressure;
+        float p = (Float.isNaN(pressure) || pressure <= 0.001f)
+                ? 0.45f
+                : Math.max(0.06f, Math.min(1.0f, pressure));
         if (tool == DrawingTool.BRUSH) {
-            return width * (0.5f + (float) Math.pow(safePressure, 0.8)
-                    * (1.0f + sensitivity * 0.7f));
+            return width * (0.45f + (float) Math.pow(p, 0.85)
+                    * (1.1f + sensitivity * 0.7f));
         }
-        return width * (0.6f + (float) Math.pow(safePressure, 0.75)
-                * (0.7f + sensitivity * 0.5f));
-    }
-
-    private static void appendPressureSegment(android.graphics.Path path,
-                                              DrawingPoint from, DrawingPoint to,
-                                              float fromWidth, float toWidth) {
-        float dx = to.x - from.x;
-        float dy = to.y - from.y;
-        float distance = (float) Math.hypot(dx, dy);
-        float fromRadius = Math.max(0.5f, fromWidth * 0.5f);
-        float toRadius = Math.max(0.5f, toWidth * 0.5f);
-        // The previous segment already contributes its endpoint disk. Adding a
-        // disk at both ends of every segment doubled the number of path contours
-        // on long fountain/brush strokes without changing their visible outline.
-        addPressureCircle(path, to.x, to.y, toRadius);
-        if (distance < 0.001f) return;
-
-        float normalX = -dy / distance;
-        float normalY = dx / distance;
-        // Match the clockwise pressure disks above. Opposite winding makes
-        // overlapping segments cancel under WINDING fill, leaving dotted holes.
-        path.moveTo(from.x + normalX * fromRadius, from.y + normalY * fromRadius);
-        path.lineTo(from.x - normalX * fromRadius, from.y - normalY * fromRadius);
-        path.lineTo(to.x - normalX * toRadius, to.y - normalY * toRadius);
-        path.lineTo(to.x + normalX * toRadius, to.y + normalY * toRadius);
-        path.close();
-    }
-
-    private static void addPressureCircle(android.graphics.Path path, float x, float y, float radius) {
-        path.addCircle(x, y, radius, android.graphics.Path.Direction.CW);
+        return width * (0.50f + (float) Math.pow(p, 0.72)
+                * (0.80f + sensitivity * 0.55f));
     }
 
     private synchronized void computeBounds() {
@@ -161,7 +292,7 @@ public class Stroke {
         }
         if (points.size() == 1) {
             DrawingPoint p = points.get(0);
-            path.addCircle(p.x, p.y, Math.max(2f, width / 2f), android.graphics.Path.Direction.CW);
+            path.addCircle(p.x, p.y, Math.max(1.0f, width / 2f), android.graphics.Path.Direction.CW);
         } else {
             DrawingPoint first = points.get(0);
             path.moveTo(first.x, first.y);
@@ -190,8 +321,6 @@ public class Stroke {
         DrawingPoint point = new DrawingPoint(x, y, pressure, timeMillis);
         boolean canExtendPath = cachedPath != null && !pathDirty && previousCount >= 2;
         boolean canExtendBounds = cachedBounds != null && !boundsDirty;
-        boolean canExtendPressurePath = cachedPressurePath != null && !pressurePathDirty
-                && previousCount >= 1;
         points.add(point);
 
         // The current path ends at the previous sample. Append just the new
@@ -207,16 +336,9 @@ public class Stroke {
             pathDirty = true;
         }
 
-        if (canExtendPressurePath) {
-            float targetWidth = getPressureWidth(point.pressure, pressurePathSensitivity);
-            float previousWidth = pressurePathCurrentWidth;
-            pressurePathCurrentWidth = pressurePathCurrentWidth * 0.65f + targetWidth * 0.35f;
-            appendPressureSegment(cachedPressurePath, previous, point,
-                    previousWidth, pressurePathCurrentWidth);
-        } else {
-            cachedPressurePath = null;
-            pressurePathDirty = true;
-        }
+        // Invalidate pressure path so smooth calligraphic envelope is updated
+        cachedPressurePath = null;
+        pressurePathDirty = true;
 
         float pad = Math.max(width * 2f, 15f);
         if (canExtendBounds) {

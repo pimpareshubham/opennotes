@@ -148,7 +148,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     // Floating Contextual Lasso Action Bar
     private HorizontalScrollView lassoFloatingActionBar;
-    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoBeautify, btnLassoConvertText, btnLassoTeach;
+    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoConvertText, btnLassoTeach;
 
     // Fullscreen Zen mode
     private ImageView btnExitFullscreen;
@@ -252,14 +252,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 HandwritingRecognitionEngine.downloadModel("ENGLISH", null);
             }
         });
-        String preferredLang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
-        if (!"ENGLISH".equalsIgnoreCase(preferredLang)) {
-            HandwritingRecognitionEngine.isModelDownloaded(preferredLang, downloaded -> {
-                if (!downloaded) {
-                    HandwritingRecognitionEngine.downloadModel(preferredLang, null);
-                }
-            });
-        }
+        HandwritingRecognitionEngine.isModelDownloaded("MARATHI", downloaded -> {
+            if (!downloaded) {
+                HandwritingRecognitionEngine.downloadModel("MARATHI", null);
+            }
+        });
+        HandwritingRecognitionEngine.isModelDownloaded("HINDI", downloaded -> {
+            if (!downloaded) {
+                HandwritingRecognitionEngine.downloadModel("HINDI", null);
+            }
+        });
     }
 
     private void bindViews() {
@@ -354,7 +356,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnLassoStyle = findViewById(R.id.btnLassoStyle);
         btnLassoDuplicate = findViewById(R.id.btnLassoDuplicate);
         btnLassoColor = findViewById(R.id.btnLassoColor);
-        btnLassoBeautify = findViewById(R.id.btnLassoBeautify);
         btnLassoConvertText = findViewById(R.id.btnLassoConvertText);
         btnLassoTeach = findViewById(R.id.btnLassoTeach);
 
@@ -878,12 +879,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 canvasView.setSelectionColor(color);
             });
         });
-        if (btnLassoBeautify != null) {
-            btnLassoBeautify.setOnClickListener(v -> {
-                canvasView.beautifySelection();
-                Toast.makeText(this, "✨ Selected handwriting beautified!", Toast.LENGTH_SHORT).show();
-            });
-        }
         if (btnLassoConvertText != null) {
             btnLassoConvertText.setOnClickListener(v -> {
                 canvasView.convertSelectionToText();
@@ -1203,10 +1198,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (canvasView == null) return;
         boolean hasInk = canvasView.hasSelectedHandwriting();
         boolean hasClipboard = canvasView.hasClipboardContents();
-        if (btnLassoBeautify != null) {
-            btnLassoBeautify.setEnabled(hasInk);
-            btnLassoBeautify.setAlpha(hasInk ? 1f : 0.45f);
-        }
+
         if (btnLassoConvertText != null) {
             btnLassoConvertText.setEnabled(hasInk);
             btnLassoConvertText.setAlpha(hasInk ? 1f : 0.45f);

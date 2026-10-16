@@ -870,7 +870,7 @@ public class CanvasView extends View {
 
     public void convertSelectionToText() {
         if (!hasSelection() || selectedStrokes.isEmpty()) return;
-        convertStrokesToText(new ArrayList<>(selectedStrokes), true);
+        convertStrokesToText(new ArrayList<>(selectedStrokes), false);
         clearSelection();
     }
 
@@ -1786,7 +1786,6 @@ public class CanvasView extends View {
             // 6. Draw Active Stroke
             if (activeStroke != null) {
                 drawStroke(canvas, activeStroke);
-                drawPredictedInk(canvas);
             }
 
             // 7. Draw Live Shape Preview
@@ -2095,19 +2094,28 @@ public class CanvasView extends View {
     private void drawStroke(Canvas canvas, Stroke stroke) {
         if (stroke.points == null || stroke.points.isEmpty()) return;
 
-        // Support single tap dots / periods
+        // Fountain and Brush calculate their own smooth calligraphic pressure paths (including single dots)
+        if (stroke.tool == DrawingTool.FOUNTAIN) {
+            drawFountainStroke(canvas, stroke);
+            return;
+        } else if (stroke.tool == DrawingTool.BRUSH) {
+            drawBrushStroke(canvas, stroke);
+            return;
+        }
+
+        // Support single tap dots / periods for pen, pencil, and highlighter
         if (stroke.points.size() == 1) {
             DrawingPoint pt = stroke.points.get(0);
-            Paint dotPaint = (stroke.tool == DrawingTool.BRUSH) ? brushPaint : strokePaint;
+            Paint dotPaint = strokePaint;
             dotPaint.setColor(stroke.color);
             dotPaint.setStyle(Paint.Style.FILL);
-            float dotRadius = Math.max(2.5f, stroke.width / 2.0f);
+            float dotRadius = Math.max(1.0f, stroke.width / 2.0f);
             if (stroke.tool == DrawingTool.HIGHLIGHTER) {
                 dotPaint.setAlpha(100);
                 dotRadius = stroke.width * 1.5f;
             } else if (stroke.tool == DrawingTool.PENCIL) {
                 dotPaint.setAlpha(180);
-                dotRadius = Math.max(1.5f, stroke.width * 0.4f);
+                dotRadius = Math.max(1.0f, stroke.width * 0.35f);
             } else {
                 dotPaint.setAlpha(255);
             }
@@ -2127,12 +2135,6 @@ public class CanvasView extends View {
             paint.setColor(stroke.color);
             paint.setAlpha(180);
             paint.setStrokeWidth(Math.max(2.0f, stroke.width * 0.7f));
-        } else if (stroke.tool == DrawingTool.BRUSH) {
-            drawBrushStroke(canvas, stroke);
-            return;
-        } else if (stroke.tool == DrawingTool.FOUNTAIN) {
-            drawFountainStroke(canvas, stroke);
-            return;
         } else {
             paint = strokePaint;
             paint.setColor(stroke.color);

@@ -131,7 +131,7 @@ public class SemanticStrokeClusterer {
      * Determines whether a set of strokes contains multiple distinct lines of writing.
      */
     public static boolean isMultiLine(List<Stroke> strokes) {
-        if (strokes == null || strokes.size() < 4) return false;
+        if (strokes == null || strokes.size() < 6) return false;
         List<StrokeLine> lines = segmentIntoLines(strokes);
         return lines != null && lines.size() > 1;
     }
@@ -174,7 +174,24 @@ public class SemanticStrokeClusterer {
         float medianHeight = heights.get(heights.size() / 2);
         if (medianHeight < 12f) medianHeight = 24f;
 
-        // 3. Sort projected strokes primarily along vertical canonical axis (top to bottom)
+        // Find total vertical span in projected canonical frame
+        float totalMinY = Float.MAX_VALUE, totalMaxY = -Float.MAX_VALUE;
+        for (ProjectedStroke ps : projectedList) {
+            totalMinY = Math.min(totalMinY, ps.minY);
+            totalMaxY = Math.max(totalMaxY, ps.maxY);
+        }
+        float totalHeight = Math.max(1f, totalMaxY - totalMinY);
+
+        // If the total vertical span is within normal single-line height (< 2.6x medianHeight)
+        // or small stroke count, it is definitively a SINGLE LINE (e.g. single word/character like "बे", "कि", "hello")
+        if (totalHeight < medianHeight * 2.6f || strokes.size() <= 8) {
+            RectF lineBounds = InkNormalizer.getBounds(strokes);
+            List<StrokeWord> words = Collections.singletonList(new StrokeWord(new ArrayList<>(strokes), lineBounds, dominantAngle));
+            result.add(new StrokeLine(new ArrayList<>(strokes), words, lineBounds, dominantAngle));
+            return result;
+        }
+
+        // 3. Sort projected strokes along vertical canonical axis (top to bottom)
         Collections.sort(projectedList, (a, b) -> Float.compare(a.cy, b.cy));
 
         // 4. Cluster into lines based on Y-distance & bounding box vertical overlap
@@ -183,29 +200,37 @@ public class SemanticStrokeClusterer {
         currentLine.add(projectedList.get(0));
         lineClusters.add(currentLine);
 
-        float lineSplitThreshold = Math.max(28f, medianHeight * 0.72f);
-
         for (int i = 1; i < projectedList.size(); i++) {
             ProjectedStroke ps = projectedList.get(i);
 
             // Compute line cluster statistics
-            float lineMinY = Float.MAX_VALUE;
-            float lineMaxY = -Float.MAX_VALUE;
+            float lineMinY = Float.MAX_VALUE, lineMaxY = -Float.MAX_VALUE;
+            float lineMinX = Float.MAX_VALUE, lineMaxX = -Float.MAX_VALUE;
             float lineSumY = 0f;
             for (ProjectedStroke member : currentLine) {
                 lineMinY = Math.min(lineMinY, member.minY);
                 lineMaxY = Math.max(lineMaxY, member.maxY);
+                lineMinX = Math.min(lineMinX, member.minX);
+                lineMaxX = Math.max(lineMaxX, member.maxX);
                 lineSumY += member.cy;
             }
             float lineAvgY = lineSumY / currentLine.size();
 
-            // Check vertical overlap
-            float overlap = Math.max(0f, Math.min(lineMaxY, ps.maxY) - Math.max(lineMinY, ps.minY));
-            float minH = Math.min(lineMaxY - lineMinY, ps.height);
-            float overlapRatio = minH > 0f ? (overlap / minH) : 0f;
+            // Check if ps is a diacritic / matra / ascender / descender belonging to currentLine
+            // In Devanagari (Marathi/Hindi), matras like "े", "ै", "ो", "ौ", "ं" sit above the shirorekha,
+            // while "ु", "ू", "ृ" sit below. They horizontally overlap with the character and must NOT be split.
+            boolean overlapsX = (ps.minX <= lineMaxX + medianHeight * 0.55f)
+                    && (ps.maxX >= lineMinX - medianHeight * 0.55f);
+            boolean inMatraZone = (ps.maxY >= lineMinY - medianHeight * 1.35f)
+                    && (ps.minY <= lineMaxY + medianHeight * 1.35f);
+            boolean isMatraOrDiacritic = overlapsX && inMatraZone;
 
-            // If vertical distance exceeds threshold and overlap is small, start new line
-            if (Math.abs(ps.cy - lineAvgY) > lineSplitThreshold && overlapRatio < 0.35f) {
+            // Start a new line ONLY if it is NOT a matra/diacritic AND there is genuine line pitch separation
+            boolean isDistinctNewLine = !isMatraOrDiacritic
+                    && (Math.abs(ps.cy - lineAvgY) > medianHeight * 1.55f)
+                    && (ps.minY > lineMaxY + medianHeight * 0.40f || lineMinY > ps.maxY + medianHeight * 0.40f);
+
+            if (isDistinctNewLine) {
                 currentLine = new ArrayList<>();
                 currentLine.add(ps);
                 lineClusters.add(currentLine);
@@ -214,52 +239,18 @@ public class SemanticStrokeClusterer {
             }
         }
 
-        // 5. Within each line, sort strokes along horizontal axis (left to right) & group into words
+        // 5. Within each line, preserve natural human chronological stroke drawing order
         for (List<ProjectedStroke> cluster : lineClusters) {
-            Collections.sort(cluster, (a, b) -> Float.compare(a.minX, b.minX));
+            java.util.Set<Stroke> clusterStrokeSet = new java.util.HashSet<>();
+            for (ProjectedStroke ps : cluster) clusterStrokeSet.add(ps.originalStroke);
 
             List<Stroke> lineStrokes = new ArrayList<>(cluster.size());
-            List<StrokeWord> lineWords = new ArrayList<>();
-
-            List<Stroke> currentWordStrokes = new ArrayList<>();
-            float wordMinX = Float.MAX_VALUE, wordMaxX = -Float.MAX_VALUE;
-            float prevMaxX = -Float.MAX_VALUE;
-            long prevMaxTime = 0L;
-
-            float wordGapThreshold = Math.max(22f, medianHeight * 0.55f);
-
-            for (ProjectedStroke ps : cluster) {
-                lineStrokes.add(ps.originalStroke);
-
-                boolean isNewWord = false;
-                if (!currentWordStrokes.isEmpty()) {
-                    float horizontalGap = ps.minX - prevMaxX;
-                    // If there is a distinct horizontal gap between strokes, or a pause > 650ms with a gap
-                    if (horizontalGap > wordGapThreshold) {
-                        isNewWord = true;
-                    } else if (horizontalGap > 12f && ps.minTime > 0 && prevMaxTime > 0
-                            && (ps.minTime - prevMaxTime) > 650L) {
-                        isNewWord = true;
-                    }
-                }
-
-                if (isNewWord && !currentWordStrokes.isEmpty()) {
-                    RectF wb = InkNormalizer.getBounds(currentWordStrokes);
-                    lineWords.add(new StrokeWord(new ArrayList<>(currentWordStrokes), wb, dominantAngle));
-                    currentWordStrokes.clear();
-                }
-
-                currentWordStrokes.add(ps.originalStroke);
-                prevMaxX = Math.max(prevMaxX, ps.maxX);
-                if (ps.maxTime > 0) prevMaxTime = Math.max(prevMaxTime, ps.maxTime);
-            }
-
-            if (!currentWordStrokes.isEmpty()) {
-                RectF wb = InkNormalizer.getBounds(currentWordStrokes);
-                lineWords.add(new StrokeWord(currentWordStrokes, wb, dominantAngle));
+            for (Stroke s : strokes) {
+                if (clusterStrokeSet.contains(s)) lineStrokes.add(s);
             }
 
             RectF lineBounds = InkNormalizer.getBounds(lineStrokes);
+            List<StrokeWord> lineWords = Collections.singletonList(new StrokeWord(lineStrokes, lineBounds, dominantAngle));
             result.add(new StrokeLine(lineStrokes, lineWords, lineBounds, dominantAngle));
         }
 

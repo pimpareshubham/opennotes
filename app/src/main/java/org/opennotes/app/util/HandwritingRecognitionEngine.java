@@ -105,12 +105,8 @@ public final class HandwritingRecognitionEngine {
         WORKER.execute(() -> {
             try {
                 RemoteModelManager manager = RemoteModelManager.getInstance();
-                String enTag = languageTag("ENGLISH");
-                String mrTag = languageTag("MARATHI");
-                DigitalInkRecognitionModelIdentifier idEn =
-                        DigitalInkRecognitionModelIdentifier.fromLanguageTag(enTag);
-                DigitalInkRecognitionModelIdentifier idMr =
-                        DigitalInkRecognitionModelIdentifier.fromLanguageTag(mrTag);
+                DigitalInkRecognitionModelIdentifier idEn = getModelIdentifier("ENGLISH");
+                DigitalInkRecognitionModelIdentifier idMr = getModelIdentifier("MARATHI");
                 if (idEn == null || idMr == null) {
                     MAIN.post(() -> callback.onStatus(false, false));
                     return;
@@ -137,13 +133,9 @@ public final class HandwritingRecognitionEngine {
         WORKER.execute(() -> {
             try {
                 RemoteModelManager manager = RemoteModelManager.getInstance();
-                String enTag = languageTag("ENGLISH");
-                String mrTag = languageTag("MARATHI");
-                String hiTag = languageTag("HINDI");
-
-                DigitalInkRecognitionModelIdentifier idEn = DigitalInkRecognitionModelIdentifier.fromLanguageTag(enTag);
-                DigitalInkRecognitionModelIdentifier idMr = DigitalInkRecognitionModelIdentifier.fromLanguageTag(mrTag);
-                DigitalInkRecognitionModelIdentifier idHi = DigitalInkRecognitionModelIdentifier.fromLanguageTag(hiTag);
+                DigitalInkRecognitionModelIdentifier idEn = getModelIdentifier("ENGLISH");
+                DigitalInkRecognitionModelIdentifier idMr = getModelIdentifier("MARATHI");
+                DigitalInkRecognitionModelIdentifier idHi = getModelIdentifier("HINDI");
 
                 DigitalInkRecognitionModel modelEn = idEn != null ? DigitalInkRecognitionModel.builder(idEn).build() : null;
                 DigitalInkRecognitionModel modelMr = idMr != null ? DigitalInkRecognitionModel.builder(idMr).build() : null;
@@ -194,8 +186,7 @@ public final class HandwritingRecognitionEngine {
         if (callback == null) return;
         WORKER.execute(() -> {
             try {
-                String tag = languageTag(language);
-                DigitalInkRecognitionModelIdentifier id = DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+                DigitalInkRecognitionModelIdentifier id = getModelIdentifier(language);
                 if (id == null) {
                     MAIN.post(() -> callback.onStatus(false));
                     return;
@@ -216,7 +207,7 @@ public final class HandwritingRecognitionEngine {
         WORKER.execute(() -> {
             try {
                 String tag = languageTag(language);
-                DigitalInkRecognitionModelIdentifier id = DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+                DigitalInkRecognitionModelIdentifier id = getModelIdentifier(language);
                 if (id == null) {
                     if (callback != null) MAIN.post(() -> callback.onComplete(new IllegalArgumentException("Model not found: " + language)));
                     return;
@@ -236,8 +227,7 @@ public final class HandwritingRecognitionEngine {
         WORKER.execute(() -> {
             try {
                 String tag = languageTag(preferredLanguage);
-                DigitalInkRecognitionModelIdentifier identifier =
-                        DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+                DigitalInkRecognitionModelIdentifier identifier = getModelIdentifier(preferredLanguage);
                 if (identifier == null) {
                     postModelDownloadResult(callback, new IllegalArgumentException(
                             "Handwriting recognition is not available for " + tag));
@@ -341,16 +331,17 @@ public final class HandwritingRecognitionEngine {
             }
         }
 
-        // Pass 1: Advanced Ink Normalization (slant de-shearing & orientation deskewing)
-        // Uprights cursive downstrokes and rotates tilted baselines to horizontal.
-        InkNormalizer.NormalizedInk normalized = InkNormalizer.normalizeInk(strokes);
-        List<Stroke> primaryStrokes = (normalized != null && normalized.strokes != null && !normalized.strokes.isEmpty())
-                ? normalized.strokes
-                : strokes;
+        // Pass 1: Raw untouched strokes for Devanagari (Marathi/Hindi) so Kana and Matras
+        // remain exactly anchored to consonants without slant distortion or artificial rotation.
+        boolean isIndic = InkNormalizer.isIndicLanguage(preferredLanguage);
+        InkNormalizer.NormalizedInk normalized = InkNormalizer.normalizeInk(strokes, preferredLanguage);
+        List<Stroke> primaryStrokes = isIndic ? strokes
+                : ((normalized != null && normalized.strokes != null && !normalized.strokes.isEmpty())
+                        ? normalized.strokes : strokes);
         final float writingAngle = (normalized != null && normalized.transform != null)
                 ? normalized.transform.angleDegrees
                 : estimateWritingAngleDegrees(strokes);
-        final boolean isSlanted = Math.abs(writingAngle) >= 3.5f;
+        final boolean isSlanted = !isIndic && Math.abs(writingAngle) >= 3.5f;
 
         final List<Stroke> effectivePrimary = primaryStrokes;
         executeSingleRecognitionPass(context, effectivePrimary, preferredLanguage, contextText, new Callback() {
@@ -477,6 +468,24 @@ public final class HandwritingRecognitionEngine {
         if (index >= queue.size()) {
             if (accumulatedResult != null) {
                 callback.onSuccess(accumulatedResult);
+            } else if (preContext == null && !queue.isEmpty()) {
+                // Cross-language fallback (Devanagari <-> English) if primary language produced no candidates
+                String fallbackLang = "ENGLISH".equalsIgnoreCase(language) ? "MARATHI" : "ENGLISH";
+                DigitalInkRecognitionModelIdentifier fbId = getModelIdentifier(fallbackLang);
+                if (fbId != null) {
+                    DigitalInkRecognitionModel fbModel = DigitalInkRecognitionModel.builder(fbId).build();
+                    RemoteModelManager.getInstance().isModelDownloaded(fbModel).addOnCompleteListener(t -> {
+                        if (t.isSuccessful() && Boolean.TRUE.equals(t.getResult())) {
+                            executeSingleRecognitionPass(context, queue.get(0), fallbackLang, "", callback);
+                        } else {
+                            callback.onFailure(new IllegalArgumentException(
+                                    "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
+                        }
+                    });
+                    return;
+                }
+                callback.onFailure(new IllegalArgumentException(
+                        "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
             } else {
                 callback.onFailure(new IllegalArgumentException(
                         "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
@@ -524,13 +533,12 @@ public final class HandwritingRecognitionEngine {
             return;
         }
         try {
-            String tag = languageTag(preferredLanguage);
-            DigitalInkRecognitionModelIdentifier identifier =
-                    DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+            DigitalInkRecognitionModelIdentifier identifier = getModelIdentifier(preferredLanguage);
             if (identifier == null) {
-                postFailure(callback, new IllegalArgumentException("Handwriting recognition is not available for " + tag));
+                postFailure(callback, new IllegalArgumentException("Handwriting recognition is not available for " + preferredLanguage));
                 return;
             }
+            String tag = identifier.getLanguageSubtag();
             DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(identifier).build();
             RemoteModelManager manager = RemoteModelManager.getInstance();
             manager.isModelDownloaded(model).addOnSuccessListener(isDownloaded -> {
@@ -1012,10 +1020,129 @@ public final class HandwritingRecognitionEngine {
         }
     }
 
+    private static List<String> rerankDevanagariCandidates(List<Stroke> strokes, List<String> candidates) {
+        if (strokes == null || strokes.isEmpty() || candidates == null || candidates.size() <= 1) {
+            return candidates;
+        }
+
+        RectF bounds = boundsOf(strokes);
+        if (bounds == null || bounds.height() < 5f) return candidates;
+
+        float totalHeight = bounds.height();
+        float totalWidth = bounds.width();
+        float upperThreshold = bounds.top + totalHeight * 0.32f;
+        float lowerThreshold = bounds.bottom - totalHeight * 0.25f;
+        float rightThreshold = bounds.left + totalWidth * 0.40f;
+
+        boolean hasUpperMatraStroke = false;
+        boolean hasKanaStroke = false;
+        boolean hasLowerUkarStroke = false;
+        boolean hasAnusvarDot = false;
+
+        for (Stroke s : strokes) {
+            if (s == null) continue;
+            RectF sb = s.getBounds();
+            if (sb == null || sb.isEmpty()) continue;
+
+            // Upper matra: located predominantly in the upper 35% of the overall character height
+            if (sb.bottom <= upperThreshold + totalHeight * 0.12f && sb.top < upperThreshold) {
+                hasUpperMatraStroke = true;
+                if (sb.width() < totalWidth * 0.28f && sb.height() < totalHeight * 0.28f) {
+                    hasAnusvarDot = true;
+                }
+            }
+
+            // Kana: vertical downstroke on the right side of the character
+            if (sb.left >= rightThreshold && sb.height() >= totalHeight * 0.38f
+                    && (sb.height() / Math.max(1f, sb.width())) > 1.5f) {
+                hasKanaStroke = true;
+            }
+
+            // Lower ukar: sits at the bottom or dips below main baseline
+            if (sb.bottom >= lowerThreshold && sb.top > bounds.top + totalHeight * 0.45f) {
+                hasLowerUkarStroke = true;
+            }
+        }
+
+        if (!hasUpperMatraStroke && !hasKanaStroke && !hasLowerUkarStroke && !hasAnusvarDot) {
+            return candidates;
+        }
+
+        final boolean fUpper = hasUpperMatraStroke;
+        final boolean fKana = hasKanaStroke;
+        final boolean fLower = hasLowerUkarStroke;
+        final boolean fAnusvar = hasAnusvarDot;
+
+        List<String> sorted = new ArrayList<>(candidates);
+        sorted.sort((c1, c2) -> {
+            int score1 = scoreDevanagariMatch(c1, fUpper, fKana, fLower, fAnusvar);
+            int score2 = scoreDevanagariMatch(c2, fUpper, fKana, fLower, fAnusvar);
+            return Integer.compare(score2, score1);
+        });
+
+        return sorted;
+    }
+
+    private static int scoreDevanagariMatch(String text, boolean hasUpper, boolean hasKana,
+                                            boolean hasLower, boolean hasAnusvar) {
+        if (text == null) return 0;
+        int score = 0;
+        boolean textHasUpper = containsAny(text, "\u0947", "\u0948", "\u094b", "\u094c", "\u0945", "\u0949");
+        boolean textHasKana = containsAny(text, "\u093e", "\u094b", "\u094c", "\u0940", "\u0949");
+        boolean textHasVelanti = containsAny(text, "\u093f", "\u0940");
+        boolean textHasLower = containsAny(text, "\u0941", "\u0942", "\u0943");
+        boolean textHasAnusvar = containsAny(text, "\u0902", "\u0901", "\u0903");
+
+        if (hasUpper && textHasUpper) score += 40;
+        if (!hasUpper && textHasUpper) score -= 15;
+
+        if (hasKana && textHasKana) score += 35;
+        if (!hasKana && textHasKana) score -= 15;
+
+        if (hasLower && textHasLower) score += 35;
+        if (!hasLower && textHasLower) score -= 15;
+
+        if (hasAnusvar && textHasAnusvar) score += 25;
+
+        // Heavily penalize bare consonants when the user explicitly drew an upper matra (e.g. "ब" vs "बे")
+        if (hasUpper && !textHasUpper && !textHasVelanti) {
+            score -= 50;
+        }
+        // Penalize missing kana when ink has a distinct vertical kana stroke (e.g. "क" vs "का")
+        if (hasKana && !textHasKana && !textHasVelanti) {
+            score -= 40;
+        }
+
+        return score;
+    }
+
+    private static boolean containsAny(String text, String... patterns) {
+        if (text == null) return false;
+        for (String p : patterns) {
+            if (text.contains(p)) return true;
+        }
+        return false;
+    }
+
     private static List<String> enhanceAndRerankCandidates(Context context, List<Stroke> strokes,
                                                            List<String> alternatives, String language, String preContext) {
         if (alternatives == null || alternatives.isEmpty()) return alternatives;
         List<String> pool = new ArrayList<>(alternatives);
+
+        // Devanagari (Marathi/Hindi) linguistic and geometric feature matching
+        if (InkNormalizer.isIndicLanguage(language)) {
+            pool = rerankDevanagariCandidates(strokes, pool);
+            UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
+            if (userModel != null) {
+                for (String cand : alternatives) {
+                    String learned = userModel.predictLearnedCorrection(cand, strokes);
+                    if (learned != null && !learned.trim().isEmpty() && !pool.contains(learned)) {
+                        pool.add(0, learned);
+                    }
+                }
+            }
+            return pool;
+        }
 
         UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
 
@@ -1488,7 +1615,27 @@ public final class HandwritingRecognitionEngine {
         return !Float.isNaN(value) && !Float.isInfinite(value);
     }
 
-    private static String languageTag(String language) {
+    public static DigitalInkRecognitionModelIdentifier getModelIdentifier(String language) {
+        String[] tags;
+        if ("ENGLISH".equalsIgnoreCase(language)) {
+            tags = new String[]{"en-IN", "en", "en-US", "en-GB"};
+        } else if ("HINDI".equalsIgnoreCase(language)) {
+            tags = new String[]{"hi", "hi-IN", "mr-IN", "mr"};
+        } else {
+            // Marathi default
+            tags = new String[]{"mr-IN", "mr", "hi", "hi-IN"};
+        }
+        for (String tag : tags) {
+            try {
+                DigitalInkRecognitionModelIdentifier id =
+                        DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+                if (id != null) return id;
+            } catch (Exception ignored) {}
+        }
+        return null;
+    }
+
+    public static String languageTag(String language) {
         // The app and its target devices are used in India; ML Kit has a
         // dedicated English (India) handwriting model as well as Marathi.
         if ("ENGLISH".equalsIgnoreCase(language)) return "en-IN";

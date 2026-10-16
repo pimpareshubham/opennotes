@@ -141,12 +141,20 @@ public class InkNormalizer {
         return Math.max(-40f, Math.min(50f, medianSlant));
     }
 
+    public static boolean isIndicLanguage(String language) {
+        return "MARATHI".equalsIgnoreCase(language) || "HINDI".equalsIgnoreCase(language);
+    }
+
     /**
      * Normalizes a collection of strokes:
      * 1. Rotates to canonical horizontal alignment if written at an angle.
-     * 2. De-shears cursive slant so letters become upright.
+     * 2. De-shears cursive slant so letters become upright (for Latin/cursive scripts only).
      */
     public static NormalizedInk normalizeInk(List<Stroke> strokes) {
+        return normalizeInk(strokes, null);
+    }
+
+    public static NormalizedInk normalizeInk(List<Stroke> strokes, String language) {
         if (strokes == null || strokes.isEmpty()) {
             return new NormalizedInk(strokes, new OrientationTransform(0f, 0f, 0f, 0f));
         }
@@ -155,8 +163,15 @@ public class InkNormalizer {
         float pivotX = bounds.centerX();
         float pivotY = bounds.centerY();
 
-        float writingAngle = detectWritingAngleDegrees(strokes);
-        float slantAngle = detectSlantAngleDegrees(strokes);
+        boolean isIndic = isIndicLanguage(language);
+        // In Devanagari (Marathi/Hindi), characters have natural vertical stands (kana) and
+        // diagonal matras. Cursive slant de-shearing MUST NOT be applied because it distorts
+        // and severs matras and kana from their consonants!
+        // Also, for short Indic words (<= 10 strokes or aspect ratio < 2.5), never apply angle rotation.
+        float slantAngle = isIndic ? 0f : detectSlantAngleDegrees(strokes);
+        float writingAngle = (isIndic && (strokes.size() <= 10 || bounds.width() < bounds.height() * 2.5f))
+                ? 0f
+                : detectWritingAngleDegrees(strokes);
 
         if (Math.abs(writingAngle) < 3.5f && Math.abs(slantAngle) < 10f) {
             return new NormalizedInk(strokes, new OrientationTransform(0f, pivotX, pivotY, 0f));
