@@ -34,6 +34,8 @@ import java.util.concurrent.Executors;
 /** On-device handwriting recognition using ML Kit's digital ink models. */
 public final class HandwritingRecognitionEngine {
     private static final String TAG = "HandwritingRecognition";
+    private static final float MIN_WRITING_AREA_AXIS = 2f;
+    private static final float DEGENERATE_AXIS_RATIO = 0.08f;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Map<String, Task<Void>> MODEL_DOWNLOADS = new HashMap<>();
@@ -90,8 +92,9 @@ public final class HandwritingRecognitionEngine {
         WORKER.execute(() -> {
             try {
                 final RectF bounds = boundsOf(strokes);
-                if (bounds == null || bounds.width() < 2f || bounds.height() < 2f) {
-                    postFailure(callback, new IllegalArgumentException("Write a little more before converting."));
+                if (bounds == null) {
+                    postFailure(callback, new IllegalArgumentException(
+                            "No usable handwriting points were found. Your ink was kept."));
                     return;
                 }
                 String tag = languageTag(preferredLanguage);
@@ -238,14 +241,22 @@ public final class HandwritingRecognitionEngine {
                                              String preContext, RectF bounds,
                                              Callback callback) {
         try {
+            // A narrow but valid glyph can have a zero-width or zero-height
+            // geometric bound (for example, a single vertical or horizontal
+            // stroke). ML Kit still needs a non-degenerate writing area. Expand
+            // only those axes and center the original points within that area.
+            RectF writingArea = usableWritingArea(bounds);
             Ink.Builder inkBuilder = Ink.builder();
             long lastInkTime = -1L;
+            int addedStrokes = 0;
             for (Stroke source : strokes) {
                 if (source == null) continue;
                 List<DrawingPoint> inputPoints = source.getRecognitionPoints();
                 if (inputPoints == null || inputPoints.isEmpty()) continue;
                 Ink.Stroke.Builder strokeBuilder = Ink.Stroke.builder();
+                int addedPoints = 0;
                 for (DrawingPoint point : inputPoints) {
+                    if (point == null || !isFinite(point.x) || !isFinite(point.y)) continue;
                     // ML Kit's writing area starts at (0, 0). Canvas strokes use page
                     // coordinates, so normalize them to the selected ink bounds first.
                     // Retain actual event timing when captured. Legacy notes have
@@ -257,16 +268,25 @@ public final class HandwritingRecognitionEngine {
                         pointTime = lastInkTime + 1L;
                     }
                     strokeBuilder.addPoint(Ink.Point.create(
-                            point.x - bounds.left, point.y - bounds.top, pointTime));
+                            point.x - writingArea.left, point.y - writingArea.top, pointTime));
                     lastInkTime = pointTime;
+                    addedPoints++;
                 }
-                inkBuilder.addStroke(strokeBuilder.build());
+                if (addedPoints > 0) {
+                    inkBuilder.addStroke(strokeBuilder.build());
+                    addedStrokes++;
+                }
+            }
+            if (addedStrokes == 0) {
+                postFailure(callback, new IllegalArgumentException(
+                        "No usable handwriting points were found. Your ink was kept."));
+                return;
             }
             Ink ink = inkBuilder.build();
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(5).build());
             RecognitionContext.Builder contextBuilder = RecognitionContext.builder()
-                    .setWritingArea(new WritingArea(Math.max(1f, bounds.width()), Math.max(1f, bounds.height())))
+                    .setWritingArea(new WritingArea(writingArea.width(), writingArea.height()))
                     // ML Kit requires preContext even when there is no preceding text.
                     .setPreContext(preContext);
             RecognitionContext recognitionContext = contextBuilder.build();
@@ -367,6 +387,7 @@ public final class HandwritingRecognitionEngine {
             List<DrawingPoint> inputPoints = stroke.getRecognitionPoints();
             if (inputPoints == null) continue;
             for (DrawingPoint point : inputPoints) {
+                if (point == null || !isFinite(point.x) || !isFinite(point.y)) continue;
                 if (!found) {
                     bounds.set(point.x, point.y, point.x, point.y);
                     found = true;
@@ -374,6 +395,29 @@ public final class HandwritingRecognitionEngine {
             }
         }
         return found ? bounds : null;
+    }
+
+    private static RectF usableWritingArea(RectF inkBounds) {
+        float width = Math.max(0f, inkBounds.width());
+        float height = Math.max(0f, inkBounds.height());
+        float targetWidth = width;
+        float targetHeight = height;
+        if (targetWidth < MIN_WRITING_AREA_AXIS) {
+            targetWidth = Math.max(MIN_WRITING_AREA_AXIS,
+                    Math.max(height, MIN_WRITING_AREA_AXIS) * DEGENERATE_AXIS_RATIO);
+        }
+        if (targetHeight < MIN_WRITING_AREA_AXIS) {
+            targetHeight = Math.max(MIN_WRITING_AREA_AXIS,
+                    Math.max(width, MIN_WRITING_AREA_AXIS) * DEGENERATE_AXIS_RATIO);
+        }
+        float centerX = (inkBounds.left + inkBounds.right) * 0.5f;
+        float centerY = (inkBounds.top + inkBounds.bottom) * 0.5f;
+        return new RectF(centerX - targetWidth * 0.5f, centerY - targetHeight * 0.5f,
+                centerX + targetWidth * 0.5f, centerY + targetHeight * 0.5f);
+    }
+
+    private static boolean isFinite(float value) {
+        return !Float.isNaN(value) && !Float.isInfinite(value);
     }
 
     private static String languageTag(String language) {
