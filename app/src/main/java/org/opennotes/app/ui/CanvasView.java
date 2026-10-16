@@ -1183,11 +1183,12 @@ public class CanvasView extends View {
             textPaint.setTextSize(result.fontSize);
             textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
             float spaceWidth = textPaint.measureText(" ");
-            float curX = result.bounds.left;
-            float baselineY = result.bounds.bottom - 4f;
+            float rotation = result.angleDegrees;
+            float curX = (result.startX != 0f || result.startY != 0f) ? result.startX : result.bounds.left;
+            float baselineY = (result.startX != 0f || result.startY != 0f) ? result.startY : result.bounds.bottom - 4f;
 
-            if (words.length <= 1) {
-                convertedTexts.add(new TextItem(fullText, curX, baselineY, textColor, result.fontSize, fontKey));
+            if (Math.abs(rotation) > 0.5f || words.length <= 1) {
+                convertedTexts.add(new TextItem(fullText, curX, baselineY, textColor, result.fontSize, fontKey, rotation));
             } else {
                 float totalWordsWidth = 0f;
                 float[] wordWidths = new float[words.length];
@@ -1200,7 +1201,7 @@ public class CanvasView extends View {
                 computedSpace = Math.min(computedSpace, spaceWidth * 2.5f);
 
                 for (int w = 0; w < words.length; w++) {
-                    convertedTexts.add(new TextItem(words[w], curX, baselineY, textColor, result.fontSize, fontKey));
+                    convertedTexts.add(new TextItem(words[w], curX, baselineY, textColor, result.fontSize, fontKey, 0f));
                     curX += wordWidths[w] + computedSpace;
                 }
             }
@@ -1771,7 +1772,14 @@ public class CanvasView extends View {
                 textPaint.setColor(item.color);
                 textPaint.setTextSize(item.fontSize);
                 textPaint.setTypeface(getCachedTypeface(item.fontKey));
-                canvas.drawText(item.text, item.x, item.y, textPaint);
+                if (Math.abs(item.rotationAngle) > 0.5f) {
+                    canvas.save();
+                    canvas.rotate(item.rotationAngle, item.x, item.y);
+                    canvas.drawText(item.text, item.x, item.y, textPaint);
+                    canvas.restore();
+                } else {
+                    canvas.drawText(item.text, item.x, item.y, textPaint);
+                }
             }
 
             // 5. Draw only the visible spatial-grid candidates, preserving ink order.
@@ -2642,7 +2650,7 @@ public class CanvasView extends View {
 
     private TextItem cloneText(TextItem source, float dx, float dy) {
         return new TextItem(source.text, source.x + dx, source.y + dy,
-                source.color, source.fontSize, source.fontKey);
+                source.color, source.fontSize, source.fontKey, source.rotationAngle);
     }
 
     private ActionRecord beginSelectionStyleChange() {
@@ -4053,7 +4061,14 @@ public class CanvasView extends View {
                 textPaint.setColor(item.color);
                 textPaint.setTextSize(item.fontSize);
                 textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), item.fontKey));
-                canvas.drawText(item.text, item.x, item.y, textPaint);
+                if (Math.abs(item.rotationAngle) > 0.5f) {
+                    canvas.save();
+                    canvas.rotate(item.rotationAngle, item.x, item.y);
+                    canvas.drawText(item.text, item.x, item.y, textPaint);
+                    canvas.restore();
+                } else {
+                    canvas.drawText(item.text, item.x, item.y, textPaint);
+                }
             }
             for (Stroke stroke : currentPage.strokes) {
                 drawStroke(canvas, stroke);

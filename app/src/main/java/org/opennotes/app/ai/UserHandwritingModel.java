@@ -202,10 +202,13 @@ public class UserHandwritingModel {
 
     private LearnedPrototype extractPrototype(String intended, String recognized, List<Stroke> strokes) {
         try {
+            InkNormalizer.NormalizedInk norm = InkNormalizer.normalizeInk(strokes);
+            List<Stroke> effectiveStrokes = (norm != null && norm.strokes != null && !norm.strokes.isEmpty())
+                    ? norm.strokes : strokes;
             float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
             float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
             List<DrawingPoint> allPoints = new ArrayList<>();
-            for (Stroke s : strokes) {
+            for (Stroke s : effectiveStrokes) {
                 if (s == null) continue;
                 List<DrawingPoint> pts = s.getRecognitionPoints();
                 if (pts == null || pts.isEmpty()) pts = s.points;
