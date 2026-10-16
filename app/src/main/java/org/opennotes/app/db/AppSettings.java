@@ -234,4 +234,12 @@ public class AppSettings {
     public void setAcceptedHandwritingModelDownload(String languageTag, boolean accepted) {
         prefs.edit().putBoolean("pref_model_download_consent_" + languageTag, accepted).apply();
     }
+
+    public boolean hasShownHandwritingModelSetup() {
+        return prefs.getBoolean("pref_handwriting_model_setup_shown", false);
+    }
+
+    public void setShownHandwritingModelSetup() {
+        prefs.edit().putBoolean("pref_handwriting_model_setup_shown", true).apply();
+    }
 }

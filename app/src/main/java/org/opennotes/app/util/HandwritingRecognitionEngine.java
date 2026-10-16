@@ -73,7 +73,75 @@ public final class HandwritingRecognitionEngine {
         void onFailure(Exception error);
     }
 
+    public interface ModelDownloadCallback {
+        void onComplete(Exception error);
+    }
+
     private HandwritingRecognitionEngine() { }
+
+    /** Pre-download a language model from an explicit setup flow before recognition is used. */
+    public static void downloadLanguageModel(Context context, String preferredLanguage,
+                                            ModelDownloadCallback callback) {
+        if (context == null || callback == null) return;
+        WORKER.execute(() -> {
+            try {
+                String tag = languageTag(preferredLanguage);
+                DigitalInkRecognitionModelIdentifier identifier =
+                        DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+                if (identifier == null) {
+                    postModelDownloadResult(callback, new IllegalArgumentException(
+                            "Handwriting recognition is not available for " + tag));
+                    return;
+                }
+                DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(identifier).build();
+                RemoteModelManager manager = RemoteModelManager.getInstance();
+                manager.isModelDownloaded(model)
+                        .addOnSuccessListener(isDownloaded -> {
+                            if (isDownloaded) postModelDownloadResult(callback, null);
+                            else downloadModelForSetup(manager, model, tag, callback);
+                        })
+                        .addOnFailureListener(error -> postModelDownloadResult(callback, error));
+            } catch (Exception error) {
+                postModelDownloadResult(callback, error);
+            }
+        });
+    }
+
+    private static void downloadModelForSetup(RemoteModelManager manager,
+                                              DigitalInkRecognitionModel model,
+                                              String tag, ModelDownloadCallback callback) {
+        try {
+            final Task<Void> task;
+            synchronized (MODEL_DOWNLOADS) {
+                Task<Void> existing = MODEL_DOWNLOADS.get(tag);
+                if (existing != null) task = existing;
+                else {
+                    task = manager.download(model, new DownloadConditions.Builder().build());
+                    MODEL_DOWNLOADS.put(tag, task);
+                }
+            }
+            task.addOnSuccessListener(ignored -> manager.isModelDownloaded(model)
+                    .addOnSuccessListener(isDownloaded -> {
+                        removeCompletedDownload(tag, task);
+                        postModelDownloadResult(callback, isDownloaded ? null : new IllegalStateException(
+                                "The " + languageName(tag) + " handwriting model download finished, but the model is not installed."));
+                    })
+                    .addOnFailureListener(error -> {
+                        removeCompletedDownload(tag, task);
+                        postModelDownloadResult(callback, error);
+                    }))
+                    .addOnFailureListener(error -> {
+                        removeCompletedDownload(tag, task);
+                        postModelDownloadResult(callback, error);
+                    });
+        } catch (Exception error) {
+            postModelDownloadResult(callback, error);
+        }
+    }
+
+    private static void postModelDownloadResult(ModelDownloadCallback callback, Exception error) {
+        MAIN.post(() -> callback.onComplete(error));
+    }
 
     /**
      * Recognize completed strokes asynchronously. If the language model is not installed,
@@ -130,7 +198,9 @@ public final class HandwritingRecognitionEngine {
                                                                String preContext,
                                                                Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
-        if (!hasMeaningfulFilteredPath(strokes)) {
+        boolean hasFilteredPath = hasMeaningfulFilteredPath(strokes);
+        float writingAngle = estimateWritingAngleDegrees(strokes);
+        if (!hasFilteredPath && Math.abs(writingAngle) < 8f) {
             recognizeStrokes(context, strokes, preferredLanguage, preContext, callback);
             return;
         }
@@ -138,33 +208,53 @@ public final class HandwritingRecognitionEngine {
         recognizeStrokes(context, strokes, preferredLanguage, preContext, new Callback() {
             @Override
             public void onSuccess(RecognitionResult rawResult) {
-                List<Stroke> filteredStrokes = filteredStrokeCopies(strokes);
-                if (filteredStrokes.isEmpty()) {
-                    callback.onSuccess(rawResult);
-                    return;
-                }
-                recognizeStrokes(context, filteredStrokes, preferredLanguage, preContext,
-                        new Callback() {
-                            @Override
-                            public void onSuccess(RecognitionResult filteredResult) {
-                                callback.onSuccess(mergeCandidates(rawResult, filteredResult));
-                            }
-
-                            @Override
-                            public void onFailure(Exception error) {
-                                // The raw recognition is already usable. A failed
-                                // optional pass must not turn success into an error.
-                                Log.w(TAG, "Filtered handwriting suggestion pass failed", error);
-                                callback.onSuccess(rawResult);
-                            }
-                        });
+                recognizeAlternativePath(context, strokes, preferredLanguage, preContext,
+                        callback, rawResult, hasFilteredPath, writingAngle);
             }
 
             @Override
             public void onFailure(Exception error) {
-                callback.onFailure(error);
+                // A slanted line can be a valid digital-ink shape but fail the
+                // unmodified pass. Try deskewing only for this specific no-text
+                // result; download, permission, and network errors stay visible.
+                if (isEmptyRecognitionFailure(error)) {
+                    recognizeAlternativePath(context, strokes, preferredLanguage, preContext,
+                            callback, null, hasFilteredPath, writingAngle);
+                } else callback.onFailure(error);
             }
         });
+    }
+
+    private static void recognizeAlternativePath(Context context, List<Stroke> strokes,
+                                                 String language, String preContext,
+                                                 Callback callback, RecognitionResult primary,
+                                                 boolean useFilteredPath, float writingAngle) {
+        List<Stroke> alternative = alternativeStrokeCopies(strokes, useFilteredPath, writingAngle);
+        if (alternative.isEmpty()) {
+            if (primary != null) callback.onSuccess(primary);
+            else callback.onFailure(new IllegalArgumentException(
+                    "No handwriting text was recognized. Try a clearer line or confirm the selected language."));
+            return;
+        }
+        recognizeStrokes(context, alternative, language, preContext, new Callback() {
+            @Override
+            public void onSuccess(RecognitionResult alternateResult) {
+                callback.onSuccess(primary == null ? alternateResult
+                        : mergeCandidates(primary, alternateResult));
+            }
+
+            @Override
+            public void onFailure(Exception error) {
+                Log.w(TAG, "Alternate handwriting recognition pass failed", error);
+                if (primary != null) callback.onSuccess(primary);
+                else callback.onFailure(error);
+            }
+        });
+    }
+
+    private static boolean isEmptyRecognitionFailure(Exception error) {
+        return error instanceof IllegalArgumentException && error.getMessage() != null
+                && error.getMessage().contains("No handwriting text was recognized");
     }
 
     private static RecognitionResult mergeCandidates(RecognitionResult primary,
@@ -181,19 +271,74 @@ public final class HandwritingRecognitionEngine {
                 primary.fontSize, merged);
     }
 
-    private static List<Stroke> filteredStrokeCopies(List<Stroke> strokes) {
+    private static List<Stroke> alternativeStrokeCopies(List<Stroke> strokes,
+                                                        boolean useFilteredPath,
+                                                        float writingAngleDegrees) {
         List<Stroke> filtered = new ArrayList<>(strokes.size());
+        RectF bounds = boundsOf(strokes);
+        if (bounds == null) return filtered;
+        double radians = Math.toRadians(writingAngleDegrees);
+        float cosine = (float) Math.cos(radians);
+        float sine = (float) Math.sin(radians);
+        float centerX = bounds.centerX();
+        float centerY = bounds.centerY();
         for (Stroke source : strokes) {
-            if (source == null || source.points == null || source.points.isEmpty()) continue;
+            if (source == null) continue;
+            List<DrawingPoint> input = useFilteredPath ? source.points : source.getRecognitionPoints();
+            if (input == null || input.isEmpty()) continue;
             Stroke copy = new Stroke(source.color, source.width, source.tool);
-            for (DrawingPoint point : source.points) {
+            for (DrawingPoint point : input) {
                 if (point == null || !isFinite(point.x) || !isFinite(point.y)) continue;
-                copy.addPoint(point.x, point.y, point.pressure, point.timeMillis);
-                copy.addRecognitionPoint(point.x, point.y, point.pressure, point.timeMillis);
+                float translatedX = point.x - centerX;
+                float translatedY = point.y - centerY;
+                // Rotate the detected writing baseline to horizontal. The
+                // transformation affects only this suggestion pass, never ink.
+                float x = translatedX * cosine + translatedY * sine + centerX;
+                float y = -translatedX * sine + translatedY * cosine + centerY;
+                copy.addPoint(x, y, point.pressure, point.timeMillis);
+                copy.addRecognitionPoint(x, y, point.pressure, point.timeMillis);
             }
             if (!copy.getRecognitionPoints().isEmpty()) filtered.add(copy);
         }
         return filtered;
+    }
+
+    /** Estimate the text-line baseline direction from stroke centers for deskewing. */
+    private static float estimateWritingAngleDegrees(List<Stroke> strokes) {
+        List<float[]> centers = new ArrayList<>();
+        RectF allBounds = null;
+        for (Stroke stroke : strokes) {
+            RectF bounds = boundsOf(Collections.singletonList(stroke));
+            if (bounds == null) continue;
+            if (allBounds == null) allBounds = new RectF(bounds);
+            else allBounds.union(bounds);
+            centers.add(new float[]{bounds.centerX(), bounds.centerY()});
+        }
+        if (centers.size() < 3 || allBounds == null) return 0f;
+
+        double meanX = 0d;
+        double meanY = 0d;
+        for (float[] center : centers) {
+            meanX += center[0];
+            meanY += center[1];
+        }
+        meanX /= centers.size();
+        meanY /= centers.size();
+        double varianceX = 0d;
+        double varianceY = 0d;
+        double covariance = 0d;
+        for (float[] center : centers) {
+            double dx = center[0] - meanX;
+            double dy = center[1] - meanY;
+            varianceX += dx * dx;
+            varianceY += dy * dy;
+            covariance += dx * dy;
+        }
+        if (varianceX + varianceY < 1d) return 0f;
+        double angle = 0.5d * Math.atan2(2d * covariance, varianceX - varianceY);
+        float degrees = (float) Math.toDegrees(angle);
+        if (Math.abs(degrees) < 8f) return 0f;
+        return degrees;
     }
 
     private static boolean hasMeaningfulFilteredPath(List<Stroke> strokes) {
@@ -288,9 +433,18 @@ public final class HandwritingRecognitionEngine {
     }
 
     private static String languageName(String language) {
-        if ("ENGLISH".equalsIgnoreCase(language)) return "English";
-        if ("HINDI".equalsIgnoreCase(language)) return "Hindi";
+        if ("ENGLISH".equalsIgnoreCase(language) || "en-IN".equalsIgnoreCase(language)) return "English";
+        if ("HINDI".equalsIgnoreCase(language) || "hi".equalsIgnoreCase(language)) return "Hindi";
         return "Marathi";
+    }
+
+    public static boolean isModelDownloadCancellation(Throwable error) {
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof IllegalStateException && cause.getMessage() != null
+                    && (cause.getMessage().contains("Model download was cancelled")
+                    || cause.getMessage().contains("Model download was declined"))) return true;
+        }
+        return false;
     }
 
     private static void downloadThenRecognize(RemoteModelManager manager,

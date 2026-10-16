@@ -16,6 +16,7 @@ import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -123,6 +124,73 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             btnToggleViewMode.setImageResource(isGridView ? R.drawable.ic_view_grid : R.drawable.ic_view_list);
         });
 
+        recyclerView.post(this::offerHandwritingModelSetup);
+
+    }
+
+    private void offerHandwritingModelSetup() {
+        AppSettings settings = AppSettings.getInstance(this);
+        if (settings.hasShownHandwritingModelSetup() || isFinishing() || isDestroyed()) return;
+        settings.setShownHandwritingModelSetup();
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("Set up handwriting recognition")
+                .setMessage("Download the English and Marathi handwriting models now (about 40 MB total). They are stored on this device, work offline after setup, and your handwriting is not uploaded.")
+                .setNegativeButton("Later", null)
+                .setPositiveButton("Download models", (dialog, which) -> {
+                    settings.setAcceptedHandwritingModelDownload("en-IN", true);
+                    settings.setAcceptedHandwritingModelDownload("mr-IN", true);
+                    startHandwritingModelDownloads();
+                })
+                .show();
+    }
+
+    private void startHandwritingModelDownloads() {
+        LinearLayout content = new LinearLayout(this);
+        content.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(20f * getResources().getDisplayMetrics().density);
+        content.setPadding(pad, pad, pad, pad);
+        ProgressBar spinner = new ProgressBar(this);
+        spinner.setIndeterminate(true);
+        TextView status = new TextView(this);
+        status.setText("Preparing English model…");
+        status.setPadding(0, pad, 0, 0);
+        content.addView(spinner);
+        content.addView(status);
+        com.google.android.material.dialog.MaterialAlertDialogBuilder builder =
+                new MaterialAlertDialogBuilder(this)
+                        .setTitle("Downloading handwriting models")
+                        .setView(content)
+                        .setNegativeButton("Run in background", null);
+        androidx.appcompat.app.AlertDialog progressDialog = builder.create();
+        progressDialog.show();
+
+        Exception[] failures = new Exception[2];
+        org.opennotes.app.util.HandwritingRecognitionEngine.downloadLanguageModel(
+                getApplicationContext(), "ENGLISH", englishError -> {
+                    failures[0] = englishError;
+                    if (!isFinishing() && !isDestroyed()) {
+                        status.setText(englishError == null
+                                ? "English ready. Preparing Marathi model…"
+                                : "English model failed. Trying Marathi…");
+                    }
+                    org.opennotes.app.util.HandwritingRecognitionEngine.downloadLanguageModel(
+                            getApplicationContext(), "MARATHI", marathiError -> {
+                                failures[1] = marathiError;
+                                if (isFinishing() || isDestroyed()) return;
+                                progressDialog.dismiss();
+                                if (failures[0] == null && failures[1] == null) {
+                                    Toast.makeText(this, "English and Marathi recognition are ready offline", Toast.LENGTH_LONG).show();
+                                } else {
+                                    StringBuilder details = new StringBuilder();
+                                    if (failures[0] != null) details.append("English: ").append(failures[0]);
+                                    if (failures[1] != null) {
+                                        if (details.length() > 0) details.append("\n\n");
+                                        details.append("Marathi: ").append(failures[1]);
+                                    }
+                                    ErrorDialog.show(this, "Handwriting model setup incomplete", details.toString());
+                                }
+                            });
+                });
     }
 
     @Override

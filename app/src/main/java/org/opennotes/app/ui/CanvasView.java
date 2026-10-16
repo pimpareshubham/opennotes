@@ -151,6 +151,8 @@ public class CanvasView extends View {
 
     // Drawing state
     private Stroke activeStroke;
+    private int activeInputPointerId = -1;
+    private boolean scaleDetectorSuppressedForStylus;
     private float lastTouchX, lastTouchY;
 
     // Pan / Scroll physics
@@ -161,6 +163,11 @@ public class CanvasView extends View {
     private float panInitialOffsetY = 0f;
     private float twoFingerStartX = 0f, twoFingerStartY = 0f;
     private float initialPanOffsetX = 0f, initialPanOffsetY = 0f;
+    private float twoFingerStartX0, twoFingerStartY0, twoFingerStartX1, twoFingerStartY1;
+    private float twoFingerStartSpan;
+    private boolean manualTwoFingerPanConfirmed;
+    private float scaleGestureStartSpan;
+    private boolean scaleGestureConfirmed;
 
     // Shape drawing state
     private boolean isDrawingShape = false;
@@ -233,12 +240,16 @@ public class CanvasView extends View {
         final int sourceIndex;
         final RectF bounds;
         final float centerY;
+        final float lineCoordinate;
 
-        StrokeLineSample(Stroke stroke, int sourceIndex, RectF bounds) {
+        StrokeLineSample(Stroke stroke, int sourceIndex, RectF bounds,
+                         float baselineAngleRadians) {
             this.stroke = stroke;
             this.sourceIndex = sourceIndex;
             this.bounds = bounds;
             this.centerY = bounds.centerY();
+            this.lineCoordinate = -((float) Math.sin(baselineAngleRadians)) * bounds.centerX()
+                    + ((float) Math.cos(baselineAngleRadians)) * centerY;
         }
     }
 
@@ -253,7 +264,7 @@ public class CanvasView extends View {
             if (samples.isEmpty()) bounds.set(sample.bounds);
             else bounds.union(sample.bounds);
             samples.add(sample);
-            centerSum += sample.centerY;
+            centerSum += sample.lineCoordinate;
             centerCount++;
         }
 
@@ -341,8 +352,22 @@ public class CanvasView extends View {
 
         scaleDetector = new ScaleGestureDetector(getContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
+            public boolean onScaleBegin(ScaleGestureDetector detector) {
+                scaleGestureStartSpan = detector.getCurrentSpan();
+                scaleGestureConfirmed = false;
+                return true;
+            }
+
+            @Override
             public boolean onScale(ScaleGestureDetector detector) {
                 if (isViewportLocked) return true;
+                if (!scaleGestureConfirmed) {
+                    float intentionalSpanChange = dp(10f);
+                    if (Math.abs(detector.getCurrentSpan() - scaleGestureStartSpan)
+                            < intentionalSpanChange) return true;
+                    scaleGestureConfirmed = true;
+                    manualTwoFingerPanConfirmed = false;
+                }
                 float factor = detector.getScaleFactor();
                 float targetScale = scaleFactor * factor;
                 // Clamp between 20% and 1600% (matching StarNote tablet app in vdo.mp4)
@@ -353,6 +378,11 @@ public class CanvasView extends View {
                 notifyZoomChange();
                 notifyLassoSelection();
                 return true;
+            }
+
+            @Override
+            public void onScaleEnd(ScaleGestureDetector detector) {
+                scaleGestureConfirmed = false;
             }
         });
 
@@ -899,8 +929,15 @@ public class CanvasView extends View {
                     @Override
                     public void onFailure(Exception error) {
                         // Keep every source stroke intact if any line fails.
-                        org.opennotes.app.util.ErrorDialog.show(getContext(),
-                                "Could not convert handwriting (your ink was kept)", error);
+                        if (org.opennotes.app.util.HandwritingRecognitionEngine
+                                .isModelDownloadCancellation(error)) {
+                            android.widget.Toast.makeText(getContext(),
+                                    "Recognition model not downloaded. Your ink is safe; download the language model to convert it.",
+                                    android.widget.Toast.LENGTH_LONG).show();
+                        } else {
+                            org.opennotes.app.util.ErrorDialog.show(getContext(),
+                                    "Could not convert handwriting (your ink was kept)", error);
+                        }
                     }
                 };
         String preContext = recognitionPreContext(requestedPage, line.strokes, recognized);
@@ -921,13 +958,32 @@ public class CanvasView extends View {
             if (stroke == null) continue;
             RectF bounds = recognitionBounds(stroke);
             if (bounds == null || bounds.width() < 0.5f && bounds.height() < 0.5f) continue;
-            samples.add(new StrokeLineSample(stroke, i, bounds));
+            samples.add(new StrokeLineSample(stroke, i, bounds, 0f));
             heights.add(Math.max(1f, bounds.height()));
         }
         if (samples.isEmpty()) return new ArrayList<>();
 
         Collections.sort(heights);
         int heightPercentile = Math.min(heights.size() - 1,
+                (int) Math.ceil((heights.size() - 1) * 0.8f));
+        float initialTypicalStrokeHeight = heights.get(heightPercentile);
+        float baselineAngle = estimateWritingBaselineAngle(samples, initialTypicalStrokeHeight);
+        if (Math.abs(baselineAngle) > 0.001f) {
+            for (int i = 0; i < samples.size(); i++) {
+                StrokeLineSample sample = samples.get(i);
+                samples.set(i, new StrokeLineSample(sample.stroke, sample.sourceIndex,
+                        sample.bounds, baselineAngle));
+            }
+        }
+        heights.clear();
+        float sinAngle = Math.abs((float) Math.sin(baselineAngle));
+        float cosAngle = Math.abs((float) Math.cos(baselineAngle));
+        for (StrokeLineSample sample : samples) {
+            heights.add(Math.max(1f, sample.bounds.width() * sinAngle
+                    + sample.bounds.height() * cosAngle));
+        }
+        Collections.sort(heights);
+        heightPercentile = Math.min(heights.size() - 1,
                 (int) Math.ceil((heights.size() - 1) * 0.8f));
         float typicalStrokeHeight = heights.get(heightPercentile);
         // Use an upper percentile so short Devanagari headline/matra strokes
@@ -936,14 +992,15 @@ public class CanvasView extends View {
         // extra tolerance keeps those marks with their line while still leaving
         // normally spaced notebook rows separate.
         float lineTolerance = Math.max(12f, typicalStrokeHeight * 1.05f);
-        Collections.sort(samples, (left, right) -> Float.compare(left.centerY, right.centerY));
+        Collections.sort(samples, (left, right) -> Float.compare(
+                left.lineCoordinate, right.lineCoordinate));
 
         List<StrokeLineGroup> groups = new ArrayList<>();
         for (StrokeLineSample sample : samples) {
             // Samples are already sorted top-to-bottom. A new row can only
             // match the last open cluster, avoiding a quadratic page scan.
             StrokeLineGroup current = groups.isEmpty() ? null : groups.get(groups.size() - 1);
-            if (current == null || Math.abs(sample.centerY - current.center()) > lineTolerance) {
+            if (current == null || Math.abs(sample.lineCoordinate - current.center()) > lineTolerance) {
                 current = new StrokeLineGroup();
                 groups.add(current);
             }
@@ -956,6 +1013,67 @@ public class CanvasView extends View {
             for (StrokeLineSample sample : group.samples) group.strokes.add(sample.stroke);
         }
         return groups;
+    }
+
+    /** Estimate repeated line slant from local windows so page height does not
+     * dominate the estimate when a page contains many separate writing rows. */
+    private static float estimateWritingBaselineAngle(List<StrokeLineSample> samples,
+                                                       float typicalStrokeHeight) {
+        if (samples.size() < 3) return 0f;
+        final int windowSize = Math.min(12, samples.size());
+        final int step = Math.max(1, windowSize / 2);
+        List<Float> angles = new ArrayList<>();
+        for (int start = 0; start + 2 < samples.size(); start += step) {
+            int end = Math.min(samples.size(), start + windowSize);
+            if (end - start < 3) break;
+            double meanX = 0d;
+            double meanY = 0d;
+            float minX = Float.MAX_VALUE;
+            float maxX = -Float.MAX_VALUE;
+            float minY = Float.MAX_VALUE;
+            float maxY = -Float.MAX_VALUE;
+            for (int i = start; i < end; i++) {
+                StrokeLineSample sample = samples.get(i);
+                float x = sample.bounds.centerX();
+                float y = sample.centerY;
+                meanX += x;
+                meanY += y;
+                minX = Math.min(minX, x);
+                maxX = Math.max(maxX, x);
+                minY = Math.min(minY, y);
+                maxY = Math.max(maxY, y);
+            }
+            float windowWidth = maxX - minX;
+            float windowHeight = maxY - minY;
+            if (windowWidth < typicalStrokeHeight * 1.5f
+                    && windowHeight > typicalStrokeHeight * 2.5f) {
+                angles.add(90f);
+                continue;
+            }
+            if (maxX - minX < Math.max(36f, typicalStrokeHeight * 2.5f)) continue;
+            meanX /= end - start;
+            meanY /= end - start;
+            double xx = 0d;
+            double yy = 0d;
+            double xy = 0d;
+            for (int i = start; i < end; i++) {
+                StrokeLineSample sample = samples.get(i);
+                double dx = sample.bounds.centerX() - meanX;
+                double dy = sample.centerY - meanY;
+                xx += dx * dx;
+                yy += dy * dy;
+                xy += dx * dy;
+            }
+            double angle = 0.5d * Math.atan2(2d * xy, xx - yy);
+            float degrees = (float) Math.toDegrees(angle);
+            if (degrees > 80f && windowWidth > windowHeight * 0.6f) degrees -= 90f;
+            else if (degrees < -80f && windowWidth > windowHeight * 0.6f) degrees += 90f;
+            if (Math.abs(degrees) <= 60f) angles.add(degrees);
+        }
+        if (angles.isEmpty()) return 0f;
+        Collections.sort(angles);
+        float median = angles.get(angles.size() / 2);
+        return Math.abs(median) < 7f ? 0f : median;
     }
 
     private static RectF recognitionBounds(Stroke stroke) {
@@ -2586,9 +2704,23 @@ public class CanvasView extends View {
             setInputFrameRatePreference(false);
         }
 
-        // Feed the complete stream so ScaleGestureDetector can always reset on
-        // ACTION_DOWN/CANCEL, including after an activity was backgrounded.
-        scaleDetector.onTouchEvent(event);
+        int stylusPointerIndex = findStylusPointerIndex(event);
+        boolean hasStylusPointer = stylusPointerIndex >= 0;
+        boolean mixedStylusTouch = hasStylusPointer && pointerCount > 1;
+        boolean canceledPointerUp = action == MotionEvent.ACTION_POINTER_UP
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0;
+
+        // Android can report a palm as a finger before canceling it. Never let
+        // a finger touching during a live stylus stroke start a pinch detector.
+        // Two-finger zoom remains available whenever the stylus is not touching.
+        if (mixedStylusTouch || canceledPointerUp) {
+            if (!scaleDetectorSuppressedForStylus) cancelScaleGestureDetector(event);
+            scaleDetectorSuppressedForStylus = true;
+        } else {
+            scaleDetectorSuppressedForStylus = false;
+            scaleDetector.onTouchEvent(event);
+        }
 
         if (pointerCount >= 2) {
             if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
@@ -2596,14 +2728,6 @@ public class CanvasView extends View {
             if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
         }
 
-        boolean hasStylusPointer = false;
-        for (int i = 0; i < pointerCount; i++) {
-            int toolType = event.getToolType(i);
-            if (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER) {
-                hasStylusPointer = true;
-                break;
-            }
-        }
         if (action == MotionEvent.ACTION_DOWN && hasStylusPointer) {
             // Avoid waiting for batched move events during handwriting. We still
             // consume historical samples if the platform supplies them.
@@ -2617,45 +2741,62 @@ public class CanvasView extends View {
             cancelInProgressGesture();
             return true;
         }
+        if (canceledPointerUp) {
+            int canceledPointerId = event.getPointerId(event.getActionIndex());
+            if (canceledPointerId == activeInputPointerId) cancelInProgressGesture();
+            return true;
+        }
 
-        // Stylus-Only Mode check: palm rejection
+        // Stylus pointer-up may arrive while a palm/finger pointer remains.
+        // Treat that as the end of ink, not the end of the whole multi-touch stream.
+        if (action == MotionEvent.ACTION_POINTER_UP && hasStylusPointer
+                && event.getActionIndex() == stylusPointerIndex) {
+            action = MotionEvent.ACTION_UP;
+            predictorStreamValid = false;
+            hasPredictedInkPoint = false;
+        }
+
+        // Stylus-only mode rejects all finger drawing, but allows a real
+        // two-finger navigation gesture when the stylus is not in contact.
         if (isStylusOnly && !hasStylusPointer) {
             if (pointerCount >= 2 && !isViewportLocked) {
                 if (activeStroke != null) {
-                    activeStroke = null;
-                    invalidate();
+                    cancelInProgressGesture();
                 }
                 handleTwoFingerPanZoom(event, action);
             }
             return true;
         }
 
-        // Never interpret a finger as ink when it joins a stylus contact.
-        // Keep the multi-touch stream available for navigation, then resume
-        // stylus input when only the pen remains on the screen.
-        if (isStylusOnly && pointerCount >= 2) {
+        // Fingers navigate when no stylus is touching. When pen and hand
+        // contacts overlap, keep the stylus stroke and ignore the palm points.
+        if (!hasStylusPointer && pointerCount >= 2 && !isViewportLocked) {
             if (activeStroke != null) {
-                activeStroke = null;
-                invalidate();
-            }
-            if (!isViewportLocked) handleTwoFingerPanZoom(event, action);
-            return true;
-        }
-
-        // Two-Finger Pinch-to-Zoom & Pan (Universal across all tools)
-        if (pointerCount >= 2 && !isViewportLocked) {
-            if (activeStroke != null) {
-                activeStroke = null;
-                invalidate();
+                cancelInProgressGesture();
             }
             handleTwoFingerPanZoom(event, action);
             return true;
         }
 
+        if (activeStroke != null && activeInputPointerId >= 0
+                && event.findPointerIndex(activeInputPointerId) < 0 && !hasStylusPointer) {
+            cancelInProgressGesture();
+            return true;
+        }
+
+        int activePointerIndex = activeInputPointerId < 0
+                ? -1 : event.findPointerIndex(activeInputPointerId);
+        int inputPointerIndex = hasStylusPointer ? stylusPointerIndex
+                : (activePointerIndex >= 0 ? activePointerIndex : 0);
+        if (action == MotionEvent.ACTION_UP && hasStylusPointer
+                && event.getActionMasked() == MotionEvent.ACTION_POINTER_UP) {
+            inputPointerIndex = event.getActionIndex();
+        }
+
         // Single-finger Hand Pan Tool
         if (currentTool == DrawingTool.HAND && !isViewportLocked) {
-            float touchX = event.getX();
-            float touchY = event.getY();
+            float touchX = event.getX(inputPointerIndex);
+            float touchY = event.getY(inputPointerIndex);
             switch (action) {
                 case MotionEvent.ACTION_DOWN:
                     twoFingerStartX = touchX;
@@ -2674,12 +2815,12 @@ public class CanvasView extends View {
         }
 
         // Map touch coordinates to natural unscaled canvas coordinates
-        float rawX = event.getX();
-        float rawY = event.getY();
+        float rawX = event.getX(inputPointerIndex);
+        float rawY = event.getY(inputPointerIndex);
         float canvasX = (rawX - panOffsetX) / scaleFactor;
         float canvasY = (rawY - panOffsetY) / scaleFactor + viewportOffsetY;
-        int primaryToolType = event.getToolType(0);
-        float pressure = normalizeInputPressure(event.getPressure(), primaryToolType);
+        int primaryToolType = event.getToolType(inputPointerIndex);
+        float pressure = normalizeInputPressure(event.getPressure(inputPointerIndex), primaryToolType);
 
         // 2b. Laser Pointer Tool (ephemeral glowing presentation trail)
         if (currentTool == DrawingTool.LASER) {
@@ -2692,8 +2833,8 @@ public class CanvasView extends View {
                 case MotionEvent.ACTION_MOVE:
                     int historySize = event.getHistorySize();
                     for (int i = 0; i < historySize; i++) {
-                        float histRawX = event.getHistoricalX(i);
-                        float histRawY = event.getHistoricalY(i);
+                        float histRawX = event.getHistoricalX(inputPointerIndex, i);
+                        float histRawY = event.getHistoricalY(inputPointerIndex, i);
                         float histX = (histRawX - panOffsetX) / scaleFactor;
                         float histY = (histRawY - panOffsetY) / scaleFactor + viewportOffsetY;
                         laserTrail.add(new LaserPoint(histX, histY,
@@ -2744,8 +2885,8 @@ public class CanvasView extends View {
                     } else if (isDrawingLasso) {
                         for (int i = 0; i < event.getHistorySize(); i++) {
                             appendLassoPoint(
-                                    (event.getHistoricalX(i) - panOffsetX) / scaleFactor,
-                                    (event.getHistoricalY(i) - panOffsetY) / scaleFactor + viewportOffsetY);
+                                    (event.getHistoricalX(inputPointerIndex, i) - panOffsetX) / scaleFactor,
+                                    (event.getHistoricalY(inputPointerIndex, i) - panOffsetY) / scaleFactor + viewportOffsetY);
                         }
                         appendLassoPoint(canvasX, canvasY);
                         postInvalidateOnAnimation();
@@ -2845,6 +2986,7 @@ public class CanvasView extends View {
                 smoothedPressure = pressure;
                 resetStrokeFilter(canvasX, canvasY, event.getEventTime());
                 activeStroke = new Stroke(currentColor, currentStrokeWidth, currentTool);
+                activeInputPointerId = event.getPointerId(inputPointerIndex);
                 activeStroke.addPoint(canvasX, canvasY, pressure, event.getEventTime());
                 activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
                 lastTouchX = canvasX;
@@ -2863,12 +3005,12 @@ public class CanvasView extends View {
                     float previousPredictedY = predictedInkY;
                     int historySize = event.getHistorySize();
                     for (int i = 0; i < historySize; i++) {
-                        float histRawX = event.getHistoricalX(i);
-                        float histRawY = event.getHistoricalY(i);
+                        float histRawX = event.getHistoricalX(inputPointerIndex, i);
+                        float histRawY = event.getHistoricalY(inputPointerIndex, i);
                         float histX = (histRawX - panOffsetX) / scaleFactor;
                         float histY = (histRawY - panOffsetY) / scaleFactor + viewportOffsetY;
                         float historicalPressure = normalizeInputPressure(
-                                event.getHistoricalPressure(i), primaryToolType);
+                                event.getHistoricalPressure(inputPointerIndex, i), primaryToolType);
                         activeStroke.addRecognitionPoint(histX, histY, historicalPressure,
                                 event.getHistoricalEventTime(i));
 
@@ -2893,7 +3035,7 @@ public class CanvasView extends View {
                     lastTouchY = smoothedY;
 
                     ensureContentHeight(canvasY);
-                    updatePredictedInk(event, primaryToolType);
+                    updatePredictedInk(event, primaryToolType, inputPointerIndex);
                     if (hadPredictedPoint) {
                         dirtyMinX = Math.min(dirtyMinX, previousPredictedX);
                         dirtyMinY = Math.min(dirtyMinY, previousPredictedY);
@@ -2970,12 +3112,16 @@ public class CanvasView extends View {
                         }
                     }
                     activeStroke = null;
+                    activeInputPointerId = -1;
                     hasPredictedInkPoint = false;
                     invalidate();
                 }
                 return true;
         }
 
+        if (action == MotionEvent.ACTION_POINTER_DOWN || action == MotionEvent.ACTION_POINTER_UP) {
+            return true;
+        }
         return super.onTouchEvent(event);
     }
 
@@ -3050,23 +3196,25 @@ public class CanvasView extends View {
         }
     }
 
-    private void updatePredictedInk(MotionEvent event, int toolType) {
+    private void updatePredictedInk(MotionEvent event, int toolType, int pointerIndex) {
         hasPredictedInkPoint = false;
         if (toolType != MotionEvent.TOOL_TYPE_STYLUS || !predictorStreamValid
                 || motionEventPredictor == null) return;
         MotionEvent prediction = null;
         try {
             prediction = motionEventPredictor.predict();
-            if (prediction == null || prediction.getPointerCount() == 0
-                    || prediction.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return;
+            if (prediction == null || pointerIndex < 0 || pointerIndex >= event.getPointerCount()
+                    || pointerIndex >= prediction.getPointerCount()
+                    || prediction.getToolType(pointerIndex) != MotionEvent.TOOL_TYPE_STYLUS
+                    || prediction.getPointerId(pointerIndex) != event.getPointerId(pointerIndex)) return;
             long horizon = prediction.getEventTime() - event.getEventTime();
-            float dx = prediction.getX() - event.getX();
-            float dy = prediction.getY() - event.getY();
+            float dx = prediction.getX(pointerIndex) - event.getX(pointerIndex);
+            float dy = prediction.getY(pointerIndex) - event.getY(pointerIndex);
             float maxDistance = 40f * getResources().getDisplayMetrics().density;
             if (horizon <= 0L || horizon > 40L || (dx * dx + dy * dy) > maxDistance * maxDistance) return;
-            predictedInkX = (prediction.getX() - panOffsetX) / scaleFactor;
-            predictedInkY = (prediction.getY() - panOffsetY) / scaleFactor + viewportOffsetY;
-            predictedInkPressure = normalizeInputPressure(prediction.getPressure(), toolType);
+            predictedInkX = (prediction.getX(pointerIndex) - panOffsetX) / scaleFactor;
+            predictedInkY = (prediction.getY(pointerIndex) - panOffsetY) / scaleFactor + viewportOffsetY;
+            predictedInkPressure = normalizeInputPressure(prediction.getPressure(pointerIndex), toolType);
             hasPredictedInkPoint = true;
         } catch (RuntimeException ignored) {
             hasPredictedInkPoint = false;
@@ -3107,6 +3255,7 @@ public class CanvasView extends View {
     private void cancelInProgressGesture() {
         boolean movedSelection = isMovingSelection;
         activeStroke = null;
+        activeInputPointerId = -1;
         isDrawingShape = false;
         isDrawingLasso = false;
         isMovingSelection = false;
@@ -3160,23 +3309,74 @@ public class CanvasView extends View {
         switch (action) {
             case MotionEvent.ACTION_POINTER_DOWN:
                 if (event.getPointerCount() >= 2) {
-                    twoFingerStartX = (event.getX(0) + event.getX(1)) / 2.0f;
-                    twoFingerStartY = (event.getY(0) + event.getY(1)) / 2.0f;
+                    twoFingerStartX0 = event.getX(0);
+                    twoFingerStartY0 = event.getY(0);
+                    twoFingerStartX1 = event.getX(1);
+                    twoFingerStartY1 = event.getY(1);
+                    twoFingerStartX = (twoFingerStartX0 + twoFingerStartX1) / 2f;
+                    twoFingerStartY = (twoFingerStartY0 + twoFingerStartY1) / 2f;
+                    twoFingerStartSpan = (float) Math.hypot(
+                            twoFingerStartX1 - twoFingerStartX0,
+                            twoFingerStartY1 - twoFingerStartY0);
+                    manualTwoFingerPanConfirmed = false;
                     initialPanOffsetX = panOffsetX;
                     initialPanOffsetY = panOffsetY;
                 }
                 break;
             case MotionEvent.ACTION_MOVE:
-                if (event.getPointerCount() >= 2 && !scaleDetector.isInProgress()) {
-                    float currentCenterX = (event.getX(0) + event.getX(1)) / 2.0f;
-                    float currentCenterY = (event.getY(0) + event.getY(1)) / 2.0f;
+                if (event.getPointerCount() >= 2 && !scaleGestureConfirmed) {
+                    float currentX0 = event.getX(0);
+                    float currentY0 = event.getY(0);
+                    float currentX1 = event.getX(1);
+                    float currentY1 = event.getY(1);
+                    float moveX0 = currentX0 - twoFingerStartX0;
+                    float moveY0 = currentY0 - twoFingerStartY0;
+                    float moveX1 = currentX1 - twoFingerStartX1;
+                    float moveY1 = currentY1 - twoFingerStartY1;
+                    float moveLength0 = (float) Math.hypot(moveX0, moveY0);
+                    float moveLength1 = (float) Math.hypot(moveX1, moveY1);
+                    float currentSpan = (float) Math.hypot(currentX1 - currentX0,
+                            currentY1 - currentY0);
+                    float gestureSlop = dp(8f);
+                    if (!manualTwoFingerPanConfirmed) {
+                        float directionAgreement = moveLength0 < 0.001f || moveLength1 < 0.001f
+                                ? -1f : (moveX0 * moveX1 + moveY0 * moveY1)
+                                / (moveLength0 * moveLength1);
+                        boolean stableSpan = Math.abs(currentSpan - twoFingerStartSpan)
+                                <= gestureSlop;
+                        manualTwoFingerPanConfirmed = stableSpan
+                                && moveLength0 >= gestureSlop && moveLength1 >= gestureSlop
+                                && directionAgreement >= 0.65f;
+                    }
+                    if (!manualTwoFingerPanConfirmed) break;
+                    float currentCenterX = (currentX0 + currentX1) / 2f;
+                    float currentCenterY = (currentY0 + currentY1) / 2f;
                     panOffsetX = initialPanOffsetX + (currentCenterX - twoFingerStartX);
                     panOffsetY = initialPanOffsetY + (currentCenterY - twoFingerStartY);
                     invalidate();
                     notifyLassoSelection();
                 }
                 break;
+            case MotionEvent.ACTION_POINTER_UP:
+                manualTwoFingerPanConfirmed = false;
+                break;
         }
+    }
+
+    private static int findStylusPointerIndex(MotionEvent event) {
+        for (int i = 0; i < event.getPointerCount(); i++) {
+            int toolType = event.getToolType(i);
+            if (toolType == MotionEvent.TOOL_TYPE_STYLUS
+                    || toolType == MotionEvent.TOOL_TYPE_ERASER) return i;
+        }
+        return -1;
+    }
+
+    private void cancelScaleGestureDetector(MotionEvent source) {
+        MotionEvent cancel = MotionEvent.obtain(source);
+        cancel.setAction(MotionEvent.ACTION_CANCEL);
+        scaleDetector.onTouchEvent(cancel);
+        cancel.recycle();
     }
 
     private void processLassoSelection() {
