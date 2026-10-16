@@ -895,46 +895,16 @@ public class CanvasView extends View {
         final Page requestedPage = currentPage;
         final int textColor = currentColor;
         RECOGNITION_PREPROCESSOR.execute(() -> {
-            // Step 1: Detect shapes & arrows and separate them from handwriting strokes
-            org.opennotes.app.ai.HandwrittenShapeDetector.DetectionResult shapeRes =
-                    org.opennotes.app.ai.HandwrittenShapeDetector.detectAndSeparateShapes(requestedStrokes);
-
+            // Segment handwriting strokes into natural lines (invariant to slope, slant, or angle)
+            List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines =
+                    org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(requestedStrokes);
             post(() -> {
                 if (currentPage != requestedPage) return;
-                // If any arrows or shapes were detected, convert them to crisp vector shapes
-                if (shapeRes.hasShapes()) {
-                    List<Stroke> shapeStrokes = new ArrayList<>(requestedStrokes);
-                    shapeStrokes.removeAll(shapeRes.remainingHandwritingStrokes);
-                    currentPage.strokes.removeAll(shapeStrokes);
-                    currentPage.shapes.addAll(shapeRes.shapes);
-                    ActionRecord rec = new ActionRecord();
-                    rec.type = ActionRecord.Type.ADD_SHAPE;
-                    if (!shapeRes.shapes.isEmpty()) rec.shape = shapeRes.shapes.get(0);
-                    undoStack.push(rec);
-                    redoStack.clear();
-                    invalidate();
-                    notifyChange();
-                }
-
-                // If no remaining handwriting strokes, we're done!
-                if (shapeRes.remainingHandwritingStrokes.isEmpty()) {
+                if (lines.isEmpty()) {
                     return;
                 }
-
-                // Step 2: Segment remaining handwriting strokes into natural lines
-                // (invariant to slope, slant, or writing angle!)
-                RECOGNITION_PREPROCESSOR.execute(() -> {
-                    List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines =
-                            org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(shapeRes.remainingHandwritingStrokes);
-                    post(() -> {
-                        if (currentPage != requestedPage) return;
-                        if (lines.isEmpty()) {
-                            return;
-                        }
-                        recognizeStrokeLine(requestedPage, lines, 0, new ArrayList<>(),
-                                textColor, letUserChooseCandidate);
-                    });
-                });
+                recognizeStrokeLine(requestedPage, lines, 0, new ArrayList<>(),
+                        textColor, letUserChooseCandidate);
             });
         });
     }
