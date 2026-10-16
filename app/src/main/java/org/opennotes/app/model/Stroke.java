@@ -27,12 +27,18 @@ public class Stroke {
     private transient android.graphics.RectF cachedBounds;
     private transient boolean pathDirty = true;
     private transient boolean boundsDirty = true;
+    private transient android.graphics.Path cachedPressurePath;
+    private transient boolean pressurePathDirty = true;
+    private transient float pressurePathSensitivity = Float.NaN;
+    private transient float pressurePathCurrentWidth;
 
     public void markDirty() {
         pathDirty = true;
         boundsDirty = true;
         cachedPath = null;
         cachedBounds = null;
+        pressurePathDirty = true;
+        cachedPressurePath = null;
     }
 
     public android.graphics.RectF getBounds() {
@@ -47,6 +53,77 @@ public class Stroke {
             computePath();
         }
         return cachedPath;
+    }
+
+    /** Cached filled outline for pressure-sensitive fountain and brush strokes. */
+    public android.graphics.Path getPressurePath(float sensitivity) {
+        if (cachedPressurePath == null || pressurePathDirty
+                || Float.compare(pressurePathSensitivity, sensitivity) != 0) {
+            buildPressurePath(sensitivity);
+        }
+        return cachedPressurePath;
+    }
+
+    private void buildPressurePath(float sensitivity) {
+        android.graphics.Path path = new android.graphics.Path();
+        path.setFillType(android.graphics.Path.FillType.WINDING);
+        pressurePathSensitivity = sensitivity;
+        if (points == null || points.isEmpty()) {
+            cachedPressurePath = path;
+            pressurePathCurrentWidth = 0f;
+            pressurePathDirty = false;
+            return;
+        }
+
+        DrawingPoint first = points.get(0);
+        pressurePathCurrentWidth = getPressureWidth(first.pressure, sensitivity);
+        addPressureCircle(path, first.x, first.y, pressurePathCurrentWidth * 0.5f);
+        for (int i = 1; i < points.size(); i++) {
+            DrawingPoint previous = points.get(i - 1);
+            DrawingPoint current = points.get(i);
+            float targetWidth = getPressureWidth(current.pressure, sensitivity);
+            float previousWidth = pressurePathCurrentWidth;
+            pressurePathCurrentWidth = pressurePathCurrentWidth * 0.65f + targetWidth * 0.35f;
+            appendPressureSegment(path, previous, current,
+                    previousWidth, pressurePathCurrentWidth);
+        }
+        cachedPressurePath = path;
+        pressurePathDirty = false;
+    }
+
+    private float getPressureWidth(float pressure, float sensitivity) {
+        float safePressure = pressure <= 0.05f ? 0.5f : pressure;
+        if (tool == DrawingTool.BRUSH) {
+            return width * (0.5f + (float) Math.pow(safePressure, 0.8)
+                    * (1.0f + sensitivity * 0.7f));
+        }
+        return width * (0.6f + (float) Math.pow(safePressure, 0.75)
+                * (0.7f + sensitivity * 0.5f));
+    }
+
+    private static void appendPressureSegment(android.graphics.Path path,
+                                              DrawingPoint from, DrawingPoint to,
+                                              float fromWidth, float toWidth) {
+        float dx = to.x - from.x;
+        float dy = to.y - from.y;
+        float distance = (float) Math.hypot(dx, dy);
+        float fromRadius = Math.max(0.5f, fromWidth * 0.5f);
+        float toRadius = Math.max(0.5f, toWidth * 0.5f);
+        addPressureCircle(path, from.x, from.y, fromRadius);
+        addPressureCircle(path, to.x, to.y, toRadius);
+        if (distance < 0.001f) return;
+
+        float normalX = -dy / distance;
+        float normalY = dx / distance;
+        path.moveTo(from.x + normalX * fromRadius, from.y + normalY * fromRadius);
+        path.lineTo(to.x + normalX * toRadius, to.y + normalY * toRadius);
+        path.lineTo(to.x - normalX * toRadius, to.y - normalY * toRadius);
+        path.lineTo(from.x - normalX * fromRadius, from.y - normalY * fromRadius);
+        path.close();
+    }
+
+    private static void addPressureCircle(android.graphics.Path path, float x, float y, float radius) {
+        path.addCircle(x, y, radius, android.graphics.Path.Direction.CW);
     }
 
     private synchronized void computeBounds() {
@@ -109,6 +186,8 @@ public class Stroke {
         DrawingPoint point = new DrawingPoint(x, y, pressure, timeMillis);
         boolean canExtendPath = cachedPath != null && !pathDirty && previousCount >= 2;
         boolean canExtendBounds = cachedBounds != null && !boundsDirty;
+        boolean canExtendPressurePath = cachedPressurePath != null && !pressurePathDirty
+                && previousCount >= 1;
         points.add(point);
 
         // The current path ends at the previous sample. Append just the new
@@ -122,6 +201,17 @@ public class Stroke {
         } else {
             cachedPath = null;
             pathDirty = true;
+        }
+
+        if (canExtendPressurePath) {
+            float targetWidth = getPressureWidth(point.pressure, pressurePathSensitivity);
+            float previousWidth = pressurePathCurrentWidth;
+            pressurePathCurrentWidth = pressurePathCurrentWidth * 0.65f + targetWidth * 0.35f;
+            appendPressureSegment(cachedPressurePath, previous, point,
+                    previousWidth, pressurePathCurrentWidth);
+        } else {
+            cachedPressurePath = null;
+            pressurePathDirty = true;
         }
 
         float pad = Math.max(width * 2f, 15f);

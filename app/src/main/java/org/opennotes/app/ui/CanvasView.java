@@ -1328,105 +1328,20 @@ public class CanvasView extends View {
 
     private void drawFountainStroke(Canvas canvas, Stroke stroke) {
         if (stroke.points.isEmpty()) return;
-        if (stroke.points.size() == 1) {
-            DrawingPoint p = stroke.points.get(0);
-            fountainPaint.setColor(stroke.color);
-            fountainPaint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(p.x, p.y, stroke.width * 0.5f, fountainPaint);
-            fountainPaint.setStyle(Paint.Style.STROKE);
-            return;
-        }
-
         fountainPaint.setColor(stroke.color);
+        fountainPaint.setAlpha(255);
+        fountainPaint.setStyle(Paint.Style.FILL);
+        canvas.drawPath(stroke.getPressurePath(pressureSensitivity), fountainPaint);
         fountainPaint.setStyle(Paint.Style.STROKE);
-
-        // Smooth width filter initialized with first point's pressure
-        float basePressure = stroke.points.get(0).pressure;
-        if (basePressure <= 0.05f) basePressure = 0.5f;
-        float currentWidth = stroke.width * (0.6f + (float) Math.pow(basePressure, 0.75) * (0.7f + pressureSensitivity * 0.5f));
-
-        DrawingPoint p0 = stroke.points.get(0);
-        float lastMidX = p0.x;
-        float lastMidY = p0.y;
-
-        for (int i = 1; i < stroke.points.size(); i++) {
-            DrawingPoint pPrev = stroke.points.get(i - 1);
-            DrawingPoint pCurr = stroke.points.get(i);
-
-            float midX = (pPrev.x + pCurr.x) / 2.0f;
-            float midY = (pPrev.y + pCurr.y) / 2.0f;
-
-            float p = pCurr.pressure;
-            if (p <= 0.05f) p = 0.5f;
-            float targetWidth = stroke.width * (0.6f + (float) Math.pow(p, 0.75) * (0.7f + pressureSensitivity * 0.5f));
-            // Low-pass width smoothing eliminates sharp hooks / shoe-like bulges
-            currentWidth = currentWidth * 0.65f + targetWidth * 0.35f;
-            fountainPaint.setStrokeWidth(currentWidth);
-
-            reusableSegPath.reset();
-            reusableSegPath.moveTo(lastMidX, lastMidY);
-            reusableSegPath.quadTo(pPrev.x, pPrev.y, midX, midY);
-            canvas.drawPath(reusableSegPath, fountainPaint);
-
-            lastMidX = midX;
-            lastMidY = midY;
-        }
-
-        DrawingPoint lastPt = stroke.points.get(stroke.points.size() - 1);
-        reusableSegPath.reset();
-        reusableSegPath.moveTo(lastMidX, lastMidY);
-        reusableSegPath.lineTo(lastPt.x, lastPt.y);
-        canvas.drawPath(reusableSegPath, fountainPaint);
     }
 
     private void drawBrushStroke(Canvas canvas, Stroke stroke) {
         if (stroke.points.isEmpty()) return;
         brushPaint.setColor(stroke.color);
         brushPaint.setAlpha(220);
-
-        if (stroke.points.size() == 1) {
-            DrawingPoint p = stroke.points.get(0);
-            brushPaint.setStyle(Paint.Style.FILL);
-            canvas.drawCircle(p.x, p.y, stroke.width * 0.6f, brushPaint);
-            brushPaint.setStyle(Paint.Style.STROKE);
-            return;
-        }
-
-        float baseP = stroke.points.get(0).pressure;
-        if (baseP <= 0.05f) baseP = 0.5f;
-        float currentWidth = stroke.width * (0.5f + (float) Math.pow(baseP, 0.8) * (1.0f + pressureSensitivity * 0.7f));
-
-        DrawingPoint p0 = stroke.points.get(0);
-        float lastMidX = p0.x;
-        float lastMidY = p0.y;
-
-        for (int i = 1; i < stroke.points.size(); i++) {
-            DrawingPoint pPrev = stroke.points.get(i - 1);
-            DrawingPoint pCurr = stroke.points.get(i);
-
-            float midX = (pPrev.x + pCurr.x) / 2.0f;
-            float midY = (pPrev.y + pCurr.y) / 2.0f;
-
-            float p = pCurr.pressure;
-            if (p <= 0.05f) p = 0.5f;
-            float targetWidth = stroke.width * (0.5f + (float) Math.pow(p, 0.8) * (1.0f + pressureSensitivity * 0.7f));
-            currentWidth = currentWidth * 0.65f + targetWidth * 0.35f;
-            brushPaint.setStrokeWidth(currentWidth);
-
-            reusableSegPath.reset();
-            reusableSegPath.moveTo(lastMidX, lastMidY);
-            reusableSegPath.quadTo(pPrev.x, pPrev.y, midX, midY);
-            canvas.drawPath(reusableSegPath, brushPaint);
-
-            lastMidX = midX;
-            lastMidY = midY;
-        }
-
-        DrawingPoint lastPt = stroke.points.get(stroke.points.size() - 1);
-        reusableSegPath.reset();
-        reusableSegPath.moveTo(lastMidX, lastMidY);
-        reusableSegPath.lineTo(lastPt.x, lastPt.y);
-        canvas.drawPath(reusableSegPath, brushPaint);
+        brushPaint.setStyle(Paint.Style.FILL);
+        canvas.drawPath(stroke.getPressurePath(pressureSensitivity), brushPaint);
+        brushPaint.setStyle(Paint.Style.STROKE);
     }
 
     private void drawShape(Canvas canvas, ShapeItem.Type type, float x1, float y1, float x2, float y2, int color, float strokeWidth) {
