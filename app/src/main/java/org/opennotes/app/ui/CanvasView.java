@@ -16,6 +16,8 @@ import android.view.View;
 import android.widget.OverScroller;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.Build;
+import android.view.Display;
 
 import androidx.annotation.Nullable;
 
@@ -1720,6 +1722,12 @@ public class CanvasView extends View {
         int action = event.getActionMasked();
         int pointerCount = event.getPointerCount();
 
+        if (action == MotionEvent.ACTION_DOWN) {
+            setInputFrameRatePreference(true);
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            setInputFrameRatePreference(false);
+        }
+
         // Feed the complete stream so ScaleGestureDetector can always reset on
         // ACTION_DOWN/CANCEL, including after an activity was backgrounded.
         scaleDetector.onTouchEvent(event);
@@ -2059,6 +2067,31 @@ public class CanvasView extends View {
         }
 
         return super.onTouchEvent(event);
+    }
+
+    /** Ask Android for the fastest supported writing cadence only during input. */
+    private void setInputFrameRatePreference(boolean active) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return;
+        if (!active) {
+            setRequestedFrameRate(0f);
+            return;
+        }
+        Display display = getDisplay();
+        float preferredRate = display == null ? 60f : display.getRefreshRate();
+        if (display != null) {
+            for (float supportedRate : display.getSupportedRefreshRates()) {
+                preferredRate = Math.max(preferredRate, supportedRate);
+            }
+        }
+        // 120 Hz is the target for this app; allow lower-rate displays to use
+        // their own maximum rather than requesting an impossible cadence.
+        setRequestedFrameRate(Math.min(120f, preferredRate));
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        setInputFrameRatePreference(false);
+        super.onDetachedFromWindow();
     }
 
     private float normalizeInputPressure(float pressure, int toolType) {
