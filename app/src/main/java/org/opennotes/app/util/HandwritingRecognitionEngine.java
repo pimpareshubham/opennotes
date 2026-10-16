@@ -179,16 +179,33 @@ public final class HandwritingRecognitionEngine {
             }
         }
         downloadTask.addOnSuccessListener(ignored -> {
-            synchronized (MODEL_DOWNLOADS) {
-                if (MODEL_DOWNLOADS.get(tag) == downloadTask) MODEL_DOWNLOADS.remove(tag);
-            }
-            runRecognition(model, strokes, language, bounds, callback);
+            // ML Kit persists the downloaded model in app-private storage. Confirm
+            // that it is available there before constructing a recognizer, so a
+            // completed network task is never mistaken for an installed model.
+            manager.isModelDownloaded(model)
+                    .addOnSuccessListener(isDownloaded -> {
+                        removeCompletedDownload(tag, downloadTask);
+                        if (isDownloaded) {
+                            runRecognition(model, strokes, language, bounds, callback);
+                        } else {
+                            postFailure(callback, new IllegalStateException(
+                                    "The language model download finished but the model is not installed yet. Please try again."));
+                        }
+                    })
+                    .addOnFailureListener(error -> {
+                        removeCompletedDownload(tag, downloadTask);
+                        postFailure(callback, error);
+                    });
         }).addOnFailureListener(error -> {
-            synchronized (MODEL_DOWNLOADS) {
-                if (MODEL_DOWNLOADS.get(tag) == downloadTask) MODEL_DOWNLOADS.remove(tag);
-            }
+            removeCompletedDownload(tag, downloadTask);
             postFailure(callback, error);
         });
+    }
+
+    private static void removeCompletedDownload(String tag, Task<Void> downloadTask) {
+        synchronized (MODEL_DOWNLOADS) {
+            if (MODEL_DOWNLOADS.get(tag) == downloadTask) MODEL_DOWNLOADS.remove(tag);
+        }
     }
 
     private static void runRecognition(DigitalInkRecognitionModel model, List<Stroke> strokes,
