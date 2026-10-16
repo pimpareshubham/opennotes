@@ -880,9 +880,7 @@ public class CanvasView extends View {
         }
 
         StrokeLineGroup line = lines.get(index);
-        org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
-                getContext(), line.strokes, beautifyLanguage,
-                recognitionPreContext(requestedPage, line.strokes, recognized),
+        org.opennotes.app.util.HandwritingRecognitionEngine.Callback callback =
                 new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
                     @Override
                     public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result) {
@@ -904,7 +902,15 @@ public class CanvasView extends View {
                         org.opennotes.app.util.ErrorDialog.show(getContext(),
                                 "Could not convert handwriting (your ink was kept)", error);
                     }
-                });
+                };
+        String preContext = recognitionPreContext(requestedPage, line.strokes, recognized);
+        if (reviewBeforeReplacing) {
+            org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokesWithFilteredSuggestions(
+                    getContext(), line.strokes, beautifyLanguage, preContext, callback);
+        } else {
+            org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
+                    getContext(), line.strokes, beautifyLanguage, preContext, callback);
+        }
     }
 
     private static List<StrokeLineGroup> groupStrokesIntoLines(List<Stroke> strokes) {
@@ -926,7 +932,10 @@ public class CanvasView extends View {
         float typicalStrokeHeight = heights.get(heightPercentile);
         // Use an upper percentile so short Devanagari headline/matra strokes
         // do not get split away from the taller body strokes on the same row.
-        float lineTolerance = Math.max(12f, typicalStrokeHeight * 0.85f);
+        // Roughly written letters vary more in height and baseline. A little
+        // extra tolerance keeps those marks with their line while still leaving
+        // normally spaced notebook rows separate.
+        float lineTolerance = Math.max(12f, typicalStrokeHeight * 1.05f);
         Collections.sort(samples, (left, right) -> Float.compare(left.centerY, right.centerY));
 
         List<StrokeLineGroup> groups = new ArrayList<>();

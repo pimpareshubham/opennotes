@@ -118,6 +118,119 @@ public final class HandwritingRecognitionEngine {
         });
     }
 
+    /**
+     * Recognize ink for a review flow and include candidates from the stabilized
+     * stroke path when it differs meaningfully from the original pen samples.
+     * The raw trajectory remains the first choice; the alternate pass only adds
+     * suggestions so a filtered display path can never silently replace input.
+     */
+    public static void recognizeStrokesWithFilteredSuggestions(Context context,
+                                                               List<Stroke> strokes,
+                                                               String preferredLanguage,
+                                                               String preContext,
+                                                               Callback callback) {
+        if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
+        if (!hasMeaningfulFilteredPath(strokes)) {
+            recognizeStrokes(context, strokes, preferredLanguage, preContext, callback);
+            return;
+        }
+
+        recognizeStrokes(context, strokes, preferredLanguage, preContext, new Callback() {
+            @Override
+            public void onSuccess(RecognitionResult rawResult) {
+                List<Stroke> filteredStrokes = filteredStrokeCopies(strokes);
+                if (filteredStrokes.isEmpty()) {
+                    callback.onSuccess(rawResult);
+                    return;
+                }
+                recognizeStrokes(context, filteredStrokes, preferredLanguage, preContext,
+                        new Callback() {
+                            @Override
+                            public void onSuccess(RecognitionResult filteredResult) {
+                                callback.onSuccess(mergeCandidates(rawResult, filteredResult));
+                            }
+
+                            @Override
+                            public void onFailure(Exception error) {
+                                // The raw recognition is already usable. A failed
+                                // optional pass must not turn success into an error.
+                                Log.w(TAG, "Filtered handwriting suggestion pass failed", error);
+                                callback.onSuccess(rawResult);
+                            }
+                        });
+            }
+
+            @Override
+            public void onFailure(Exception error) {
+                callback.onFailure(error);
+            }
+        });
+    }
+
+    private static RecognitionResult mergeCandidates(RecognitionResult primary,
+                                                      RecognitionResult alternate) {
+        if (primary == null) return alternate;
+        if (alternate == null) return primary;
+        List<String> merged = new ArrayList<>(primary.alternatives);
+        for (String candidate : alternate.alternatives) {
+            if (candidate != null && !candidate.trim().isEmpty() && !merged.contains(candidate)) {
+                merged.add(candidate);
+            }
+        }
+        return new RecognitionResult(primary.text, primary.language, primary.bounds,
+                primary.fontSize, merged);
+    }
+
+    private static List<Stroke> filteredStrokeCopies(List<Stroke> strokes) {
+        List<Stroke> filtered = new ArrayList<>(strokes.size());
+        for (Stroke source : strokes) {
+            if (source == null || source.points == null || source.points.isEmpty()) continue;
+            Stroke copy = new Stroke(source.color, source.width, source.tool);
+            for (DrawingPoint point : source.points) {
+                if (point == null || !isFinite(point.x) || !isFinite(point.y)) continue;
+                copy.addPoint(point.x, point.y, point.pressure, point.timeMillis);
+                copy.addRecognitionPoint(point.x, point.y, point.pressure, point.timeMillis);
+            }
+            if (!copy.getRecognitionPoints().isEmpty()) filtered.add(copy);
+        }
+        return filtered;
+    }
+
+    private static boolean hasMeaningfulFilteredPath(List<Stroke> strokes) {
+        RectF rawBounds = boundsOf(strokes);
+        if (rawBounds == null) return false;
+        // Normalize by line height, not its often much larger width, so long
+        // lines do not hide real stroke stabilization differences.
+        float referenceSize = Math.max(MIN_WRITING_AREA_AXIS, rawBounds.height());
+        for (Stroke stroke : strokes) {
+            if (stroke == null || stroke.points == null || stroke.points.isEmpty()) continue;
+            List<DrawingPoint> raw = stroke.getRecognitionPoints();
+            List<DrawingPoint> filtered = stroke.points;
+            if (raw == null || raw.isEmpty()) return true;
+            if (Math.abs(raw.size() - filtered.size()) > Math.max(2, raw.size() / 10)) return true;
+            int sampleCount = Math.min(64, Math.min(raw.size(), filtered.size()));
+            if (sampleCount < 2) continue;
+            double totalDistance = 0d;
+            int validSamples = 0;
+            for (int sample = 0; sample < sampleCount; sample++) {
+                int rawIndex = sample * (raw.size() - 1) / (sampleCount - 1);
+                int filteredIndex = sample * (filtered.size() - 1) / (sampleCount - 1);
+                DrawingPoint original = raw.get(rawIndex);
+                DrawingPoint stabilized = filtered.get(filteredIndex);
+                if (original == null || stabilized == null
+                        || !isFinite(original.x) || !isFinite(original.y)
+                        || !isFinite(stabilized.x) || !isFinite(stabilized.y)) continue;
+                totalDistance += Math.hypot(original.x - stabilized.x, original.y - stabilized.y);
+                validSamples++;
+            }
+            if (validSamples > 0
+                    && totalDistance / validSamples > Math.max(1.5f, referenceSize * 0.015f)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private static void requestModelDownloadApproval(Context context, RemoteModelManager manager,
                                                      DigitalInkRecognitionModel model, String tag,
                                                      List<Stroke> strokes, String language,
