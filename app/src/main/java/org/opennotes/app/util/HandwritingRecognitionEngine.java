@@ -254,8 +254,9 @@ public final class HandwritingRecognitionEngine {
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(5).build());
             RecognitionContext.Builder contextBuilder = RecognitionContext.builder()
-                    .setWritingArea(new WritingArea(Math.max(1f, bounds.width()), Math.max(1f, bounds.height())));
-            if (!preContext.isEmpty()) contextBuilder.setPreContext(preContext);
+                    .setWritingArea(new WritingArea(Math.max(1f, bounds.width()), Math.max(1f, bounds.height())))
+                    // ML Kit requires preContext even when there is no preceding text.
+                    .setPreContext(preContext);
             RecognitionContext recognitionContext = contextBuilder.build();
             recognizer.recognize(ink, recognitionContext)
                     .addOnSuccessListener(result -> {
