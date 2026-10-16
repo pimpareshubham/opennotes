@@ -10,6 +10,7 @@ import android.os.Looper;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -91,6 +92,19 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         btnToggleViewMode = findViewById(R.id.btnToggleViewMode);
         filterChipGroup = findViewById(R.id.filterChipGroup);
 
+        View homeSearchBar = findViewById(R.id.homeSearchBar);
+        int screenWidthDp = getResources().getConfiguration().screenWidthDp;
+        if (screenWidthDp >= 600) {
+            LinearLayout.LayoutParams searchParams = (LinearLayout.LayoutParams) homeSearchBar.getLayoutParams();
+            float density = getResources().getDisplayMetrics().density;
+            int windowWidthPx = Math.round(screenWidthDp * density);
+            int maxSearchWidthPx = Math.round(900f * density);
+            int horizontalMarginsPx = Math.round(40f * density);
+            searchParams.width = Math.min(windowWidthPx - horizontalMarginsPx, maxSearchWidthPx);
+            searchParams.gravity = Gravity.CENTER_HORIZONTAL;
+            homeSearchBar.setLayoutParams(searchParams);
+        }
+
         btnToggleViewMode.setImageResource(isGridView ? R.drawable.ic_view_grid : R.drawable.ic_view_list);
 
         ExtendedFloatingActionButton fabNew = findViewById(R.id.fabNewNotebook);
@@ -125,8 +139,16 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     }
 
     private void setupLayoutManager() {
+        int screenWidthDp = getResources().getConfiguration().screenWidthDp;
+        int verticalPadding = Math.round(12f * getResources().getDisplayMetrics().density);
+        int horizontalPaddingDp = isGridView
+                ? 12 : Math.max(12, (screenWidthDp - 900) / 2 + 12);
+        int horizontalPadding = Math.round(horizontalPaddingDp * getResources().getDisplayMetrics().density);
+        recyclerView.setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding);
         if (isGridView) {
-            int spanCount = getResources().getConfiguration().screenWidthDp >= 600 ? 3 : 2;
+            int availableWidthDp = Math.max(1,
+                    screenWidthDp - 24);
+            int spanCount = Math.max(1, Math.min(6, availableWidthDp / 256));
             recyclerView.setLayoutManager(new GridLayoutManager(this, spanCount));
         } else {
             recyclerView.setLayoutManager(new LinearLayoutManager(this));

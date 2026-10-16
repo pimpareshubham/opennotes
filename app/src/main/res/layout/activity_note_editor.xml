@@ -26,7 +26,7 @@
         <LinearLayout
             android:id="@+id/layoutTabsRow"
             android:layout_width="match_parent"
-            android:layout_height="36dp"
+            android:layout_height="@dimen/editor_tab_row_height"
             android:background="#121215"
             android:orientation="horizontal"
             android:gravity="center_vertical"
@@ -49,7 +49,7 @@
                     <LinearLayout
                         android:id="@+id/activeDocTab"
                         android:layout_width="wrap_content"
-                        android:layout_height="28dp"
+                        android:layout_height="@dimen/editor_tab_height"
                         android:background="@drawable/bg_tab_active"
                         android:orientation="horizontal"
                         android:gravity="center_vertical"
@@ -62,15 +62,15 @@
                             android:maxWidth="160dp"
                             android:text="11 P1"
                             android:textColor="@color/text_primary"
-                            android:textSize="12sp"
+                            android:textSize="@dimen/editor_tab_text_size"
                             android:textStyle="bold"
                             android:maxLines="1"
                             android:ellipsize="end" />
 
                         <ImageView
                             android:id="@+id/btnCloseDocTab"
-                            android:layout_width="16dp"
-                            android:layout_height="16dp"
+                            android:layout_width="@dimen/editor_tab_close_size"
+                            android:layout_height="@dimen/editor_tab_close_size"
                             android:layout_marginStart="8dp"
                             android:padding="2dp"
                             android:src="@drawable/ic_close_tab"
@@ -80,8 +80,9 @@
 
                     <!-- Inactive Tab Preview -->
                     <LinearLayout
+                        android:id="@+id/inactiveDocTab"
                         android:layout_width="wrap_content"
-                        android:layout_height="28dp"
+                        android:layout_height="@dimen/editor_tab_height"
                         android:layout_marginStart="6dp"
                         android:background="@drawable/bg_tab_inactive"
                         android:orientation="horizontal"
@@ -89,18 +90,20 @@
                         android:paddingHorizontal="10dp">
 
                         <TextView
+                            android:id="@+id/textInactiveDocTitle"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:maxWidth="120dp"
                             android:text="Unnamed note"
                             android:textColor="@color/text_secondary"
-                            android:textSize="12sp"
+                            android:textSize="@dimen/editor_tab_text_size"
                             android:maxLines="1"
                             android:ellipsize="end" />
 
                         <ImageView
-                            android:layout_width="16dp"
-                            android:layout_height="16dp"
+                            android:id="@+id/btnCloseInactiveDocTab"
+                            android:layout_width="@dimen/editor_tab_close_size"
+                            android:layout_height="@dimen/editor_tab_close_size"
                             android:layout_marginStart="6dp"
                             android:padding="2dp"
                             android:src="@drawable/ic_close_tab"
@@ -110,8 +113,8 @@
                     <!-- Add Tab '+' Button -->
                     <ImageView
                         android:id="@+id/btnNewTab"
-                        android:layout_width="28dp"
-                        android:layout_height="28dp"
+                        android:layout_width="@dimen/editor_floating_action_size"
+                        android:layout_height="@dimen/editor_floating_action_size"
                         android:layout_marginStart="6dp"
                         android:padding="6dp"
                         android:src="@drawable/ic_add"
@@ -128,7 +131,7 @@
                 android:layout_marginStart="8dp"
                 android:text="3 ▾"
                 android:textColor="@color/text_secondary"
-                android:textSize="12sp"
+                android:textSize="@dimen/editor_tab_text_size"
                 android:textStyle="bold"
                 android:paddingHorizontal="6dp"
                 android:paddingVertical="3dp"
@@ -136,19 +139,26 @@
         </LinearLayout>
 
         <!-- Row 2: Top Navigation Header Bar -->
-        <LinearLayout
+        <HorizontalScrollView
             android:id="@+id/layoutTopHeader"
             android:layout_width="match_parent"
-            android:layout_height="44dp"
-            android:orientation="horizontal"
-            android:gravity="center_vertical"
-            android:paddingHorizontal="10dp">
+            android:layout_height="@dimen/editor_header_row_height"
+            android:fillViewport="true"
+            android:scrollbars="none">
+
+            <LinearLayout
+                android:id="@+id/topHeaderActions"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:paddingHorizontal="10dp">
 
             <!-- Back Arrow -->
             <ImageView
                 android:id="@+id/btnBack"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:src="@drawable/ic_arrow_back"
                 app:tint="@color/text_primary"
@@ -158,8 +168,8 @@
             <!-- Cloud Backup / Offline Status -->
             <ImageView
                 android:id="@+id/btnCloudSync"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_cloud"
@@ -170,8 +180,8 @@
             <!-- Camera / Photo Insert -->
             <ImageView
                 android:id="@+id/btnCamera"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_camera"
@@ -182,8 +192,8 @@
             <!-- Crop / Screenshot -->
             <ImageView
                 android:id="@+id/btnCrop"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_crop"
@@ -194,8 +204,8 @@
             <!-- Voice / Audio Recording -->
             <ImageView
                 android:id="@+id/btnMic"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_mic"
@@ -204,15 +214,15 @@
                 android:contentDescription="Voice Notes" />
 
             <View
-                android:layout_width="0dp"
+                android:layout_width="12dp"
                 android:layout_height="1dp"
-                android:layout_weight="1" />
+                android:importantForAccessibility="no" />
 
             <!-- Split Screen / Fullscreen Mode -->
             <ImageView
                 android:id="@+id/btnSplitView"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:src="@drawable/ic_fullscreen"
                 app:tint="@color/text_secondary"
@@ -222,8 +232,8 @@
             <!-- Ruler / Draw Assist -->
             <ImageView
                 android:id="@+id/btnRuler"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_ruler"
@@ -234,8 +244,8 @@
             <!-- Layers Panel -->
             <ImageView
                 android:id="@+id/btnLayers"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_layer"
@@ -246,8 +256,8 @@
             <!-- Page Background Color Button -->
             <ImageView
                 android:id="@+id/btnPageColor"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_page_color"
@@ -258,8 +268,8 @@
             <!-- Page Overview Grid -->
             <ImageView
                 android:id="@+id/btnPageOverview"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_overview"
@@ -270,8 +280,8 @@
             <!-- Share / Export Document -->
             <ImageView
                 android:id="@+id/btnExport"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_export"
@@ -282,8 +292,8 @@
             <!-- Settings Sliders -->
             <ImageView
                 android:id="@+id/btnSettingsSliders"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_settings_sliders"
@@ -294,36 +304,58 @@
             <!-- More Overflow Options -->
             <ImageView
                 android:id="@+id/btnMenu"
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/editor_header_action_size"
+                android:layout_height="@dimen/editor_header_action_size"
                 android:padding="8dp"
                 android:layout_marginStart="2dp"
                 android:src="@drawable/ic_more_horiz"
                 app:tint="@color/text_secondary"
                 android:background="?selectableItemBackgroundBorderless"
                 android:contentDescription="More Options" />
-        </LinearLayout>
+            </LinearLayout>
+        </HorizontalScrollView>
     </LinearLayout>
 
     <!-- Row 3: Center Floating Instrument Tool Dock (Frame 25/35) -->
     <LinearLayout
         android:id="@+id/mainToolDock"
-        android:layout_width="wrap_content"
-        android:layout_height="48dp"
+        android:layout_width="match_parent"
+        android:layout_height="@dimen/editor_tool_dock_height"
         android:layout_below="@id/topBar"
         android:layout_centerHorizontal="true"
         android:layout_marginTop="8dp"
-        android:background="@drawable/bg_floating_pill"
-        android:elevation="8dp"
         android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingHorizontal="10dp">
+        android:gravity="center">
+
+        <HorizontalScrollView
+            android:id="@+id/toolDockScroll"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:fillViewport="true"
+            android:scrollbars="none"
+            android:clipToPadding="false">
+
+        <FrameLayout
+            android:id="@+id/toolDockContents"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent">
+
+        <LinearLayout
+            android:id="@+id/toolDockPill"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:layout_gravity="center"
+            android:background="@drawable/bg_floating_pill"
+            android:elevation="8dp"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:paddingHorizontal="10dp">
 
         <!-- Undo -->
         <ImageView
             android:id="@+id/btnUndo"
-            android:layout_width="34dp"
-            android:layout_height="34dp"
+            android:layout_width="@dimen/editor_history_button_size"
+            android:layout_height="@dimen/editor_history_button_size"
             android:padding="7dp"
             android:src="@drawable/ic_undo"
             app:tint="@color/text_primary"
@@ -332,8 +364,8 @@
         <!-- Redo -->
         <ImageView
             android:id="@+id/btnRedo"
-            android:layout_width="34dp"
-            android:layout_height="34dp"
+            android:layout_width="@dimen/editor_history_button_size"
+            android:layout_height="@dimen/editor_history_button_size"
             android:padding="7dp"
             android:src="@drawable/ic_redo"
             app:tint="@color/text_primary"
@@ -348,8 +380,8 @@
         <!-- Fountain Pen -->
         <ImageView
             android:id="@+id/toolFountain"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:src="@drawable/ic_fountain_pen"
             android:background="@drawable/bg_tool_button_active"
@@ -358,8 +390,8 @@
         <!-- Ballpoint Pen -->
         <ImageView
             android:id="@+id/toolPen"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_pen"
@@ -369,8 +401,8 @@
         <!-- Eraser -->
         <ImageView
             android:id="@+id/toolEraser"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_eraser"
@@ -380,8 +412,8 @@
         <!-- Lasso Tool -->
         <ImageView
             android:id="@+id/toolLasso"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_lasso"
@@ -391,8 +423,8 @@
         <!-- Highlighter -->
         <ImageView
             android:id="@+id/toolHighlighter"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_highlighter"
@@ -402,8 +434,8 @@
         <!-- Pencil -->
         <ImageView
             android:id="@+id/toolPencil"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_pencil"
@@ -413,8 +445,8 @@
         <!-- Shapes -->
         <ImageView
             android:id="@+id/toolShape"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_shapes"
@@ -425,8 +457,8 @@
         <!-- Text -->
         <ImageView
             android:id="@+id/toolText"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_text"
@@ -437,8 +469,8 @@
         <!-- Image Insert -->
         <ImageView
             android:id="@+id/toolMedia"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_image"
@@ -449,8 +481,8 @@
         <!-- Laser Pointer Tool -->
         <ImageView
             android:id="@+id/toolLaser"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_laser"
@@ -461,8 +493,8 @@
         <!-- Auto-Beautify Handwriting Tool (English, Hindi, Marathi) -->
         <ImageView
             android:id="@+id/btnAutoBeautify"
-            android:layout_width="36dp"
-            android:layout_height="36dp"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
             android:padding="7dp"
             android:layout_marginStart="3dp"
             android:src="@drawable/ic_auto_beautify"
@@ -544,13 +576,16 @@
                 android:background="@drawable/bg_tool_button_active"
                 android:backgroundTint="#A855F7" />
         </LinearLayout>
+        </LinearLayout>
+        </FrameLayout>
+        </HorizontalScrollView>
     </LinearLayout>
 
     <!-- Floating Viewport & Zoom Pill (Frame 35: ☆ | 42% ▾ | 🔓 | ↻) -->
     <LinearLayout
         android:id="@+id/floatingViewportPill"
         android:layout_width="wrap_content"
-        android:layout_height="38dp"
+        android:layout_height="@dimen/editor_floating_pill_height"
         android:layout_below="@id/mainToolDock"
         android:layout_centerHorizontal="true"
         android:layout_marginTop="10dp"
@@ -563,8 +598,8 @@
         <!-- Favorite Star -->
         <ImageView
             android:id="@+id/btnFavorite"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="@dimen/editor_floating_action_size"
+            android:layout_height="@dimen/editor_floating_action_size"
             android:padding="5dp"
             android:src="@drawable/ic_star_outline"
             app:tint="@color/text_secondary"
@@ -584,7 +619,7 @@
             android:paddingHorizontal="6dp"
             android:text="100% ▾"
             android:textColor="@color/text_primary"
-            android:textSize="13sp"
+            android:textSize="@dimen/editor_zoom_text_size"
             android:textStyle="bold"
             android:background="?selectableItemBackground" />
 
@@ -597,8 +632,8 @@
         <!-- Viewport Lock -->
         <ImageView
             android:id="@+id/btnLockViewport"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="@dimen/editor_floating_action_size"
+            android:layout_height="@dimen/editor_floating_action_size"
             android:padding="5dp"
             android:src="@drawable/ic_lock"
             app:tint="@color/text_secondary"
@@ -607,8 +642,8 @@
         <!-- Reset Zoom (↺) -->
         <ImageView
             android:id="@+id/btnResetZoom"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="@dimen/editor_floating_action_size"
+            android:layout_height="@dimen/editor_floating_action_size"
             android:padding="5dp"
             android:src="@drawable/ic_reset_zoom"
             app:tint="@color/text_secondary"
@@ -619,7 +654,7 @@
     <LinearLayout
         android:id="@+id/floatingPageNavPill"
         android:layout_width="wrap_content"
-        android:layout_height="38dp"
+        android:layout_height="@dimen/editor_floating_pill_height"
         android:layout_below="@id/mainToolDock"
         android:layout_alignParentEnd="true"
         android:layout_marginEnd="16dp"
@@ -633,8 +668,8 @@
         <!-- Prev Page -->
         <ImageView
             android:id="@+id/btnPrevPage"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="@dimen/editor_floating_action_size"
+            android:layout_height="@dimen/editor_floating_action_size"
             android:padding="6dp"
             android:src="@drawable/ic_chevron_left"
             app:tint="@color/text_primary"
@@ -648,14 +683,14 @@
             android:paddingHorizontal="6dp"
             android:text="1 / 1"
             android:textColor="@color/text_primary"
-            android:textSize="12sp"
+            android:textSize="@dimen/editor_page_counter_text_size"
             android:textStyle="bold" />
 
         <!-- Next Page -->
         <ImageView
             android:id="@+id/btnNextPage"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="@dimen/editor_floating_action_size"
+            android:layout_height="@dimen/editor_floating_action_size"
             android:padding="6dp"
             android:src="@drawable/ic_chevron_right"
             app:tint="@color/text_primary"
@@ -664,8 +699,8 @@
         <!-- Add Page '+' -->
         <ImageView
             android:id="@+id/btnAddPage"
-            android:layout_width="28dp"
-            android:layout_height="28dp"
+            android:layout_width="@dimen/editor_floating_action_size"
+            android:layout_height="@dimen/editor_floating_action_size"
             android:padding="6dp"
             android:src="@drawable/ic_add"
             app:tint="@color/accent"
@@ -675,7 +710,7 @@
     <!-- Floating Popdown Tool Property Card (Frame 50: Highlighter Settings) -->
     <androidx.cardview.widget.CardView
         android:id="@+id/cardToolProperties"
-        android:layout_width="320dp"
+        android:layout_width="@dimen/editor_property_card_width"
         android:layout_height="wrap_content"
         android:layout_below="@id/mainToolDock"
         android:layout_centerHorizontal="true"

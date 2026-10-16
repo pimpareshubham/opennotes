@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="editor_tab_row_height">36dp</dimen>
+    <dimen name="editor_tab_height">28dp</dimen>
+    <dimen name="editor_header_row_height">44dp</dimen>
+    <dimen name="editor_header_action_size">36dp</dimen>
+    <dimen name="editor_tool_dock_height">48dp</dimen>
+    <dimen name="editor_history_button_size">34dp</dimen>
+    <dimen name="editor_tool_button_size">36dp</dimen>
+    <dimen name="editor_floating_pill_height">38dp</dimen>
+    <dimen name="editor_floating_action_size">28dp</dimen>
+    <dimen name="editor_property_card_width">320dp</dimen>
+    <dimen name="editor_tab_close_size">16dp</dimen>
+    <dimen name="editor_tab_text_size">12sp</dimen>
+    <dimen name="editor_page_counter_text_size">12sp</dimen>
+    <dimen name="editor_zoom_text_size">13sp</dimen>
+    <dimen name="home_logo_size">36dp</dimen>
+    <dimen name="home_title_text_size">22sp</dimen>
+    <dimen name="home_status_text_size">12sp</dimen>
+    <dimen name="home_search_height">46dp</dimen>
+    <dimen name="home_search_text_size">14sp</dimen>
+    <dimen name="home_empty_icon_size">80dp</dimen>
+    <dimen name="home_empty_title_text_size">20sp</dimen>
+    <dimen name="home_notebook_cover_height">180dp</dimen>
+    <dimen name="home_notebook_title_text_size">16sp</dimen>
+    <dimen name="home_notebook_date_text_size">12sp</dimen>
+</resources>

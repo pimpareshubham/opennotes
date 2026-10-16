@@ -22,8 +22,8 @@
             android:gravity="center_vertical">
 
             <ImageView
-                android:layout_width="36dp"
-                android:layout_height="36dp"
+                android:layout_width="@dimen/home_logo_size"
+                android:layout_height="@dimen/home_logo_size"
                 android:src="@drawable/ic_launcher"
                 android:layout_marginEnd="12dp" />
 
@@ -38,7 +38,7 @@
                     android:layout_height="wrap_content"
                     android:text="@string/app_name"
                     android:textColor="@color/text_primary"
-                    android:textSize="22sp"
+                    android:textSize="@dimen/home_title_text_size"
                     android:textStyle="bold" />
 
                 <TextView
@@ -46,7 +46,7 @@
                     android:layout_height="wrap_content"
                     android:text="@string/unlimited_offline"
                     android:textColor="@color/accent"
-                    android:textSize="12sp"
+                    android:textSize="@dimen/home_status_text_size"
                     android:textStyle="bold" />
             </LinearLayout>
 
@@ -62,8 +62,9 @@
 
         <!-- Search Bar -->
         <LinearLayout
+            android:id="@+id/homeSearchBar"
             android:layout_width="match_parent"
-            android:layout_height="46dp"
+            android:layout_height="@dimen/home_search_height"
             android:layout_marginHorizontal="20dp"
             android:layout_marginBottom="12dp"
             android:background="@drawable/bg_search_bar"
@@ -85,7 +86,7 @@
                 android:hint="@string/search_hint"
                 android:textColor="@color/text_primary"
                 android:textColorHint="@color/text_hint"
-                android:textSize="14sp"
+                android:textSize="@dimen/home_search_text_size"
                 android:imeOptions="actionSearch"
                 android:inputType="text" />
 
@@ -177,8 +178,8 @@
             android:visibility="gone">
 
             <ImageView
-                android:layout_width="80dp"
-                android:layout_height="80dp"
+                android:layout_width="@dimen/home_empty_icon_size"
+                android:layout_height="@dimen/home_empty_icon_size"
                 android:src="@drawable/ic_launcher"
                 android:alpha="0.35" />
 
@@ -187,7 +188,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/no_notebooks"
                 android:textColor="@color/text_primary"
-                android:textSize="20sp"
+                android:textSize="@dimen/home_empty_title_text_size"
                 android:textStyle="bold"
                 android:layout_marginTop="16dp" />
 

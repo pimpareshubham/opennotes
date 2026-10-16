@@ -15,6 +15,7 @@ import android.os.Looper;
 import android.content.Context;
 import android.view.Gravity;
 import android.view.LayoutInflater;
+import android.view.ViewGroup;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -200,6 +201,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         bindViews();
+        applyResponsiveEditorLayout();
         loadNotebookData();
         setupListeners();
         setupToolPropertyCard();
@@ -332,6 +334,125 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 }
             }
         });
+    }
+
+    private void applyResponsiveEditorLayout() {
+        int tabRowHeight = getResources().getDimensionPixelSize(R.dimen.editor_tab_row_height);
+        int tabHeight = getResources().getDimensionPixelSize(R.dimen.editor_tab_height);
+        int headerHeight = getResources().getDimensionPixelSize(R.dimen.editor_header_row_height);
+        int headerButtonSize = getResources().getDimensionPixelSize(R.dimen.editor_header_action_size);
+        int dockHeight = getResources().getDimensionPixelSize(R.dimen.editor_tool_dock_height);
+        int historyButtonSize = getResources().getDimensionPixelSize(R.dimen.editor_history_button_size);
+        int toolButtonSize = getResources().getDimensionPixelSize(R.dimen.editor_tool_button_size);
+        int pillHeight = getResources().getDimensionPixelSize(R.dimen.editor_floating_pill_height);
+        int pillButtonSize = getResources().getDimensionPixelSize(R.dimen.editor_floating_action_size);
+
+        setViewHeight(findViewById(R.id.layoutTabsRow), tabRowHeight);
+        setViewHeight(findViewById(R.id.activeDocTab), tabHeight);
+        setViewHeight(findViewById(R.id.inactiveDocTab), tabHeight);
+        setViewSize(findViewById(R.id.btnNewTab), pillButtonSize, pillButtonSize);
+        int tabCloseSize = getResources().getDimensionPixelSize(R.dimen.editor_tab_close_size);
+        setViewSize(btnCloseDocTab, tabCloseSize, tabCloseSize);
+        setViewSize(findViewById(R.id.btnCloseInactiveDocTab), tabCloseSize, tabCloseSize);
+        setViewHeight(findViewById(R.id.layoutTopHeader), headerHeight);
+        int[] headerActions = {
+                R.id.btnBack, R.id.btnCloudSync, R.id.btnCamera, R.id.btnCrop, R.id.btnMic,
+                R.id.btnSplitView, R.id.btnRuler, R.id.btnLayers, R.id.btnPageColor,
+                R.id.btnPageOverview, R.id.btnExport, R.id.btnSettingsSliders, R.id.btnMenu
+        };
+        for (int id : headerActions) setViewSize(findViewById(id), headerButtonSize, headerButtonSize);
+
+        setViewHeight(mainToolDock, dockHeight);
+        setViewHeight(findViewById(R.id.toolDockScroll), dockHeight);
+        setViewHeight(findViewById(R.id.toolDockContents), dockHeight);
+        setViewHeight(findViewById(R.id.toolDockPill), dockHeight);
+        setViewSize(btnUndo, historyButtonSize, historyButtonSize);
+        setViewSize(btnRedo, historyButtonSize, historyButtonSize);
+        int[] drawingTools = {
+                R.id.toolFountain, R.id.toolPen, R.id.toolEraser, R.id.toolLasso,
+                R.id.toolHighlighter, R.id.toolPencil, R.id.toolShape, R.id.toolText,
+                R.id.toolMedia, R.id.toolLaser, R.id.btnAutoBeautify
+        };
+        for (int id : drawingTools) setViewSize(findViewById(id), toolButtonSize, toolButtonSize);
+
+        setViewHeight(floatingViewportPill, pillHeight);
+        setViewHeight(findViewById(R.id.floatingPageNavPill), pillHeight);
+        int[] pillActions = {
+                R.id.btnFavorite, R.id.btnLockViewport, R.id.btnResetZoom,
+                R.id.btnPrevPage, R.id.btnNextPage, R.id.btnAddPage
+        };
+        for (int id : pillActions) setViewSize(findViewById(id), pillButtonSize, pillButtonSize);
+        textNotebookTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimensionPixelSize(R.dimen.editor_tab_text_size));
+        textNotebookTitle.setMaxWidth(dp(getResources().getConfiguration().screenWidthDp >= 600
+                ? 240 : 160));
+        TextView inactiveTitle = findViewById(R.id.textInactiveDocTitle);
+        inactiveTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimensionPixelSize(R.dimen.editor_tab_text_size));
+        inactiveTitle.setMaxWidth(dp(getResources().getConfiguration().screenWidthDp >= 600
+                ? 200 : 120));
+        TextView tabCount = findViewById(R.id.textTabCountBadge);
+        tabCount.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimensionPixelSize(R.dimen.editor_tab_text_size));
+        textPageCounter.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimensionPixelSize(R.dimen.editor_page_counter_text_size));
+        textZoomPercent.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                getResources().getDimensionPixelSize(R.dimen.editor_zoom_text_size));
+
+        ViewGroup.LayoutParams propertyParams = cardToolProperties.getLayoutParams();
+        int configuredCardWidth = getResources().getDimensionPixelSize(R.dimen.editor_property_card_width);
+        int availableWidth = Math.round(getResources().getConfiguration().screenWidthDp
+                * getResources().getDisplayMetrics().density) - dp(24);
+        propertyParams.width = Math.min(configuredCardWidth, Math.max(1, availableWidth));
+        cardToolProperties.setLayoutParams(propertyParams);
+
+        View pageNav = findViewById(R.id.floatingPageNavPill);
+        android.widget.RelativeLayout.LayoutParams pageNavParams =
+                (android.widget.RelativeLayout.LayoutParams) pageNav.getLayoutParams();
+        pageNavParams.removeRule(android.widget.RelativeLayout.ALIGN_PARENT_END);
+        pageNavParams.removeRule(android.widget.RelativeLayout.CENTER_HORIZONTAL);
+        pageNavParams.removeRule(android.widget.RelativeLayout.BELOW);
+        if (getResources().getConfiguration().screenWidthDp < 720) {
+            pageNavParams.addRule(android.widget.RelativeLayout.BELOW, R.id.floatingViewportPill);
+            pageNavParams.addRule(android.widget.RelativeLayout.CENTER_HORIZONTAL);
+            pageNavParams.topMargin = dp(6);
+            pageNavParams.setMarginEnd(0);
+        } else {
+            pageNavParams.addRule(android.widget.RelativeLayout.BELOW, R.id.mainToolDock);
+            pageNavParams.addRule(android.widget.RelativeLayout.ALIGN_PARENT_END);
+            pageNavParams.topMargin = dp(10);
+            pageNavParams.setMarginEnd(dp(16));
+        }
+        pageNav.setLayoutParams(pageNavParams);
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        applyResponsiveEditorLayout();
+        if (topBar != null) androidx.core.view.ViewCompat.requestApplyInsets(topBar);
+        if (canvasView != null) canvasView.invalidate();
+    }
+
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private void setViewHeight(View view, int height) {
+        if (view == null) return;
+        ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (params == null) return;
+        params.height = height;
+        view.setLayoutParams(params);
+    }
+
+    private void setViewSize(View view, int width, int height) {
+        if (view == null) return;
+        ViewGroup.LayoutParams params = view.getLayoutParams();
+        if (params == null) return;
+        params.width = width;
+        params.height = height;
+        view.setLayoutParams(params);
     }
 
     private void loadNotebookData() {
