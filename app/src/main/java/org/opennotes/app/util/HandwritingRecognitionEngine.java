@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 
 import com.google.android.gms.tasks.Task;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
@@ -31,6 +32,7 @@ import java.util.concurrent.Executors;
 
 /** On-device handwriting recognition using ML Kit's digital ink models. */
 public final class HandwritingRecognitionEngine {
+    private static final String TAG = "HandwritingRecognition";
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Map<String, Task<Void>> MODEL_DOWNLOADS = new HashMap<>();
@@ -276,7 +278,9 @@ public final class HandwritingRecognitionEngine {
 
     private static String languageTag(String language) {
         if ("ENGLISH".equalsIgnoreCase(language)) return "en-US";
-        if ("HINDI".equalsIgnoreCase(language)) return "hi-IN";
+        // ML Kit's base-model catalog lists Hindi as "hi" (unlike Marathi's
+        // regional model "mr-IN"). Requesting hi-IN can yield no identifier.
+        if ("HINDI".equalsIgnoreCase(language)) return "hi";
         return "mr-IN";
     }
 
@@ -285,6 +289,7 @@ public final class HandwritingRecognitionEngine {
     }
 
     private static void postFailure(Callback callback, Exception error) {
+        Log.e(TAG, "Handwriting recognition failed", error);
         MAIN.post(() -> callback.onFailure(error));
     }
 }

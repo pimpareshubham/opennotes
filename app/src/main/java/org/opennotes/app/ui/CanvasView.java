@@ -661,9 +661,13 @@ public class CanvasView extends View {
 
                     @Override
                     public void onFailure(Exception error) {
-                        // Keep the user's ink unchanged and explain why conversion did not happen.
+                        // Keep the user's ink unchanged and expose the cause for troubleshooting.
+                        String reason = error == null ? null : error.getMessage();
+                        if (reason == null || reason.trim().isEmpty()) {
+                            reason = "Recognition failed. Check the selected language and internet connection, then try again.";
+                        }
                         android.widget.Toast.makeText(getContext(),
-                                "Could not convert handwriting. Check the selected language and approve its model download. Your ink was kept.",
+                                "Could not convert handwriting: " + reason + " Your ink was kept.",
                                 android.widget.Toast.LENGTH_LONG).show();
                     }
                 });
