@@ -502,6 +502,18 @@
             android:background="?selectableItemBackgroundBorderless"
             android:contentDescription="Laser Pointer" />
 
+        <!-- Touch Pan / Hand Tool (Single finger drag to move canvas) -->
+        <ImageView
+            android:id="@+id/toolHand"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
+            android:padding="7dp"
+            android:layout_marginStart="3dp"
+            android:src="@drawable/ic_hand"
+            app:tint="@color/text_primary"
+            android:background="?selectableItemBackgroundBorderless"
+            android:contentDescription="Touch Pan Move Canvas" />
+
         <!-- Auto-Beautify Handwriting Tool (English, Hindi, Marathi) -->
         <ImageView
             android:id="@+id/btnAutoBeautify"

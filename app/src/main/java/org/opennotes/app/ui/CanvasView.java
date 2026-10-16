@@ -2960,22 +2960,27 @@ public class CanvasView extends View {
         }
 
         // Single-finger Hand Pan Tool
-        if (currentTool == DrawingTool.HAND && !isViewportLocked) {
-            float touchX = event.getX(inputPointerIndex);
-            float touchY = event.getY(inputPointerIndex);
-            switch (action) {
-                case MotionEvent.ACTION_DOWN:
-                    twoFingerStartX = touchX;
-                    twoFingerStartY = touchY;
-                    initialPanOffsetX = panOffsetX;
-                    initialPanOffsetY = panOffsetY;
-                    return true;
-                case MotionEvent.ACTION_MOVE:
-                    panOffsetX = initialPanOffsetX + (touchX - twoFingerStartX);
-                    panOffsetY = initialPanOffsetY + (touchY - twoFingerStartY);
-                    invalidate();
-                    notifyLassoSelection();
-                    return true;
+        if (currentTool == DrawingTool.HAND) {
+            if (!isViewportLocked) {
+                float touchX = event.getX(inputPointerIndex);
+                float touchY = event.getY(inputPointerIndex);
+                switch (action) {
+                    case MotionEvent.ACTION_DOWN:
+                        twoFingerStartX = touchX;
+                        twoFingerStartY = touchY;
+                        initialPanOffsetX = panOffsetX;
+                        initialPanOffsetY = panOffsetY;
+                        return true;
+                    case MotionEvent.ACTION_MOVE:
+                        panOffsetX = initialPanOffsetX + (touchX - twoFingerStartX);
+                        panOffsetY = initialPanOffsetY + (touchY - twoFingerStartY);
+                        invalidate();
+                        notifyLassoSelection();
+                        return true;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        return true;
+                }
             }
             return true;
         }
@@ -3180,19 +3185,34 @@ public class CanvasView extends View {
                     if (!pendingAutoConvertStrokes.isEmpty()) {
                         RectF lastWordBounds = getStrokesBounds(pendingAutoConvertStrokes);
                         if (!lastWordBounds.isEmpty() && hasEnoughInkForAutoConversion(pendingAutoConvertStrokes)) {
-                            float estHeight = Math.max(35f, lastWordBounds.height());
-                            float wordGapThreshold = Math.max(60f, estHeight * 0.85f);
-                            float lineJumpThreshold = Math.max(50f, estHeight * 0.85f);
-                            boolean isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
-                            boolean isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold)
-                                    || (canvasX < lastWordBounds.left - 50f && canvasY > lastWordBounds.top + 25f);
-                            boolean isDistantJump = (canvasY < lastWordBounds.top - 60f)
-                                    || (canvasX < lastWordBounds.left - 100f);
+                            float estHeight = Math.max(40f, lastWordBounds.height());
+                            boolean isIndic = "MARATHI".equalsIgnoreCase(beautifyLanguage) || "HINDI".equalsIgnoreCase(beautifyLanguage);
 
-                            if (isNextWord || isNextLine || isDistantJump) {
-                                List<Stroke> completedWord = new ArrayList<>(pendingAutoConvertStrokes);
-                                pendingAutoConvertStrokes.clear();
-                                convertStrokesToText(completedWord);
+                            // Check if this new touch is in the diacritic/matra/kana/ukar envelope of the current letter/word:
+                            // - Upper matra / anuswar: above top by up to 1.8x height
+                            // - Lower ukar: below bottom by up to 1.3x height
+                            // - Right kana / velanti: right by up to 1.8x height
+                            // - Left velanti: left by up to 1.4x height
+                            boolean isInDiacriticEnvelope = (canvasX >= lastWordBounds.left - estHeight * 1.4f)
+                                    && (canvasX <= lastWordBounds.right + estHeight * 1.8f)
+                                    && (canvasY >= lastWordBounds.top - estHeight * 1.8f)
+                                    && (canvasY <= lastWordBounds.bottom + Math.max(45f, estHeight * 1.3f));
+
+                            // If it's within the diacritic/kana envelope or we only have 1-2 strokes in Indic,
+                            // this stroke belongs to the SAME character/word. NEVER auto-convert here!
+                            if (!isInDiacriticEnvelope && (!isIndic || pendingAutoConvertStrokes.size() > 2)) {
+                                float wordGapThreshold = Math.max(90f, estHeight * 1.4f);
+                                float lineJumpThreshold = Math.max(80f, estHeight * 1.3f);
+                                boolean isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
+                                boolean isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold);
+                                boolean isDistantJump = (canvasY < lastWordBounds.top - estHeight * 2.2f)
+                                        || (canvasX < lastWordBounds.left - 120f && canvasY > lastWordBounds.bottom + 20f);
+
+                                if (isNextWord || isNextLine || isDistantJump) {
+                                    List<Stroke> completedWord = new ArrayList<>(pendingAutoConvertStrokes);
+                                    pendingAutoConvertStrokes.clear();
+                                    convertStrokesToText(completedWord);
+                                }
                             }
                         }
                     }
@@ -3325,7 +3345,11 @@ public class CanvasView extends View {
                         if (isAutoConvertTextEnabled && isAutoBeautifyEnabled) {
                             pendingAutoConvertStrokes.add(activeStroke);
                             autoConvertHandler.removeCallbacks(autoConvertRunnable);
-                            autoConvertHandler.postDelayed(autoConvertRunnable, 1800);
+                            boolean isIndic = "MARATHI".equalsIgnoreCase(beautifyLanguage) || "HINDI".equalsIgnoreCase(beautifyLanguage);
+                            int strokeCount = pendingAutoConvertStrokes.size();
+                            // Give generous, comfortable time for Indic scripts so users can add kana, matra, or anuswar without rush
+                            long delay = isIndic ? (strokeCount <= 2 ? 4500L : 3800L) : 3000L;
+                            autoConvertHandler.postDelayed(autoConvertRunnable, delay);
                         }
                     }
                     activeStroke = null;
@@ -3942,8 +3966,68 @@ public class CanvasView extends View {
         }
     }
 
+    public float getActualContentBottom() {
+        if (currentPage == null) return getHeight() > 0 ? getHeight() : 1528f;
+        float maxBottom = 0f;
+        boolean hasContent = false;
+
+        if (currentPage.strokes != null) {
+            for (Stroke s : currentPage.strokes) {
+                if (s == null) continue;
+                RectF b = s.getBounds();
+                if (b != null && !b.isEmpty()) {
+                    maxBottom = Math.max(maxBottom, b.bottom + s.width * 0.5f);
+                    hasContent = true;
+                }
+            }
+        }
+
+        if (currentPage.shapes != null) {
+            for (ShapeItem sh : currentPage.shapes) {
+                if (sh == null) continue;
+                maxBottom = Math.max(maxBottom, Math.max(sh.startY, sh.endY) + sh.strokeWidth);
+                hasContent = true;
+            }
+        }
+
+        if (currentPage.texts != null) {
+            for (TextItem t : currentPage.texts) {
+                if (t == null) continue;
+                maxBottom = Math.max(maxBottom, t.y + t.fontSize + 10f);
+                hasContent = true;
+            }
+        }
+
+        if (currentPage.images != null) {
+            for (ImageItem img : currentPage.images) {
+                if (img == null) continue;
+                maxBottom = Math.max(maxBottom, img.y + img.height);
+                hasContent = true;
+            }
+        }
+
+        if (!hasContent) {
+            return Math.max(getHeight(), 1528f);
+        }
+
+        // Add 80px bottom breathing room
+        return Math.max(600f, maxBottom + 80f);
+    }
+
+    public Bitmap renderToBitmap() {
+        int canvasW = Math.max(1, getWidth());
+        float exportHeight = getActualContentBottom();
+        int targetWidth = Math.max(1080, canvasW);
+        float scale = (float) targetWidth / canvasW;
+        int targetHeight = Math.max(600, (int) (exportHeight * scale));
+        return renderToBitmap(targetWidth, targetHeight, exportHeight);
+    }
+
     public Bitmap renderToBitmap(int targetWidth, int targetHeight) {
-        float effectiveHeight = getContentHeight();
+        return renderToBitmap(targetWidth, targetHeight, getActualContentBottom());
+    }
+
+    public Bitmap renderToBitmap(int targetWidth, int targetHeight, float effectiveHeight) {
         float scaleX = (float) targetWidth / (float) Math.max(1, getWidth());
         float scaleY = (float) targetHeight / Math.max(1, effectiveHeight);
 

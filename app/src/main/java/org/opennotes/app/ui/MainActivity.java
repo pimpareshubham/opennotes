@@ -591,8 +591,13 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 Intent shareIntent = new Intent(Intent.ACTION_SEND);
                 shareIntent.setType("application/pdf");
                 shareIntent.putExtra(Intent.EXTRA_STREAM, uri);
+                shareIntent.putExtra(Intent.EXTRA_SUBJECT, notebook.title);
+                shareIntent.putExtra(Intent.EXTRA_TEXT, "Exported from OpenNotes: " + notebook.title);
+                shareIntent.setClipData(android.content.ClipData.newRawUri("Notebook PDF", uri));
                 shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                startActivity(Intent.createChooser(shareIntent, "Share Notebook PDF"));
+                Intent chooser = Intent.createChooser(shareIntent, "Share Notebook PDF with…");
+                chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(chooser);
             }
         } catch (Exception e) {
             ErrorDialog.show(this, "Notebook export failed", e);

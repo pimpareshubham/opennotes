@@ -38,9 +38,8 @@ public class PdfExporter {
         for (int i = 0; i < pages.size(); i++) {
             Page page = pages.get(i);
             int pageWidth = defaultPageWidth;
-            float contentH = page.canvasHeight > 0 ? page.canvasHeight : 1528f;
-            int pageHeight = (int) (defaultPageWidth * (contentH / 1080f));
-            if (pageHeight < defaultPageHeight) pageHeight = defaultPageHeight;
+            float contentH = calculatePageContentBottom(page);
+            int pageHeight = Math.max(1200, (int) (defaultPageWidth * (contentH / 1080f)));
 
             PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, i + 1).create();
             PdfDocument.Page pdfPage = document.startPage(pageInfo);
@@ -271,5 +270,53 @@ public class PdfExporter {
                 }
             }
         }
+    }
+
+    public static float calculatePageContentBottom(Page page) {
+        if (page == null) return 1528f;
+        float maxBottom = 0f;
+        boolean hasContent = false;
+
+        if (page.strokes != null) {
+            for (Stroke s : page.strokes) {
+                if (s == null) continue;
+                RectF b = s.getBounds();
+                if (b != null && !b.isEmpty()) {
+                    maxBottom = Math.max(maxBottom, b.bottom + s.width * 0.5f);
+                    hasContent = true;
+                }
+            }
+        }
+
+        if (page.shapes != null) {
+            for (ShapeItem sh : page.shapes) {
+                if (sh == null) continue;
+                maxBottom = Math.max(maxBottom, Math.max(sh.startY, sh.endY) + sh.strokeWidth);
+                hasContent = true;
+            }
+        }
+
+        if (page.texts != null) {
+            for (TextItem t : page.texts) {
+                if (t == null) continue;
+                maxBottom = Math.max(maxBottom, t.y + t.fontSize + 10f);
+                hasContent = true;
+            }
+        }
+
+        if (page.images != null) {
+            for (org.opennotes.app.model.ImageItem img : page.images) {
+                if (img == null) continue;
+                maxBottom = Math.max(maxBottom, img.y + img.height);
+                hasContent = true;
+            }
+        }
+
+        if (!hasContent) {
+            return page.canvasHeight > 0 ? page.canvasHeight : 1528f;
+        }
+
+        // Add 80px bottom breathing room
+        return Math.max(600f, maxBottom + 80f);
     }
 }

@@ -12,10 +12,7 @@ import java.io.IOException;
 public class ImageExporter {
 
     public static File exportPageToImage(Context context, CanvasView canvasView, String notebookTitle, int pageIndex) throws IOException {
-        int width = Math.max(1080, canvasView.getWidth());
-        int height = Math.max(1528, canvasView.getHeight());
-
-        Bitmap bitmap = canvasView.renderToBitmap(width, height);
+        Bitmap bitmap = canvasView.renderToBitmap();
 
         File exportDir = new File(context.getExternalFilesDir(null), "exports");
         if (!exportDir.exists()) exportDir.mkdirs();

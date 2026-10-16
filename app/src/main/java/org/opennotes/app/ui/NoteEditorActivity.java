@@ -108,7 +108,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private LinearLayout mainToolDock;
     private ImageView btnUndo, btnRedo;
     private ImageView toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso;
-    private ImageView toolLaser;
+    private ImageView toolLaser, toolHand;
     private ImageView btnAutoBeautify;
     private ImageView btnTeachHandwriting;
     private FrameLayout btnColorPicker;
@@ -297,6 +297,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         toolText = findViewById(R.id.toolText);
         toolMedia = findViewById(R.id.toolMedia);
         toolLaser = findViewById(R.id.toolLaser);
+        toolHand = findViewById(R.id.toolHand);
         btnAutoBeautify = findViewById(R.id.btnAutoBeautify);
         btnTeachHandwriting = findViewById(R.id.btnTeachHandwriting);
 
@@ -442,7 +443,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         int[] drawingTools = {
                 R.id.toolFountain, R.id.toolPen, R.id.toolEraser, R.id.toolLasso,
                 R.id.toolHighlighter, R.id.toolPencil, R.id.toolShape, R.id.toolText,
-                R.id.toolMedia, R.id.toolLaser, R.id.btnAutoBeautify, R.id.btnTeachHandwriting
+                R.id.toolMedia, R.id.toolLaser, R.id.toolHand, R.id.btnAutoBeautify, R.id.btnTeachHandwriting
         };
         for (int id : drawingTools) setViewSize(findViewById(id), toolButtonSize, toolButtonSize);
 
@@ -673,6 +674,24 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         if (toolLaser != null) {
             toolLaser.setOnClickListener(v -> selectOrToggleTool(DrawingTool.LASER, "Laser Presentation Pointer"));
+        }
+
+        if (toolHand != null) {
+            toolHand.setOnClickListener(v -> {
+                cardToolProperties.setVisibility(View.GONE);
+                if (canvasView.getTool() == DrawingTool.HAND) {
+                    DrawingTool fallback = DrawingTool.FOUNTAIN;
+                    canvasView.setTool(fallback);
+                    updateToolUi(fallback);
+                    if (appSettings != null) appSettings.setLastTool(fallback);
+                    Toast.makeText(this, "✏️ Pen Drawing Mode", Toast.LENGTH_SHORT).show();
+                } else {
+                    canvasView.setTool(DrawingTool.HAND);
+                    updateToolUi(DrawingTool.HAND);
+                    if (appSettings != null) appSettings.setLastTool(DrawingTool.HAND);
+                    Toast.makeText(this, "🖐️ Touch Move Canvas: Drag with single finger to move", Toast.LENGTH_SHORT).show();
+                }
+            });
         }
 
         if (btnAutoBeautify != null) {
@@ -1100,7 +1119,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void updateToolUi(DrawingTool tool) {
-        ImageView[] allTools = {toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso, toolShape, toolText, toolLaser};
+        ImageView[] allTools = {toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso, toolShape, toolText, toolLaser, toolHand};
         for (ImageView iv : allTools) {
             if (iv != null) {
                 iv.setBackgroundResource(0);
@@ -1137,6 +1156,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 break;
             case LASER:
                 activeIv = toolLaser;
+                break;
+            case HAND:
+                activeIv = toolHand;
                 break;
             default:
                 break;
@@ -1301,16 +1323,28 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showExportDialog() {
-        String[] options = {"Export as PDF Document (300 DPI Ultra-HD RAW)", "Export as PNG Image (Crisp HD)"};
+        String[] options = {
+                "🚀 Direct Share as PDF (WhatsApp, Drive, Gmail…)",
+                "🚀 Direct Share Page as PNG Image (WhatsApp, Drive…)",
+                "📄 Save Notebook as PDF to Device",
+                "🖼️ Save Page as PNG Image to Device"
+        };
         new MaterialAlertDialogBuilder(this)
-                .setTitle("Export Notebook")
+                .setTitle("Export & Share Note")
                 .setItems(options, (dialog, which) -> {
                     saveCurrentPage();
-                    if (which == 0) {
+                    boolean directShare = (which == 0 || which == 1);
+                    boolean isPdf = (which == 0 || which == 2);
+                    if (isPdf) {
                         try {
                             File pdfFile = PdfExporter.exportNotebookToPdf(this, notebookId);
                             if (pdfFile != null) {
-                                showExportSuccessDialog(pdfFile, "application/pdf");
+                                if (directShare) {
+                                    shareFile(pdfFile, "application/pdf");
+                                    Toast.makeText(this, "✓ PDF ready! Opening share options…", Toast.LENGTH_SHORT).show();
+                                } else {
+                                    showExportSuccessDialog(pdfFile, "application/pdf");
+                                }
                             }
                         } catch (Exception e) {
                             ErrorDialog.show(this, "PDF export failed", e);
@@ -1319,13 +1353,19 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         try {
                             File imgFile = ImageExporter.exportPageToImage(this, canvasView, currentNotebook.title, currentPageIndex);
                             if (imgFile != null) {
-                                showExportSuccessDialog(imgFile, "image/png");
+                                if (directShare) {
+                                    shareFile(imgFile, "image/png");
+                                    Toast.makeText(this, "✓ Image ready! Opening share options…", Toast.LENGTH_SHORT).show();
+                                } else {
+                                    showExportSuccessDialog(imgFile, "image/png");
+                                }
                             }
                         } catch (Exception e) {
                             ErrorDialog.show(this, "Image export failed", e);
                         }
                     }
                 })
+                .setNegativeButton("Cancel", null)
                 .show();
     }
 
@@ -1384,8 +1424,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             Intent intent = new Intent(Intent.ACTION_SEND);
             intent.setType(mimeType);
             intent.putExtra(Intent.EXTRA_STREAM, uri);
+            intent.putExtra(Intent.EXTRA_SUBJECT, file.getName());
+            intent.putExtra(Intent.EXTRA_TEXT, "Exported from OpenNotes: " + file.getName());
+            intent.setClipData(android.content.ClipData.newRawUri("Exported Note", uri));
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(intent, "Share Exported Note"));
+            Intent chooser = Intent.createChooser(intent, "Share Note with…");
+            chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(chooser);
         } catch (Exception ex) {
             ErrorDialog.show(this, "Could not share exported file", ex);
         }
