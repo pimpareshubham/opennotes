@@ -1318,7 +1318,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         String initialLang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
         String initialFont = appSettings != null ? appSettings.getBeautifyFont() : TypefaceManager.FONT_KALAM;
         boolean initialShirorekha = appSettings != null ? appSettings.isShirorekhaSnapEnabled() : true;
-        boolean initialAutoConvert = appSettings != null ? appSettings.isAutoConvertTextEnabled() : false;
+        boolean initialAutoConvert = appSettings != null ? appSettings.isAutoConvertTextEnabled() : true;
 
         final boolean[] isEnabled = { initialEnabled };
         final String[] selectedLang = { initialLang };
