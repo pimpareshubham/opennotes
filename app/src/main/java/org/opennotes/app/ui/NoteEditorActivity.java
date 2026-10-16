@@ -64,6 +64,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private NotesDbHelper dbHelper;
     private AppSettings appSettings;
     private final ExecutorService saveExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService fontIoExecutor = Executors.newSingleThreadExecutor();
     private final Handler saveDebounceHandler = new Handler(Looper.getMainLooper());
 
     private long notebookId;
@@ -1368,6 +1369,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         final boolean[] isEnabled = { initialEnabled };
         final String[] selectedLang = { initialLang };
         final String[] selectedFont = { initialFont };
+        final List<TypefaceManager.CustomFontInfo> customFonts = new ArrayList<>();
 
         switchEnableBeautify.setChecked(initialEnabled);
         checkShirorekhaSnap.setChecked(initialShirorekha);
@@ -1400,7 +1402,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             // Populate user imported custom TTF/OTF fonts
             if (layoutCustomFontList != null) {
                 layoutCustomFontList.removeAllViews();
-                List<TypefaceManager.CustomFontInfo> customFonts = TypefaceManager.getCustomFonts(this);
                 for (TypefaceManager.CustomFontInfo cFont : customFonts) {
                     boolean isSelected = cFont.key.equalsIgnoreCase(selectedFont[0]);
                     LinearLayout fontRow = new LinearLayout(this);
@@ -1417,7 +1418,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     nameView.setText("🔤 " + cFont.displayName);
                     nameView.setTextColor(isSelected ? 0xFFFFFFFF : 0xFFE2E8F0);
                     nameView.setTextSize(13);
-                    nameView.setTypeface(TypefaceManager.getTypeface(this, cFont.key));
                     nameView.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
 
                     TextView tagView = new TextView(this);
@@ -1528,6 +1528,23 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
 
         dialog.show();
+        if (layoutCustomFontList != null) {
+            TextView loadingFonts = new TextView(this);
+            loadingFonts.setText("Loading imported fonts…");
+            loadingFonts.setTextColor(0xFF94A3B8);
+            loadingFonts.setTextSize(12);
+            layoutCustomFontList.addView(loadingFonts);
+            fontIoExecutor.execute(() -> {
+                List<TypefaceManager.CustomFontInfo> foundFonts =
+                        TypefaceManager.getCustomFonts(getApplicationContext());
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed() || !dialog.isShowing()) return;
+                    customFonts.clear();
+                    customFonts.addAll(foundFonts);
+                    updateDialogUi[0].run();
+                });
+            });
+        }
     }
 
     private void handleImportCustomFont(Uri uri) {
@@ -1819,6 +1836,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         saveCurrentPage();
         try {
             saveExecutor.shutdown();
+        } catch (Exception ignored) {}
+        try {
+            fontIoExecutor.shutdownNow();
         } catch (Exception ignored) {}
     }
 }
