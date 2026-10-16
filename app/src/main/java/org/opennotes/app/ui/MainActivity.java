@@ -5,6 +5,8 @@ import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
@@ -38,6 +40,8 @@ import org.opennotes.app.model.PaperTemplate;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class MainActivity extends AppCompatActivity implements NotebookAdapter.OnNotebookClickListener {
 
@@ -65,6 +69,10 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             0xFF92400E, // Amber
             0xFF18181B  // Pitch Charcoal
     };
+
+    private final ExecutorService notebookIoExecutor = Executors.newSingleThreadExecutor();
+    private final Handler searchDebounceHandler = new Handler(Looper.getMainLooper());
+    private int notebookLoadGeneration = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -109,12 +117,17 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     }
 
     private void ensureSampleNotebook() {
-        List<Notebook> existing = dbHelper.getAllNotebooks(null, false, null);
-        if (existing.isEmpty()) {
-            Notebook welcomeNb = new Notebook("11 PI", 0xFF1E1E24, PaperTemplate.RULED);
-            welcomeNb.folder = "Work";
-            dbHelper.insertNotebook(welcomeNb);
-        }
+        notebookIoExecutor.execute(() -> {
+            List<Notebook> existing = dbHelper.getAllNotebooks(null, false, null);
+            if (existing.isEmpty()) {
+                Notebook welcomeNb = new Notebook("11 PI", 0xFF1E1E24, PaperTemplate.RULED);
+                welcomeNb.folder = "Work";
+                dbHelper.insertNotebook(welcomeNb);
+            }
+            runOnUiThread(() -> {
+                if (!isFinishing() && !isDestroyed()) loadNotebooks();
+            });
+        });
     }
 
     private void setupRecyclerView() {
@@ -141,7 +154,8 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             public void onTextChanged(CharSequence s, int start, int before, int count) {
                 currentSearchQuery = s.toString();
                 btnClearSearch.setVisibility(currentSearchQuery.isEmpty() ? View.GONE : View.VISIBLE);
-                loadNotebooks();
+                searchDebounceHandler.removeCallbacksAndMessages(null);
+                searchDebounceHandler.postDelayed(MainActivity.this::loadNotebooks, 120);
             }
 
             @Override
@@ -174,16 +188,20 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     }
 
     private void loadNotebooks() {
-        List<Notebook> list = dbHelper.getAllNotebooks(currentFolder, isFavoritesOnly, currentSearchQuery);
-        adapter.updateData(list);
-
-        if (list.isEmpty()) {
-            emptyStateView.setVisibility(View.VISIBLE);
-            recyclerView.setVisibility(View.GONE);
-        } else {
-            emptyStateView.setVisibility(View.GONE);
-            recyclerView.setVisibility(View.VISIBLE);
-        }
+        final int generation = ++notebookLoadGeneration;
+        final String folder = currentFolder;
+        final boolean favoritesOnly = isFavoritesOnly;
+        final String searchQuery = currentSearchQuery;
+        notebookIoExecutor.execute(() -> {
+            List<Notebook> result = dbHelper.getAllNotebooks(folder, favoritesOnly, searchQuery);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed() || generation != notebookLoadGeneration) return;
+                adapter.updateData(result);
+                boolean isEmpty = result.isEmpty();
+                emptyStateView.setVisibility(isEmpty ? View.VISIBLE : View.GONE);
+                recyclerView.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
+            });
+        });
     }
 
     private void showCreateNotebookDialog() {
@@ -381,10 +399,15 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             if (!"All".equalsIgnoreCase(currentFolder) && !isFavoritesOnly) {
                 newNb.folder = currentFolder;
             }
-            long id = dbHelper.insertNotebook(newNb);
-            loadNotebooks();
             dialog.dismiss();
-            openNotebook(id);
+            notebookIoExecutor.execute(() -> {
+                long id = dbHelper.insertNotebook(newNb);
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    loadNotebooks();
+                    openNotebook(id);
+                });
+            });
         });
 
         dialog.show();
@@ -405,7 +428,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     @Override
     public void onNotebookFavoriteClick(Notebook notebook) {
         notebook.isFavorite = !notebook.isFavorite;
-        dbHelper.updateNotebook(notebook);
+        notebookIoExecutor.execute(() -> dbHelper.updateNotebook(notebook));
         loadNotebooks();
     }
 
@@ -453,7 +476,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                     String newTitle = input.getText().toString().trim();
                     if (!newTitle.isEmpty()) {
                         notebook.title = newTitle;
-                        dbHelper.updateNotebook(notebook);
+                        notebookIoExecutor.execute(() -> dbHelper.updateNotebook(notebook));
                         loadNotebooks();
                     }
                 })
@@ -462,9 +485,14 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     }
 
     private void duplicateNotebook(Notebook notebook) {
-        long newId = dbHelper.duplicateNotebook(notebook.id);
-        loadNotebooks();
-        Toast.makeText(this, "Notebook duplicated", Toast.LENGTH_SHORT).show();
+        notebookIoExecutor.execute(() -> {
+            dbHelper.duplicateNotebook(notebook.id);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                loadNotebooks();
+                Toast.makeText(this, "Notebook duplicated", Toast.LENGTH_SHORT).show();
+            });
+        });
     }
 
     private void exportNotebookPdf(Notebook notebook) {
@@ -488,11 +516,18 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 .setTitle(R.string.delete)
                 .setMessage("Delete \"" + notebook.title + "\"? All pages will be permanently deleted.")
                 .setPositiveButton(R.string.delete, (dialog, which) -> {
-                    dbHelper.deleteNotebook(notebook.id);
+                    notebookIoExecutor.execute(() -> dbHelper.deleteNotebook(notebook.id));
                     loadNotebooks();
                     Toast.makeText(this, "Notebook deleted", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton(R.string.cancel, null)
                 .show();
+    }
+
+    @Override
+    protected void onDestroy() {
+        searchDebounceHandler.removeCallbacksAndMessages(null);
+        notebookIoExecutor.shutdown();
+        super.onDestroy();
     }
 }

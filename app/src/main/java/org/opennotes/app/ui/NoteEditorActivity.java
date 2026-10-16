@@ -308,22 +308,32 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void loadNotebookData() {
-        currentNotebook = dbHelper.getNotebook(notebookId);
-        if (currentNotebook == null) {
-            finish();
-            return;
-        }
-
-        textNotebookTitle.setText(currentNotebook.title);
-        pages = dbHelper.getPagesForNotebook(notebookId);
-        if (pages.isEmpty()) {
-            Page firstPage = new Page(notebookId, 0, currentNotebook.defaultTemplate, currentNotebook.defaultBgColor, currentNotebook.defaultIsInfinite);
-            dbHelper.insertPage(firstPage);
-            pages = dbHelper.getPagesForNotebook(notebookId);
-        }
-
-        currentPageIndex = 0;
-        loadCurrentPage();
+        canvasView.setEnabled(false);
+        saveExecutor.execute(() -> {
+            Notebook loadedNotebook = dbHelper.getNotebook(notebookId);
+            if (loadedNotebook == null) {
+                runOnUiThread(this::finish);
+                return;
+            }
+            List<Page> loadedPages = dbHelper.getPagesForNotebook(notebookId);
+            if (loadedPages.isEmpty()) {
+                Page firstPage = new Page(notebookId, 0, loadedNotebook.defaultTemplate,
+                        loadedNotebook.defaultBgColor, loadedNotebook.defaultIsInfinite);
+                dbHelper.insertPage(firstPage);
+                loadedPages = dbHelper.getPagesForNotebook(notebookId);
+            }
+            List<Page> resultPages = loadedPages;
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                currentNotebook = loadedNotebook;
+                pages = resultPages;
+                textNotebookTitle.setText(currentNotebook.title);
+                updateFavoriteIcon();
+                currentPageIndex = 0;
+                loadCurrentPage();
+                canvasView.setEnabled(true);
+            });
+        });
     }
 
     private void loadCurrentPage() {
@@ -496,7 +506,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnFavorite.setOnClickListener(v -> {
             if (currentNotebook != null) {
                 currentNotebook.isFavorite = !currentNotebook.isFavorite;
-                dbHelper.updateNotebook(currentNotebook);
+                Notebook notebookSnapshot = currentNotebook;
+                saveExecutor.execute(() -> dbHelper.updateNotebook(notebookSnapshot));
                 updateFavoriteIcon();
                 Toast.makeText(this, currentNotebook.isFavorite ? "Added to Favorites ★" : "Removed from Favorites", Toast.LENGTH_SHORT).show();
             }
@@ -517,7 +528,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
 
         btnPrevPage.setOnClickListener(v -> {
-            if (currentPageIndex > 0) {
+            if (pages != null && currentPageIndex > 0) {
                 saveCurrentPage();
                 currentPageIndex--;
                 loadCurrentPage();
@@ -525,7 +536,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
 
         btnNextPage.setOnClickListener(v -> {
-            if (currentPageIndex < pages.size() - 1) {
+            if (pages != null && currentPageIndex < pages.size() - 1) {
                 saveCurrentPage();
                 currentPageIndex++;
                 loadCurrentPage();
@@ -533,6 +544,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
 
         btnAddPage.setOnClickListener(v -> {
+            if (pages == null || currentNotebook == null) return;
             saveCurrentPage();
             PaperTemplate tpl = (currentPage != null) ? currentPage.template : currentNotebook.defaultTemplate;
             int bgCol = (currentPage != null && currentPage.backgroundColor != 0)
@@ -543,12 +555,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             boolean inf = (currentPage != null) ? currentPage.isInfinite : currentNotebook.defaultIsInfinite;
 
             Page newPage = new Page(notebookId, pages.size(), tpl, bgCol, inf);
-            dbHelper.insertPage(newPage);
-
             currentNotebook.pageCount = pages.size() + 1;
-            dbHelper.updateNotebook(currentNotebook);
-
-            pages = dbHelper.getPagesForNotebook(notebookId);
+            pages.add(newPage);
+            Notebook notebookSnapshot = currentNotebook;
+            saveExecutor.execute(() -> {
+                dbHelper.insertPage(newPage);
+                dbHelper.updateNotebook(notebookSnapshot);
+            });
             currentPageIndex = pages.size() - 1;
             loadCurrentPage();
             Toast.makeText(this, "Page " + (currentPageIndex + 1) + " added", Toast.LENGTH_SHORT).show();
@@ -1025,8 +1038,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showPageOverviewDialog() {
+        if (pages == null || pages.isEmpty()) return;
         saveCurrentPage();
-        pages = dbHelper.getPagesForNotebook(notebookId);
 
         View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_page_overview, null);
         RecyclerView rv = dialogView.findViewById(R.id.recyclerViewPages);
@@ -1270,9 +1283,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 if (appSettings != null) {
                     appSettings.setDefaultPageBgColor(newColor);
                 }
-                dbHelper.updateNotebookDefaultBgColor(notebookId, newColor, checkAllPages.isChecked());
+                boolean applyToAll = checkAllPages.isChecked();
+                saveExecutor.execute(() -> dbHelper.updateNotebookDefaultBgColor(notebookId, newColor, applyToAll));
             } else if (checkAllPages.isChecked()) {
-                dbHelper.updateNotebookDefaultBgColor(notebookId, (currentNotebook != null ? currentNotebook.defaultBgColor : -1), true);
+                int defaultColor = currentNotebook != null ? currentNotebook.defaultBgColor : -1;
+                saveExecutor.execute(() -> dbHelper.updateNotebookDefaultBgColor(notebookId, defaultColor, true));
             }
 
             if (checkAllPages.isChecked() && pages != null) {
@@ -1689,14 +1704,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void triggerRealtimeAutoSave() {
-        if (currentPage == null) return;
-        currentPage.canvasHeight = canvasView.getContentHeight();
-        final Page snapshot = currentPage.createSnapshot();
         saveDebounceHandler.removeCallbacksAndMessages(null);
         saveDebounceHandler.postDelayed(() -> {
-            saveExecutor.execute(() -> {
-                dbHelper.savePage(snapshot);
-            });
+            if (currentPage == null || isFinishing() || isDestroyed()) return;
+            currentPage.canvasHeight = canvasView.getContentHeight();
+            final Page snapshot = currentPage.createSnapshot();
+            saveExecutor.execute(() -> dbHelper.savePage(snapshot));
         }, 150);
     }
 
@@ -1705,7 +1718,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             saveDebounceHandler.removeCallbacksAndMessages(null);
             currentPage.canvasHeight = canvasView.getContentHeight();
             final Page snapshot = currentPage.createSnapshot();
-            dbHelper.savePage(snapshot);
+            saveExecutor.execute(() -> dbHelper.savePage(snapshot));
         }
     }
 

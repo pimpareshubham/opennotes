@@ -22,37 +22,37 @@ public class Stroke {
 
     private transient android.graphics.Path cachedPath;
     private transient android.graphics.RectF cachedBounds;
-    private transient boolean isDirty = true;
+    private transient boolean pathDirty = true;
+    private transient boolean boundsDirty = true;
 
     public void markDirty() {
-        isDirty = true;
+        pathDirty = true;
+        boundsDirty = true;
         cachedPath = null;
         cachedBounds = null;
     }
 
     public android.graphics.RectF getBounds() {
-        if (cachedBounds == null || isDirty) {
-            computePathAndBounds();
+        if (cachedBounds == null || boundsDirty) {
+            computeBounds();
         }
         return cachedBounds;
     }
 
     public android.graphics.Path getPath() {
-        if (cachedPath == null || isDirty) {
-            computePathAndBounds();
+        if (cachedPath == null || pathDirty) {
+            computePath();
         }
         return cachedPath;
     }
 
-    private synchronized void computePathAndBounds() {
+    private synchronized void computeBounds() {
         if (points == null || points.isEmpty()) {
-            cachedPath = new android.graphics.Path();
             cachedBounds = new android.graphics.RectF();
-            isDirty = false;
+            boundsDirty = false;
             return;
         }
 
-        android.graphics.Path path = new android.graphics.Path();
         float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
         float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
 
@@ -65,7 +65,16 @@ public class Stroke {
 
         float pad = Math.max(width * 2f, 15f);
         cachedBounds = new android.graphics.RectF(minX - pad, minY - pad, maxX + pad, maxY + pad);
+        boundsDirty = false;
+    }
 
+    private synchronized void computePath() {
+        android.graphics.Path path = new android.graphics.Path();
+        if (points == null || points.isEmpty()) {
+            cachedPath = path;
+            pathDirty = false;
+            return;
+        }
         if (points.size() == 1) {
             DrawingPoint p = points.get(0);
             path.addCircle(p.x, p.y, Math.max(2f, width / 2f), android.graphics.Path.Direction.CW);
@@ -84,7 +93,7 @@ public class Stroke {
         }
 
         cachedPath = path;
-        isDirty = false;
+        pathDirty = false;
     }
 
     public void addPoint(float x, float y, float pressure) {

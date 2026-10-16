@@ -1892,6 +1892,7 @@ public class CanvasView extends View {
         selectedShapes.clear();
 
         for (Stroke s : currentPage.strokes) {
+            if (!RectF.intersects(s.getBounds(), lassoBounds)) continue;
             for (DrawingPoint pt : s.points) {
                 if (lassoBounds.contains(pt.x, pt.y)) {
                     selectedStrokes.add(s);
@@ -1921,6 +1922,11 @@ public class CanvasView extends View {
 
         for (int i = currentPage.strokes.size() - 1; i >= 0; i--) {
             Stroke s = currentPage.strokes.get(i);
+            RectF bounds = s.getBounds();
+            if (touchX < bounds.left - hitRadius || touchX > bounds.right + hitRadius
+                    || touchY < bounds.top - hitRadius || touchY > bounds.bottom + hitRadius) {
+                continue;
+            }
             boolean hit = false;
             for (DrawingPoint pt : s.points) {
                 float dx = pt.x - touchX;
