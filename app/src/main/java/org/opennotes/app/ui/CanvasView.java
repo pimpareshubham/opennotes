@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.util.AttributeSet;
@@ -182,6 +183,7 @@ public class CanvasView extends View {
 
     // Zero-lag high performance rendering buffers
     private final RectF visibleViewport = new RectF();
+    private final Rect visibleClip = new Rect();
     private final Path reusableSegPath = new Path();
 
     private OnCanvasChangeListener changeListener;
@@ -1152,11 +1154,17 @@ public class CanvasView extends View {
         canvas.drawColor(pageBackgroundColor);
 
         // Zero-lag visible viewport computation for infinite document culling
-        float vLeft = -panOffsetX / scaleFactor;
-        float vTop = (0f - panOffsetY) / scaleFactor + viewportOffsetY;
-        float vRight = (viewWidth - panOffsetX) / scaleFactor;
-        float vBottom = (viewHeight - panOffsetY) / scaleFactor + viewportOffsetY;
-        float pad = 120f / Math.max(0.2f, scaleFactor);
+        if (!canvas.getClipBounds(visibleClip)) {
+            visibleClip.set(0, 0, viewWidth, viewHeight);
+        }
+        if (!visibleClip.intersect(0, 0, viewWidth, viewHeight)) {
+            visibleClip.set(0, 0, viewWidth, viewHeight);
+        }
+        float vLeft = (visibleClip.left - panOffsetX) / scaleFactor;
+        float vTop = (visibleClip.top - panOffsetY) / scaleFactor + viewportOffsetY;
+        float vRight = (visibleClip.right - panOffsetX) / scaleFactor;
+        float vBottom = (visibleClip.bottom - panOffsetY) / scaleFactor + viewportOffsetY;
+        float pad = 2f / Math.max(0.2f, scaleFactor);
         visibleViewport.set(vLeft - pad, vTop - pad, vRight + pad, vBottom + pad);
 
         canvas.save();
@@ -2021,6 +2029,10 @@ public class CanvasView extends View {
                     // ink trail the pen and creates a sharp tail when the pen lifts.
                     float filterWeight = 1.0f - (strokeStabilization * 0.18f);
                     float pressureFilterWeight = 1.0f - (strokeStabilization * 0.35f);
+                    float dirtyMinX = lastTouchX;
+                    float dirtyMinY = lastTouchY;
+                    float dirtyMaxX = lastTouchX;
+                    float dirtyMaxY = lastTouchY;
                     int historySize = event.getHistorySize();
                     for (int i = 0; i < historySize; i++) {
                         float histRawX = event.getHistoricalX(i);
@@ -2037,6 +2049,10 @@ public class CanvasView extends View {
                         smoothedPressure += (historicalPressure - smoothedPressure) * pressureFilterWeight;
                         activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure,
                                 event.getHistoricalEventTime(i));
+                        dirtyMinX = Math.min(dirtyMinX, smoothedX);
+                        dirtyMinY = Math.min(dirtyMinY, smoothedY);
+                        dirtyMaxX = Math.max(dirtyMaxX, smoothedX);
+                        dirtyMaxY = Math.max(dirtyMaxY, smoothedY);
                     }
                     smoothedX = smoothedX + (canvasX - smoothedX) * filterWeight;
                     smoothedY = smoothedY + (canvasY - smoothedY) * filterWeight;
@@ -2044,11 +2060,16 @@ public class CanvasView extends View {
 
                     activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
                     activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure, event.getEventTime());
+                    dirtyMinX = Math.min(dirtyMinX, smoothedX);
+                    dirtyMinY = Math.min(dirtyMinY, smoothedY);
+                    dirtyMaxX = Math.max(dirtyMaxX, smoothedX);
+                    dirtyMaxY = Math.max(dirtyMaxY, smoothedY);
                     lastTouchX = smoothedX;
                     lastTouchY = smoothedY;
 
                     ensureContentHeight(canvasY);
-                    invalidate();
+                    invalidateStrokeBounds(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY,
+                            activeStroke.width);
                 }
                 return true;
 
@@ -2119,6 +2140,21 @@ public class CanvasView extends View {
         }
 
         return super.onTouchEvent(event);
+    }
+
+    /** Invalidate only the screen patch changed by the most recent ink samples. */
+    private void invalidateStrokeBounds(float minX, float minY, float maxX, float maxY,
+                                        float strokeWidth) {
+        float pad = Math.max(8f, strokeWidth * 2.5f) * scaleFactor + 3f;
+        float left = minX * scaleFactor + panOffsetX - pad;
+        float right = maxX * scaleFactor + panOffsetX + pad;
+        float top = (minY - viewportOffsetY) * scaleFactor + panOffsetY - pad;
+        float bottom = (maxY - viewportOffsetY) * scaleFactor + panOffsetY + pad;
+        int l = Math.max(0, (int) Math.floor(left));
+        int t = Math.max(0, (int) Math.floor(top));
+        int r = Math.min(getWidth(), (int) Math.ceil(right));
+        int b = Math.min(getHeight(), (int) Math.ceil(bottom));
+        if (l < r && t < b) invalidate(l, t, r, b);
     }
 
     /** Ask Android for the fastest supported writing cadence only during input. */
