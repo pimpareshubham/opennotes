@@ -645,7 +645,10 @@ public class CanvasView extends View {
 
                     @Override
                     public void onFailure(Exception error) {
-                        // Keep the user's ink unchanged if model download or recognition fails.
+                        // Keep the user's ink unchanged and explain why conversion did not happen.
+                        android.widget.Toast.makeText(getContext(),
+                                "Could not convert handwriting. Check the selected language and approve its model download. Your ink was kept.",
+                                android.widget.Toast.LENGTH_LONG).show();
                     }
                 });
     }

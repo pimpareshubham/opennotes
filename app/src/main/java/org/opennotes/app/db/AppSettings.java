@@ -218,4 +218,12 @@ public class AppSettings {
     public void setAutoConvertTextEnabled(boolean enabled) {
         prefs.edit().putBoolean(KEY_AUTO_CONVERT_TEXT, enabled).apply();
     }
+
+    public boolean hasAcceptedHandwritingModelDownload(String languageTag) {
+        return prefs.getBoolean("pref_model_download_consent_" + languageTag, false);
+    }
+
+    public void setAcceptedHandwritingModelDownload(String languageTag, boolean accepted) {
+        prefs.edit().putBoolean("pref_model_download_consent_" + languageTag, accepted).apply();
+    }
 }

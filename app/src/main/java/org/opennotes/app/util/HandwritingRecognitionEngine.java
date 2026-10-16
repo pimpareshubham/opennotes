@@ -5,6 +5,8 @@ import android.graphics.RectF;
 import android.os.Handler;
 import android.os.Looper;
 
+import com.google.android.gms.tasks.Task;
+import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.mlkit.common.model.DownloadConditions;
 import com.google.mlkit.common.model.RemoteModelManager;
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognition;
@@ -18,8 +20,12 @@ import com.google.mlkit.vision.digitalink.recognition.WritingArea;
 
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.Stroke;
+import org.opennotes.app.db.AppSettings;
 
 import java.util.List;
+import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -27,6 +33,18 @@ import java.util.concurrent.Executors;
 public final class HandwritingRecognitionEngine {
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final Map<String, Task<Void>> MODEL_DOWNLOADS = new HashMap<>();
+    private static final Map<String, List<PendingApproval>> WAITING_APPROVALS = new HashMap<>();
+
+    private static final class PendingApproval {
+        final Runnable approved;
+        final Callback callback;
+
+        PendingApproval(Runnable approved, Callback callback) {
+            this.approved = approved;
+            this.callback = callback;
+        }
+    }
 
     public static final class RecognitionResult {
         public final String text;
@@ -76,13 +94,100 @@ public final class HandwritingRecognitionEngine {
                 RemoteModelManager manager = RemoteModelManager.getInstance();
                 manager.isModelDownloaded(model).addOnSuccessListener(isDownloaded -> {
                     if (isDownloaded) runRecognition(model, strokes, preferredLanguage, bounds, callback);
-                    else manager.download(model, new DownloadConditions.Builder().build())
-                            .addOnSuccessListener(ignored -> runRecognition(model, strokes, preferredLanguage, bounds, callback))
-                            .addOnFailureListener(error -> postFailure(callback, error));
+                    else requestModelDownloadApproval(context, manager, model, tag,
+                            strokes, preferredLanguage, bounds, callback);
                 }).addOnFailureListener(error -> postFailure(callback, error));
             } catch (Exception error) {
                 postFailure(callback, error);
             }
+        });
+    }
+
+    private static void requestModelDownloadApproval(Context context, RemoteModelManager manager,
+                                                     DigitalInkRecognitionModel model, String tag,
+                                                     List<Stroke> strokes, String language,
+                                                     RectF bounds, Callback callback) {
+        AppSettings settings = AppSettings.getInstance(context);
+        Runnable beginDownload = () -> downloadThenRecognize(
+                manager, model, tag, strokes, language, bounds, callback);
+        if (settings.hasAcceptedHandwritingModelDownload(tag)) {
+            beginDownload.run();
+            return;
+        }
+
+        synchronized (WAITING_APPROVALS) {
+            List<PendingApproval> waiting = WAITING_APPROVALS.get(tag);
+            if (waiting != null) {
+                waiting.add(new PendingApproval(beginDownload, callback));
+                return;
+            }
+            waiting = new ArrayList<>();
+            waiting.add(new PendingApproval(beginDownload, callback));
+            WAITING_APPROVALS.put(tag, waiting);
+        }
+
+        MAIN.post(() -> {
+            try {
+                new MaterialAlertDialogBuilder(context)
+                        .setTitle("Download handwriting model?")
+                        .setMessage("OpenNotes needs to download the " + languageName(language)
+                                + " handwriting model (about 20 MB) for recognition. Android stores it in the app's private storage; your handwriting is not uploaded. Allow this model download over the internet?")
+                        .setNegativeButton("Not now", (dialog, which) -> finishApproval(
+                                tag, false, settings, "Model download was declined."))
+                        .setPositiveButton("Allow download", (dialog, which) -> finishApproval(
+                                tag, true, settings, null))
+                        .setOnCancelListener(dialog -> finishApproval(
+                                tag, false, settings, "Model download was cancelled."))
+                        .show();
+            } catch (Exception error) {
+                finishApproval(tag, false, settings, error.getMessage());
+            }
+        });
+    }
+
+    private static void finishApproval(String tag, boolean approved, AppSettings settings, String reason) {
+        final List<PendingApproval> waiting;
+        synchronized (WAITING_APPROVALS) {
+            waiting = WAITING_APPROVALS.remove(tag);
+        }
+        if (waiting == null) return;
+        if (approved) settings.setAcceptedHandwritingModelDownload(tag, true);
+        for (PendingApproval request : waiting) {
+            if (approved) request.approved.run();
+            else postFailure(request.callback, new IllegalStateException(reason));
+        }
+    }
+
+    private static String languageName(String language) {
+        if ("ENGLISH".equalsIgnoreCase(language)) return "English";
+        if ("HINDI".equalsIgnoreCase(language)) return "Hindi";
+        return "Marathi";
+    }
+
+    private static void downloadThenRecognize(RemoteModelManager manager,
+                                             DigitalInkRecognitionModel model,
+                                             String tag, List<Stroke> strokes, String language,
+                                             RectF bounds, Callback callback) {
+        final Task<Void> downloadTask;
+        synchronized (MODEL_DOWNLOADS) {
+            Task<Void> existing = MODEL_DOWNLOADS.get(tag);
+            if (existing != null) {
+                downloadTask = existing;
+            } else {
+                downloadTask = manager.download(model, new DownloadConditions.Builder().build());
+                MODEL_DOWNLOADS.put(tag, downloadTask);
+            }
+        }
+        downloadTask.addOnSuccessListener(ignored -> {
+            synchronized (MODEL_DOWNLOADS) {
+                if (MODEL_DOWNLOADS.get(tag) == downloadTask) MODEL_DOWNLOADS.remove(tag);
+            }
+            runRecognition(model, strokes, language, bounds, callback);
+        }).addOnFailureListener(error -> {
+            synchronized (MODEL_DOWNLOADS) {
+                if (MODEL_DOWNLOADS.get(tag) == downloadTask) MODEL_DOWNLOADS.remove(tag);
+            }
+            postFailure(callback, error);
         });
     }
 
@@ -95,7 +200,10 @@ public final class HandwritingRecognitionEngine {
                 if (source == null || source.points == null || source.points.isEmpty()) continue;
                 Ink.Stroke.Builder strokeBuilder = Ink.Stroke.builder();
                 for (DrawingPoint point : source.points) {
-                    strokeBuilder.addPoint(Ink.Point.create(point.x, point.y, time));
+                    // ML Kit's writing area starts at (0, 0). Canvas strokes use page
+                    // coordinates, so normalize them to the selected ink bounds first.
+                    strokeBuilder.addPoint(Ink.Point.create(
+                            point.x - bounds.left, point.y - bounds.top, time));
                     time += 8L;
                 }
                 inkBuilder.addStroke(strokeBuilder.build());
