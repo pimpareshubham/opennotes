@@ -306,7 +306,7 @@ public final class HandwritingRecognitionEngine {
                         if (text.trim().isEmpty()) {
                             recognizer.close();
                             IllegalArgumentException error = new IllegalArgumentException(
-                                    "No handwriting text was recognized. Try writing one line at a time and check the selected language.");
+                                    "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink.");
                             if (firstError != null) error.addSuppressed(firstError);
                             postFailure(callback, error);
                         } else {
@@ -377,7 +377,9 @@ public final class HandwritingRecognitionEngine {
     }
 
     private static String languageTag(String language) {
-        if ("ENGLISH".equalsIgnoreCase(language)) return "en-US";
+        // The app and its target devices are used in India; ML Kit has a
+        // dedicated English (India) handwriting model as well as Marathi.
+        if ("ENGLISH".equalsIgnoreCase(language)) return "en-IN";
         // ML Kit's base-model catalog lists Hindi as "hi" (unlike Marathi's
         // regional model "mr-IN"). Requesting hi-IN can yield no identifier.
         if ("HINDI".equalsIgnoreCase(language)) return "hi";

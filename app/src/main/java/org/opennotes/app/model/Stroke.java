@@ -109,7 +109,9 @@ public class Stroke {
         float distance = (float) Math.hypot(dx, dy);
         float fromRadius = Math.max(0.5f, fromWidth * 0.5f);
         float toRadius = Math.max(0.5f, toWidth * 0.5f);
-        addPressureCircle(path, from.x, from.y, fromRadius);
+        // The previous segment already contributes its endpoint disk. Adding a
+        // disk at both ends of every segment doubled the number of path contours
+        // on long fountain/brush strokes without changing their visible outline.
         addPressureCircle(path, to.x, to.y, toRadius);
         if (distance < 0.001f) return;
 

@@ -24,6 +24,7 @@ import android.view.Display;
 import android.util.LongSparseArray;
 
 import androidx.annotation.Nullable;
+import androidx.input.motionprediction.MotionEventPredictor;
 
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.DrawingTool;
@@ -45,12 +46,16 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class CanvasView extends View {
     private static final float STROKE_GRID_CELL_SIZE = 512f;
     private static final long MAX_STROKE_GRID_CELLS = 64L;
     private static final long MAX_VISIBLE_GRID_CELLS = 128L;
     private static final int LASER_FADE_BUCKETS = 8;
+    private static final ExecutorService RECOGNITION_PREPROCESSOR =
+            Executors.newSingleThreadExecutor();
 
     public interface OnCanvasChangeListener {
         void onCanvasChanged();
@@ -95,6 +100,19 @@ public class CanvasView extends View {
     private float smoothedX = 0f;
     private float smoothedY = 0f;
     private float smoothedPressure = 0.5f;
+    private float previousRawX;
+    private float previousRawY;
+    private float filteredVelocityX;
+    private float filteredVelocityY;
+    private long previousRawTimeMillis = -1L;
+    private MotionEventPredictor motionEventPredictor;
+    private boolean predictorStreamValid;
+    private boolean hasPredictedInkPoint;
+    private float predictedInkX;
+    private float predictedInkY;
+    private float predictedInkPressure = 0.5f;
+    private final Path predictedInkPath = new Path();
+    private final Paint predictedInkPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
     private ShapeItem.Type currentShapeType = ShapeItem.Type.RECTANGLE;
 
     // Laser pointer presentation mode (ephemeral glowing trail)
@@ -175,6 +193,52 @@ public class CanvasView extends View {
         List<Stroke> prevStrokes;
         List<ShapeItem> prevShapes;
         List<TextItem> prevTexts;
+        List<TextItem> convertedTexts;
+    }
+
+    private static final class StrokeLineSample {
+        final Stroke stroke;
+        final int sourceIndex;
+        final RectF bounds;
+        final float centerY;
+
+        StrokeLineSample(Stroke stroke, int sourceIndex, RectF bounds) {
+            this.stroke = stroke;
+            this.sourceIndex = sourceIndex;
+            this.bounds = bounds;
+            this.centerY = bounds.centerY();
+        }
+    }
+
+    private static final class StrokeLineGroup {
+        final List<StrokeLineSample> samples = new ArrayList<>();
+        final RectF bounds = new RectF();
+        final List<Stroke> strokes = new ArrayList<>();
+        private float centerSum;
+        private int centerCount;
+
+        void add(StrokeLineSample sample) {
+            if (samples.isEmpty()) bounds.set(sample.bounds);
+            else bounds.union(sample.bounds);
+            samples.add(sample);
+            centerSum += sample.centerY;
+            centerCount++;
+        }
+
+        float center() {
+            return centerCount == 0 ? 0f : centerSum / centerCount;
+        }
+    }
+
+    private static final class RecognizedStrokeLine {
+        final List<Stroke> strokes;
+        final org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result;
+
+        RecognizedStrokeLine(List<Stroke> strokes,
+                             org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result) {
+            this.strokes = strokes;
+            this.result = result;
+        }
     }
 
     private final Deque<ActionRecord> undoStack = new ArrayDeque<>();
@@ -220,6 +284,13 @@ public class CanvasView extends View {
 
     private void init() {
         scroller = new OverScroller(getContext());
+        try {
+            motionEventPredictor = MotionEventPredictor.newInstance(this);
+        } catch (RuntimeException ignored) {
+            // Input prediction is an optional visual enhancement. The actual
+            // MotionEvent path remains fully functional if a device has no provider.
+            motionEventPredictor = null;
+        }
         for (int i = 0; i < laserFadePaths.length; i++) {
             laserFadePaths[i] = new Path();
         }
@@ -304,6 +375,10 @@ public class CanvasView extends View {
         selectionHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         selectionHandlePaint.setStyle(Paint.Style.FILL);
         selectionHandlePaint.setColor(0xFF38BDF8);
+
+        predictedInkPaint.setStyle(Paint.Style.STROKE);
+        predictedInkPaint.setStrokeCap(Paint.Cap.ROUND);
+        predictedInkPaint.setStrokeJoin(Paint.Join.ROUND);
 
         // Neon Laser Presentation Tool
         laserGlowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -707,43 +782,190 @@ public class CanvasView extends View {
         final List<Stroke> requestedStrokes = new ArrayList<>(strokesToConvert);
         final Page requestedPage = currentPage;
         final int textColor = currentColor;
-        final String preContext = recognitionPreContext(requestedPage, requestedStrokes);
+        RECOGNITION_PREPROCESSOR.execute(() -> {
+            List<StrokeLineGroup> lines = groupStrokesIntoLines(requestedStrokes);
+            post(() -> {
+                if (currentPage != requestedPage) return;
+                if (lines.isEmpty()) {
+                    org.opennotes.app.util.ErrorDialog.show(getContext(),
+                            "Could not convert handwriting (your ink was kept)",
+                            new IllegalArgumentException("No usable handwriting points were found."));
+                    return;
+                }
+                recognizeStrokeLine(requestedPage, lines, 0, new ArrayList<>(),
+                        textColor, letUserChooseCandidate);
+            });
+        });
+    }
+
+    /** Recognize each visual writing line independently; ML Kit's writing-area hint is single-line. */
+    private void recognizeStrokeLine(Page requestedPage, List<StrokeLineGroup> lines, int index,
+                                     List<RecognizedStrokeLine> recognized,
+                                     int textColor, boolean reviewBeforeReplacing) {
+        if (currentPage != requestedPage) return;
+        if (index >= lines.size()) {
+            if (recognized.isEmpty()) return;
+            if (reviewBeforeReplacing) {
+                showRecognitionReview(requestedPage, recognized, textColor);
+            } else {
+                List<String> acceptedText = new ArrayList<>();
+                for (RecognizedStrokeLine line : recognized) acceptedText.add(line.result.text);
+                applyRecognizedText(requestedPage, recognized, textColor, acceptedText);
+            }
+            return;
+        }
+
+        StrokeLineGroup line = lines.get(index);
         org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
-                getContext(), requestedStrokes, beautifyLanguage, preContext,
+                getContext(), line.strokes, beautifyLanguage,
+                recognitionPreContext(requestedPage, line.strokes),
                 new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
                     @Override
-                    public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult res) {
-                        if (currentPage != requestedPage || res == null || res.text.trim().isEmpty()) return;
-                        final String selectedFontKey;
-                        if (beautifyFontKey != null && !beautifyFontKey.isEmpty()) {
-                            selectedFontKey = beautifyFontKey;
-                        } else {
-                            selectedFontKey = "ENGLISH".equalsIgnoreCase(res.language)
-                                    ? org.opennotes.app.util.TypefaceManager.FONT_CAVEAT
-                                    : org.opennotes.app.util.TypefaceManager.FONT_KALAM;
+                    public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result) {
+                        if (currentPage != requestedPage) return;
+                        if (result == null || result.text.trim().isEmpty()) {
+                            org.opennotes.app.util.ErrorDialog.show(getContext(),
+                                    "Could not convert handwriting (your ink was kept)",
+                                    new IllegalArgumentException("The recognizer returned an empty line."));
+                            return;
                         }
-                        if (letUserChooseCandidate && res.alternatives.size() > 1) {
-                            CharSequence[] candidates = res.alternatives.toArray(new String[0]);
-                            new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
-                                    .setTitle("Choose recognized text")
-                                    .setItems(candidates, (dialog, which) -> applyRecognizedText(
-                                            requestedPage, requestedStrokes, res, textColor,
-                                            selectedFontKey, candidates[which].toString()))
-                                    .setNegativeButton("Keep handwriting", null)
-                                    .show();
-                        } else {
-                            applyRecognizedText(requestedPage, requestedStrokes, res,
-                                    textColor, selectedFontKey, res.text);
-                        }
+                        recognized.add(new RecognizedStrokeLine(line.strokes, result));
+                        recognizeStrokeLine(requestedPage, lines, index + 1, recognized,
+                                textColor, reviewBeforeReplacing);
                     }
 
                     @Override
                     public void onFailure(Exception error) {
-                        // Keep the user's ink unchanged and show the complete diagnostic.
+                        // Keep every source stroke intact if any line fails.
                         org.opennotes.app.util.ErrorDialog.show(getContext(),
                                 "Could not convert handwriting (your ink was kept)", error);
                     }
                 });
+    }
+
+    private static List<StrokeLineGroup> groupStrokesIntoLines(List<Stroke> strokes) {
+        List<StrokeLineSample> samples = new ArrayList<>();
+        List<Float> heights = new ArrayList<>();
+        for (int i = 0; i < strokes.size(); i++) {
+            Stroke stroke = strokes.get(i);
+            if (stroke == null) continue;
+            RectF bounds = recognitionBounds(stroke);
+            if (bounds == null || bounds.width() < 0.5f && bounds.height() < 0.5f) continue;
+            samples.add(new StrokeLineSample(stroke, i, bounds));
+            heights.add(Math.max(1f, bounds.height()));
+        }
+        if (samples.isEmpty()) return new ArrayList<>();
+
+        Collections.sort(heights);
+        int heightPercentile = Math.min(heights.size() - 1,
+                (int) Math.ceil((heights.size() - 1) * 0.8f));
+        float typicalStrokeHeight = heights.get(heightPercentile);
+        // Use an upper percentile so short Devanagari headline/matra strokes
+        // do not get split away from the taller body strokes on the same row.
+        float lineTolerance = Math.max(12f, typicalStrokeHeight * 0.85f);
+        Collections.sort(samples, (left, right) -> Float.compare(left.centerY, right.centerY));
+
+        List<StrokeLineGroup> groups = new ArrayList<>();
+        for (StrokeLineSample sample : samples) {
+            // Samples are already sorted top-to-bottom. A new row can only
+            // match the last open cluster, avoiding a quadratic page scan.
+            StrokeLineGroup current = groups.isEmpty() ? null : groups.get(groups.size() - 1);
+            if (current == null || Math.abs(sample.centerY - current.center()) > lineTolerance) {
+                current = new StrokeLineGroup();
+                groups.add(current);
+            }
+            current.add(sample);
+        }
+
+        Collections.sort(groups, (left, right) -> Float.compare(left.bounds.top, right.bounds.top));
+        for (StrokeLineGroup group : groups) {
+            Collections.sort(group.samples, (left, right) -> Integer.compare(left.sourceIndex, right.sourceIndex));
+            for (StrokeLineSample sample : group.samples) group.strokes.add(sample.stroke);
+        }
+        return groups;
+    }
+
+    private static RectF recognitionBounds(Stroke stroke) {
+        List<DrawingPoint> points = stroke == null ? null : stroke.getRecognitionPoints();
+        if (points == null || points.isEmpty()) return null;
+        RectF bounds = new RectF();
+        boolean found = false;
+        for (DrawingPoint point : points) {
+            if (point == null || Float.isNaN(point.x) || Float.isNaN(point.y)
+                    || Float.isInfinite(point.x) || Float.isInfinite(point.y)) continue;
+            if (!found) {
+                bounds.set(point.x, point.y, point.x, point.y);
+                found = true;
+            } else bounds.union(point.x, point.y);
+        }
+        return found ? bounds : null;
+    }
+
+    private void showRecognitionReview(Page requestedPage,
+                                       List<RecognizedStrokeLine> lines, int textColor) {
+        if (currentPage != requestedPage) return;
+        android.widget.LinearLayout rows = new android.widget.LinearLayout(getContext());
+        rows.setOrientation(android.widget.LinearLayout.VERTICAL);
+        int padding = dp(16);
+        rows.setPadding(padding, padding, padding, padding);
+        android.widget.TextView hint = new android.widget.TextView(getContext());
+        hint.setText("Review or edit each line. Your handwriting stays unchanged until you choose Convert.");
+        rows.addView(hint);
+
+        List<android.widget.EditText> editors = new ArrayList<>();
+        for (int i = 0; i < lines.size(); i++) {
+            RecognizedStrokeLine line = lines.get(i);
+            android.widget.TextView label = new android.widget.TextView(getContext());
+            label.setText("Line " + (i + 1));
+            label.setPadding(0, dp(14), 0, dp(4));
+            rows.addView(label);
+
+            android.widget.EditText editor = new android.widget.EditText(getContext());
+            editor.setSingleLine(true);
+            editor.setTextSize(17f);
+            editor.setText(line.result.text);
+            editor.setSelection(editor.length());
+            rows.addView(editor, new android.widget.LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                    android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
+            editors.add(editor);
+
+            if (line.result.alternatives.size() > 1) {
+                android.widget.Button alternatives = new android.widget.Button(getContext());
+                alternatives.setText("Other suggestions");
+                alternatives.setOnClickListener(view -> {
+                    CharSequence[] options = line.result.alternatives.toArray(new String[0]);
+                    new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
+                            .setTitle("Suggestions for this line")
+                            .setItems(options, (dialog, which) -> editor.setText(options[which]))
+                            .show();
+                });
+                rows.addView(alternatives);
+            }
+        }
+
+        android.widget.ScrollView scrollView = new android.widget.ScrollView(getContext());
+        scrollView.setFillViewport(true);
+        scrollView.addView(rows);
+        scrollView.setLayoutParams(new android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, dp(440)));
+
+        new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
+                .setTitle("Review handwriting conversion")
+                .setView(scrollView)
+                .setNegativeButton("Keep handwriting", null)
+                .setPositiveButton("Convert", (dialog, which) -> {
+                    List<String> reviewedText = new ArrayList<>();
+                    for (android.widget.EditText editor : editors) {
+                        reviewedText.add(editor.getText().toString().trim());
+                    }
+                    applyRecognizedText(requestedPage, lines, textColor, reviewedText);
+                })
+                .show();
+    }
+
+    private int dp(float value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     private String recognitionPreContext(Page page, List<Stroke> strokes) {
@@ -788,13 +1010,27 @@ public class CanvasView extends View {
         return context.toString();
     }
 
-    private void applyRecognizedText(Page requestedPage, List<Stroke> requestedStrokes,
-                                     org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult res,
-                                     int textColor, String fontKey, String text) {
-        if (currentPage != requestedPage || res == null || text == null || text.trim().isEmpty()) return;
+    private void applyRecognizedText(Page requestedPage, List<RecognizedStrokeLine> lines,
+                                     int textColor, List<String> reviewedText) {
+        if (currentPage != requestedPage || lines == null || reviewedText == null) return;
         List<Stroke> stillPresent = new ArrayList<>();
         Set<Stroke> requestedSet = Collections.newSetFromMap(new IdentityHashMap<>());
-        requestedSet.addAll(requestedStrokes);
+        List<TextItem> convertedTexts = new ArrayList<>();
+        for (int i = 0; i < lines.size() && i < reviewedText.size(); i++) {
+            String text = reviewedText.get(i);
+            RecognizedStrokeLine line = lines.get(i);
+            if (text == null || text.trim().isEmpty()) continue;
+            requestedSet.addAll(line.strokes);
+            org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result = line.result;
+            String fontKey = beautifyFontKey != null && !beautifyFontKey.isEmpty()
+                    ? beautifyFontKey
+                    : ("ENGLISH".equalsIgnoreCase(result.language)
+                    ? org.opennotes.app.util.TypefaceManager.FONT_CAVEAT
+                    : org.opennotes.app.util.TypefaceManager.FONT_KALAM);
+            convertedTexts.add(new TextItem(text.trim(), result.bounds.left,
+                    result.bounds.bottom - 4f, textColor, result.fontSize, fontKey));
+        }
+        if (requestedSet.isEmpty()) return;
         Iterator<Stroke> pageStrokes = requestedPage.strokes.iterator();
         while (pageStrokes.hasNext()) {
             Stroke stroke = pageStrokes.next();
@@ -804,14 +1040,13 @@ public class CanvasView extends View {
             }
         }
         if (stillPresent.isEmpty()) return;
-
-        TextItem textItem = new TextItem(text, res.bounds.left,
-                res.bounds.bottom - 4f, textColor, res.fontSize, fontKey);
-        requestedPage.texts.add(textItem);
+        requestedPage.texts.addAll(convertedTexts);
+        strokeSpatialIndexDirty = true;
         ActionRecord rec = new ActionRecord();
         rec.type = ActionRecord.Type.CONVERT_TO_TEXT;
         rec.prevStrokes = stillPresent;
-        rec.text = textItem;
+        rec.convertedTexts = convertedTexts;
+        if (!convertedTexts.isEmpty()) rec.text = convertedTexts.get(0);
         undoStack.push(rec);
         redoStack.clear();
         invalidate();
@@ -914,12 +1149,15 @@ public class CanvasView extends View {
                 currentPage.texts = new ArrayList<>(rec.prevTexts);
                 break;
             case CONVERT_TO_TEXT:
-                if (rec.text != null) {
+                if (rec.convertedTexts != null) {
+                    currentPage.texts.removeAll(rec.convertedTexts);
+                } else if (rec.text != null) {
                     currentPage.texts.remove(rec.text);
                 }
                 if (rec.prevStrokes != null) {
                     currentPage.strokes.addAll(rec.prevStrokes);
                 }
+                strokeSpatialIndexDirty = true;
                 break;
             default:
                 break;
@@ -961,9 +1199,12 @@ public class CanvasView extends View {
                 if (rec.prevStrokes != null) {
                     currentPage.strokes.removeAll(rec.prevStrokes);
                 }
-                if (rec.text != null) {
+                if (rec.convertedTexts != null) {
+                    currentPage.texts.addAll(rec.convertedTexts);
+                } else if (rec.text != null) {
                     currentPage.texts.add(rec.text);
                 }
+                strokeSpatialIndexDirty = true;
                 break;
             default:
                 break;
@@ -1227,6 +1468,7 @@ public class CanvasView extends View {
             // 6. Draw Active Stroke
             if (activeStroke != null) {
                 drawStroke(canvas, activeStroke);
+                drawPredictedInk(canvas);
             }
 
             // 7. Draw Live Shape Preview
@@ -1817,6 +2059,7 @@ public class CanvasView extends View {
     public boolean onTouchEvent(MotionEvent event) {
         int action = event.getActionMasked();
         int pointerCount = event.getPointerCount();
+        recordMotionEventForPrediction(event);
 
         if (action == MotionEvent.ACTION_DOWN) {
             setInputFrameRatePreference(true);
@@ -2065,6 +2308,7 @@ public class CanvasView extends View {
                 smoothedX = canvasX;
                 smoothedY = canvasY;
                 smoothedPressure = pressure;
+                resetStrokeFilter(canvasX, canvasY, event.getEventTime());
                 activeStroke = new Stroke(currentColor, currentStrokeWidth, currentTool);
                 activeStroke.addPoint(canvasX, canvasY, pressure, event.getEventTime());
                 activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
@@ -2075,15 +2319,13 @@ public class CanvasView extends View {
 
             case MotionEvent.ACTION_MOVE:
                 if (activeStroke != null) {
-                    // Use light, low-latency filtering. The quadratic stroke renderer
-                    // already smooths sample geometry; heavy filtering here makes the
-                    // ink trail the pen and creates a sharp tail when the pen lifts.
-                    float filterWeight = 1.0f - (strokeStabilization * 0.18f);
-                    float pressureFilterWeight = 1.0f - (strokeStabilization * 0.35f);
                     float dirtyMinX = lastTouchX;
                     float dirtyMinY = lastTouchY;
                     float dirtyMaxX = lastTouchX;
                     float dirtyMaxY = lastTouchY;
+                    boolean hadPredictedPoint = hasPredictedInkPoint;
+                    float previousPredictedX = predictedInkX;
+                    float previousPredictedY = predictedInkY;
                     int historySize = event.getHistorySize();
                     for (int i = 0; i < historySize; i++) {
                         float histRawX = event.getHistoricalX(i);
@@ -2095,9 +2337,8 @@ public class CanvasView extends View {
                         activeStroke.addRecognitionPoint(histX, histY, historicalPressure,
                                 event.getHistoricalEventTime(i));
 
-                        smoothedX = smoothedX + (histX - smoothedX) * filterWeight;
-                        smoothedY = smoothedY + (histY - smoothedY) * filterWeight;
-                        smoothedPressure += (historicalPressure - smoothedPressure) * pressureFilterWeight;
+                        filterStrokeSample(histX, histY, historicalPressure,
+                                event.getHistoricalEventTime(i));
                         activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure,
                                 event.getHistoricalEventTime(i));
                         dirtyMinX = Math.min(dirtyMinX, smoothedX);
@@ -2105,9 +2346,7 @@ public class CanvasView extends View {
                         dirtyMaxX = Math.max(dirtyMaxX, smoothedX);
                         dirtyMaxY = Math.max(dirtyMaxY, smoothedY);
                     }
-                    smoothedX = smoothedX + (canvasX - smoothedX) * filterWeight;
-                    smoothedY = smoothedY + (canvasY - smoothedY) * filterWeight;
-                    smoothedPressure += (pressure - smoothedPressure) * pressureFilterWeight;
+                    filterStrokeSample(canvasX, canvasY, pressure, event.getEventTime());
 
                     activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
                     activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure, event.getEventTime());
@@ -2119,6 +2358,19 @@ public class CanvasView extends View {
                     lastTouchY = smoothedY;
 
                     ensureContentHeight(canvasY);
+                    updatePredictedInk(event, primaryToolType);
+                    if (hadPredictedPoint) {
+                        dirtyMinX = Math.min(dirtyMinX, previousPredictedX);
+                        dirtyMinY = Math.min(dirtyMinY, previousPredictedY);
+                        dirtyMaxX = Math.max(dirtyMaxX, previousPredictedX);
+                        dirtyMaxY = Math.max(dirtyMaxY, previousPredictedY);
+                    }
+                    if (hasPredictedInkPoint) {
+                        dirtyMinX = Math.min(dirtyMinX, predictedInkX);
+                        dirtyMinY = Math.min(dirtyMinY, predictedInkY);
+                        dirtyMaxX = Math.max(dirtyMaxX, predictedInkX);
+                        dirtyMaxY = Math.max(dirtyMaxY, predictedInkY);
+                    }
                     invalidateStrokeBounds(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY,
                             activeStroke.width);
                 }
@@ -2126,13 +2378,11 @@ public class CanvasView extends View {
 
             case MotionEvent.ACTION_UP:
                 if (activeStroke != null) {
-                    // Ease the final sample toward the actual pen-up location instead
-                    // of appending a raw point after filtered points. This prevents
-                    // the disconnected-looking tail that creates shoe-shaped ends.
-                    float endWeight = 1.0f - (strokeStabilization * 0.06f);
-                    smoothedX += (canvasX - smoothedX) * endWeight;
-                    smoothedY += (canvasY - smoothedY) * endWeight;
-                    smoothedPressure += (pressure - smoothedPressure) * 0.65f;
+                    // Finish at the real pen-up point. Filtered coordinates are only
+                    // for the visible outline; recognition always gets raw samples.
+                    smoothedX = canvasX;
+                    smoothedY = canvasY;
+                    smoothedPressure = pressure;
                     activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
                     activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure, event.getEventTime());
 
@@ -2185,12 +2435,123 @@ public class CanvasView extends View {
                         }
                     }
                     activeStroke = null;
+                    hasPredictedInkPoint = false;
                     invalidate();
                 }
                 return true;
         }
 
         return super.onTouchEvent(event);
+    }
+
+    private void resetStrokeFilter(float x, float y, long timeMillis) {
+        previousRawX = x;
+        previousRawY = y;
+        previousRawTimeMillis = timeMillis;
+        filteredVelocityX = 0f;
+        filteredVelocityY = 0f;
+    }
+
+    /** Time-based One Euro filtering: stable at slow speeds and responsive on fast strokes. */
+    private void filterStrokeSample(float x, float y, float pressure, long timeMillis) {
+        long elapsedMillis = previousRawTimeMillis < 0L
+                ? 8L : Math.max(1L, Math.min(50L, timeMillis - previousRawTimeMillis));
+        float dt = elapsedMillis / 1000f;
+        float derivativeAlpha = lowPassAlpha(dt, 1.0f);
+        float velocityX = (x - previousRawX) * scaleFactor / dt;
+        float velocityY = (y - previousRawY) * scaleFactor / dt;
+        filteredVelocityX += (velocityX - filteredVelocityX) * derivativeAlpha;
+        filteredVelocityY += (velocityY - filteredVelocityY) * derivativeAlpha;
+
+        float minimumCutoff = 5.5f - strokeStabilization * 2.5f;
+        float speedResponsiveness = 0.015f + (1f - strokeStabilization) * 0.055f;
+        float cutoffX = minimumCutoff + speedResponsiveness * Math.abs(filteredVelocityX);
+        float cutoffY = minimumCutoff + speedResponsiveness * Math.abs(filteredVelocityY);
+        smoothedX += (x - smoothedX) * lowPassAlpha(dt, cutoffX);
+        smoothedY += (y - smoothedY) * lowPassAlpha(dt, cutoffY);
+        smoothedPressure += (pressure - smoothedPressure) * lowPassAlpha(dt, 10f);
+
+        previousRawX = x;
+        previousRawY = y;
+        previousRawTimeMillis = Math.max(previousRawTimeMillis, timeMillis);
+    }
+
+    private float lowPassAlpha(float dt, float cutoffHz) {
+        float safeCutoff = Math.max(0.1f, cutoffHz);
+        float tau = 1f / (2f * (float) Math.PI * safeCutoff);
+        return dt / (dt + tau);
+    }
+
+    private void recordMotionEventForPrediction(MotionEvent event) {
+        int action = event.getActionMasked();
+        if (action == MotionEvent.ACTION_DOWN) {
+            predictorStreamValid = false;
+            hasPredictedInkPoint = false;
+            try {
+                motionEventPredictor = MotionEventPredictor.newInstance(this);
+            } catch (RuntimeException ignored) {
+                motionEventPredictor = null;
+            }
+        }
+        if (motionEventPredictor != null) {
+            try {
+                motionEventPredictor.record(event);
+                if (action == MotionEvent.ACTION_DOWN) predictorStreamValid = true;
+            } catch (IllegalArgumentException ignored) {
+                // A vendor may split/cancel streams unusually. Drop only the
+                // prediction; never drop or alter the real input event.
+                predictorStreamValid = false;
+                hasPredictedInkPoint = false;
+                try {
+                    motionEventPredictor = MotionEventPredictor.newInstance(this);
+                } catch (RuntimeException unavailable) {
+                    motionEventPredictor = null;
+                }
+            }
+        }
+        if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            predictorStreamValid = false;
+            hasPredictedInkPoint = false;
+        }
+    }
+
+    private void updatePredictedInk(MotionEvent event, int toolType) {
+        hasPredictedInkPoint = false;
+        if (toolType != MotionEvent.TOOL_TYPE_STYLUS || !predictorStreamValid
+                || motionEventPredictor == null) return;
+        MotionEvent prediction = null;
+        try {
+            prediction = motionEventPredictor.predict();
+            if (prediction == null || prediction.getPointerCount() == 0
+                    || prediction.getToolType(0) != MotionEvent.TOOL_TYPE_STYLUS) return;
+            long horizon = prediction.getEventTime() - event.getEventTime();
+            float dx = prediction.getX() - event.getX();
+            float dy = prediction.getY() - event.getY();
+            float maxDistance = 40f * getResources().getDisplayMetrics().density;
+            if (horizon <= 0L || horizon > 40L || (dx * dx + dy * dy) > maxDistance * maxDistance) return;
+            predictedInkX = (prediction.getX() - panOffsetX) / scaleFactor;
+            predictedInkY = (prediction.getY() - panOffsetY) / scaleFactor + viewportOffsetY;
+            predictedInkPressure = normalizeInputPressure(prediction.getPressure(), toolType);
+            hasPredictedInkPoint = true;
+        } catch (RuntimeException ignored) {
+            hasPredictedInkPoint = false;
+        } finally {
+            if (prediction != null) prediction.recycle();
+        }
+    }
+
+    /** Draw a short, disposable predicted tail. It is never appended to Stroke.points. */
+    private void drawPredictedInk(Canvas canvas) {
+        if (!hasPredictedInkPoint || activeStroke == null || activeStroke.points.isEmpty()) return;
+        DrawingPoint last = activeStroke.points.get(activeStroke.points.size() - 1);
+        predictedInkPath.reset();
+        predictedInkPath.moveTo(last.x, last.y);
+        predictedInkPath.lineTo(predictedInkX, predictedInkY);
+        float pressureWidth = activeStroke.width * (0.6f + predictedInkPressure * 0.8f);
+        predictedInkPaint.setColor(activeStroke.color);
+        predictedInkPaint.setAlpha(activeStroke.tool == DrawingTool.HIGHLIGHTER ? 150 : 230);
+        predictedInkPaint.setStrokeWidth(Math.max(1f, pressureWidth));
+        canvas.drawPath(predictedInkPath, predictedInkPaint);
     }
 
     /** Invalidate only the screen patch changed by the most recent ink samples. */
@@ -2218,6 +2579,7 @@ public class CanvasView extends View {
         lassoPath.reset();
         lassoPoints.clear();
         laserTrail.clear();
+        hasPredictedInkPoint = false;
         if (movedSelection) {
             if (!selectedStrokes.isEmpty()) strokeSpatialIndexDirty = true;
             notifyChange();
@@ -2248,6 +2610,8 @@ public class CanvasView extends View {
     @Override
     protected void onDetachedFromWindow() {
         setInputFrameRatePreference(false);
+        predictorStreamValid = false;
+        hasPredictedInkPoint = false;
         super.onDetachedFromWindow();
     }
 
