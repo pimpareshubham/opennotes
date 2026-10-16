@@ -15,7 +15,7 @@ import java.util.List;
 
 public class NotesDbHelper extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "opennotes.db";
-    private static final int DATABASE_VERSION = 2;
+    private static final int DATABASE_VERSION = 3;
 
     // Notebooks table
     public static final String TABLE_NOTEBOOKS = "notebooks";
@@ -105,6 +105,65 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 db.execSQL("ALTER TABLE " + TABLE_PAGES + " ADD COLUMN " + COL_PAGE_CANVAS_HEIGHT + " REAL DEFAULT 0;");
             } catch (Exception ignored) {}
         }
+        if (oldVersion < 3) {
+            removeUntouchedSeedNotebook(db);
+        }
+    }
+
+    /** Remove the old auto-created sample only when it still has its untouched default page. */
+    private void removeUntouchedSeedNotebook(SQLiteDatabase db) {
+        List<Long> candidateIds = new ArrayList<>();
+        Cursor notebooks = db.query(TABLE_NOTEBOOKS, new String[]{COL_NB_ID},
+                COL_NB_TITLE + "=? AND " + COL_NB_FOLDER + "=? AND "
+                        + COL_NB_COVER_COLOR + "=? AND " + COL_NB_TEMPLATE + "=? AND "
+                        + COL_NB_DEFAULT_BG_COLOR + "=? AND " + COL_NB_DEFAULT_IS_INFINITE + "=0 AND "
+                        + COL_NB_PAGE_COUNT + "=1 AND " + COL_NB_FAVORITE + "=0",
+                new String[]{"11 PI", "Work", String.valueOf(0xFF1E1E24), "RULED",
+                        String.valueOf(0xFF121214)},
+                null, null, null);
+        if (notebooks == null) return;
+        try {
+            while (notebooks.moveToNext()) candidateIds.add(notebooks.getLong(0));
+        } finally {
+            notebooks.close();
+        }
+
+        for (long notebookId : candidateIds) {
+            Cursor pages = db.query(TABLE_PAGES,
+                    new String[]{COL_PAGE_INDEX, COL_PAGE_TEMPLATE, COL_PAGE_BG_COLOR,
+                            COL_PAGE_IS_INFINITE, COL_PAGE_CANVAS_HEIGHT, COL_PAGE_STROKES,
+                            COL_PAGE_SHAPES, COL_PAGE_TEXTS},
+                    COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)},
+                    null, null, null);
+            if (pages == null) continue;
+
+            boolean untouched;
+            try {
+                untouched = pages.moveToFirst()
+                        && pages.getInt(0) == 0
+                        && "RULED".equals(pages.getString(1))
+                        && pages.getInt(2) == 0xFF121214
+                        && pages.getInt(3) == 0
+                        && pages.getFloat(4) <= 0f
+                        && isEmptyJsonArray(pages.getString(5))
+                        && isEmptyJsonArray(pages.getString(6))
+                        && isEmptyJsonArray(pages.getString(7))
+                        && !pages.moveToNext();
+            } finally {
+                pages.close();
+            }
+
+            if (untouched) {
+                db.delete(TABLE_PAGES, COL_PAGE_NB_ID + "=?",
+                        new String[]{String.valueOf(notebookId)});
+                db.delete(TABLE_NOTEBOOKS, COL_NB_ID + "=?",
+                        new String[]{String.valueOf(notebookId)});
+            }
+        }
+    }
+
+    private static boolean isEmptyJsonArray(String value) {
+        return value == null || value.trim().isEmpty() || "[]".equals(value.trim());
     }
 
     // --- Notebook Operations ---

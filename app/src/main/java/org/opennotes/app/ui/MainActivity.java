@@ -109,7 +109,6 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             btnToggleViewMode.setImageResource(isGridView ? R.drawable.ic_view_grid : R.drawable.ic_view_list);
         });
 
-        ensureSampleNotebook();
     }
 
     @Override
@@ -117,20 +116,6 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         super.onResume();
         FullscreenMode.apply(this);
         loadNotebooks();
-    }
-
-    private void ensureSampleNotebook() {
-        notebookIoExecutor.execute(() -> {
-            List<Notebook> existing = dbHelper.getAllNotebooks(null, false, null);
-            if (existing.isEmpty()) {
-                Notebook welcomeNb = new Notebook("11 PI", 0xFF1E1E24, PaperTemplate.RULED);
-                welcomeNb.folder = "Work";
-                dbHelper.insertNotebook(welcomeNb);
-            }
-            runOnUiThread(() -> {
-                if (!isFinishing() && !isDestroyed()) loadNotebooks();
-            });
-        });
     }
 
     private void setupRecyclerView() {
