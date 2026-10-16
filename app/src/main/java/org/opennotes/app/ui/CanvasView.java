@@ -158,6 +158,7 @@ public class CanvasView extends View {
     private Stroke activeStroke;
     private int activeInputPointerId = -1;
     private boolean scaleDetectorSuppressedForStylus;
+    private long lastStylusActiveTime = 0L;
     private float lastTouchX, lastTouchY;
 
     // Pan / Scroll physics
@@ -209,7 +210,7 @@ public class CanvasView extends View {
 
     // Undo / Redo history
     private static class ActionRecord {
-        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, ADD_IMAGE, REMOVE_IMAGE, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT }
+        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, REMOVE_TEXT, ADD_IMAGE, REMOVE_IMAGE, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT }
         Type type;
         Stroke stroke;
         ShapeItem shape;
@@ -248,43 +249,7 @@ public class CanvasView extends View {
         }
     }
 
-    private static final class StrokeLineSample {
-        final Stroke stroke;
-        final int sourceIndex;
-        final RectF bounds;
-        final float centerY;
-        final float lineCoordinate;
 
-        StrokeLineSample(Stroke stroke, int sourceIndex, RectF bounds,
-                         float baselineAngleRadians) {
-            this.stroke = stroke;
-            this.sourceIndex = sourceIndex;
-            this.bounds = bounds;
-            this.centerY = bounds.centerY();
-            this.lineCoordinate = -((float) Math.sin(baselineAngleRadians)) * bounds.centerX()
-                    + ((float) Math.cos(baselineAngleRadians)) * centerY;
-        }
-    }
-
-    private static final class StrokeLineGroup {
-        final List<StrokeLineSample> samples = new ArrayList<>();
-        final RectF bounds = new RectF();
-        final List<Stroke> strokes = new ArrayList<>();
-        private float centerSum;
-        private int centerCount;
-
-        void add(StrokeLineSample sample) {
-            if (samples.isEmpty()) bounds.set(sample.bounds);
-            else bounds.union(sample.bounds);
-            samples.add(sample);
-            centerSum += sample.lineCoordinate;
-            centerCount++;
-        }
-
-        float center() {
-            return centerCount == 0 ? 0f : centerSum / centerCount;
-        }
-    }
 
     private static final class RecognizedStrokeLine {
         final List<Stroke> strokes;
@@ -399,6 +364,7 @@ public class CanvasView extends View {
         scaleDetector = new ScaleGestureDetector(getContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScaleBegin(ScaleGestureDetector detector) {
+                if (detector.getCurrentSpan() < dp(45f)) return false;
                 scaleGestureStartSpan = detector.getCurrentSpan();
                 scaleGestureConfirmed = false;
                 return true;
@@ -408,7 +374,7 @@ public class CanvasView extends View {
             public boolean onScale(ScaleGestureDetector detector) {
                 if (isViewportLocked) return true;
                 if (!scaleGestureConfirmed) {
-                    float intentionalSpanChange = dp(10f);
+                    float intentionalSpanChange = dp(22f);
                     if (Math.abs(detector.getCurrentSpan() - scaleGestureStartSpan)
                             < intentionalSpanChange) return true;
                     scaleGestureConfirmed = true;
@@ -687,6 +653,10 @@ public class CanvasView extends View {
 
     public void setAutoBeautifyEnabled(boolean enabled) {
         this.isAutoBeautifyEnabled = enabled;
+        if (!enabled) {
+            this.isAutoConvertTextEnabled = false;
+            cancelPendingAutoConversion();
+        }
     }
 
     public boolean isAutoBeautifyEnabled() {
@@ -840,7 +810,10 @@ public class CanvasView extends View {
     private final List<Stroke> pendingAutoConvertStrokes = new ArrayList<>();
     private final Handler autoConvertHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoConvertRunnable = () -> {
-        if (!isAutoConvertTextEnabled || pendingAutoConvertStrokes.isEmpty()) return;
+        if (!isAutoConvertTextEnabled || !isAutoBeautifyEnabled || pendingAutoConvertStrokes.isEmpty()) {
+            pendingAutoConvertStrokes.clear();
+            return;
+        }
         if (currentPage == null) {
             pendingAutoConvertStrokes.clear();
             return;
@@ -922,23 +895,54 @@ public class CanvasView extends View {
         final Page requestedPage = currentPage;
         final int textColor = currentColor;
         RECOGNITION_PREPROCESSOR.execute(() -> {
-            List<StrokeLineGroup> lines = groupStrokesIntoLines(requestedStrokes);
+            // Step 1: Detect shapes & arrows and separate them from handwriting strokes
+            org.opennotes.app.ai.HandwrittenShapeDetector.DetectionResult shapeRes =
+                    org.opennotes.app.ai.HandwrittenShapeDetector.detectAndSeparateShapes(requestedStrokes);
+
             post(() -> {
                 if (currentPage != requestedPage) return;
-                if (lines.isEmpty()) {
-                    android.widget.Toast.makeText(getContext(),
-                            "No usable handwriting strokes found. Your ink was kept.",
-                            android.widget.Toast.LENGTH_SHORT).show();
+                // If any arrows or shapes were detected, convert them to crisp vector shapes
+                if (shapeRes.hasShapes()) {
+                    List<Stroke> shapeStrokes = new ArrayList<>(requestedStrokes);
+                    shapeStrokes.removeAll(shapeRes.remainingHandwritingStrokes);
+                    currentPage.strokes.removeAll(shapeStrokes);
+                    currentPage.shapes.addAll(shapeRes.shapes);
+                    ActionRecord rec = new ActionRecord();
+                    rec.type = ActionRecord.Type.ADD_SHAPE;
+                    if (!shapeRes.shapes.isEmpty()) rec.shape = shapeRes.shapes.get(0);
+                    undoStack.push(rec);
+                    redoStack.clear();
+                    invalidate();
+                    notifyChange();
+                }
+
+                // If no remaining handwriting strokes, we're done!
+                if (shapeRes.remainingHandwritingStrokes.isEmpty()) {
                     return;
                 }
-                recognizeStrokeLine(requestedPage, lines, 0, new ArrayList<>(),
-                        textColor, letUserChooseCandidate);
+
+                // Step 2: Segment remaining handwriting strokes into natural lines
+                // (invariant to slope, slant, or writing angle!)
+                RECOGNITION_PREPROCESSOR.execute(() -> {
+                    List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines =
+                            org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(shapeRes.remainingHandwritingStrokes);
+                    post(() -> {
+                        if (currentPage != requestedPage) return;
+                        if (lines.isEmpty()) {
+                            return;
+                        }
+                        recognizeStrokeLine(requestedPage, lines, 0, new ArrayList<>(),
+                                textColor, letUserChooseCandidate);
+                    });
+                });
             });
         });
     }
 
     /** Recognize each visual writing line independently; ML Kit's writing-area hint is single-line. */
-    private void recognizeStrokeLine(Page requestedPage, List<StrokeLineGroup> lines, int index,
+    private void recognizeStrokeLine(Page requestedPage,
+                                     List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines,
+                                     int index,
                                      List<RecognizedStrokeLine> recognized,
                                      int textColor, boolean reviewBeforeReplacing) {
         if (currentPage != requestedPage) return;
@@ -954,7 +958,7 @@ public class CanvasView extends View {
             return;
         }
 
-        StrokeLineGroup line = lines.get(index);
+        org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine line = lines.get(index);
         org.opennotes.app.util.HandwritingRecognitionEngine.Callback callback =
                 new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
                     @Override
@@ -998,167 +1002,6 @@ public class CanvasView extends View {
             org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
                     getContext(), line.strokes, beautifyLanguage, preContext, callback);
         }
-    }
-
-    private static List<StrokeLineGroup> groupStrokesIntoLines(List<Stroke> strokes) {
-        List<StrokeLineSample> samples = new ArrayList<>();
-        List<Float> heights = new ArrayList<>();
-        for (int i = 0; i < strokes.size(); i++) {
-            Stroke stroke = strokes.get(i);
-            if (stroke == null) continue;
-            RectF bounds = recognitionBounds(stroke);
-            if (bounds == null || bounds.width() < 0.5f && bounds.height() < 0.5f) continue;
-            samples.add(new StrokeLineSample(stroke, i, bounds, 0f));
-            heights.add(Math.max(1f, bounds.height()));
-        }
-        if (samples.isEmpty()) return new ArrayList<>();
-
-        Collections.sort(heights);
-        int heightPercentile = Math.min(heights.size() - 1,
-                (int) Math.ceil((heights.size() - 1) * 0.8f));
-        float initialTypicalStrokeHeight = heights.get(heightPercentile);
-        float baselineAngle = estimateWritingBaselineAngle(samples, initialTypicalStrokeHeight);
-        if (Math.abs(baselineAngle) > 0.001f) {
-            for (int i = 0; i < samples.size(); i++) {
-                StrokeLineSample sample = samples.get(i);
-                samples.set(i, new StrokeLineSample(sample.stroke, sample.sourceIndex,
-                        sample.bounds, baselineAngle));
-            }
-        }
-        heights.clear();
-        float sinAngle = Math.abs((float) Math.sin(baselineAngle));
-        float cosAngle = Math.abs((float) Math.cos(baselineAngle));
-        for (StrokeLineSample sample : samples) {
-            heights.add(Math.max(1f, sample.bounds.width() * sinAngle
-                    + sample.bounds.height() * cosAngle));
-        }
-        Collections.sort(heights);
-        heightPercentile = Math.min(heights.size() - 1,
-                (int) Math.ceil((heights.size() - 1) * 0.8f));
-        float typicalStrokeHeight = heights.get(heightPercentile);
-
-        // Check if all strokes represent a single writing row / big continuous line
-        RectF overallBounds = new RectF();
-        for (StrokeLineSample sample : samples) {
-            if (overallBounds.isEmpty()) overallBounds.set(sample.bounds);
-            else overallBounds.union(sample.bounds);
-        }
-        if (overallBounds.height() <= Math.max(180f, typicalStrokeHeight * 2.8f)) {
-            // Keep the entire big line / continuous sentence unified without artificial splits
-            StrokeLineGroup singleGroup = new StrokeLineGroup();
-            for (StrokeLineSample sample : samples) singleGroup.add(sample);
-            Collections.sort(singleGroup.samples, (left, right) -> Integer.compare(left.sourceIndex, right.sourceIndex));
-            for (StrokeLineSample sample : singleGroup.samples) singleGroup.strokes.add(sample.stroke);
-            return Collections.singletonList(singleGroup);
-        }
-
-        float lineTolerance = Math.max(28f, typicalStrokeHeight * 1.5f);
-        Collections.sort(samples, (left, right) -> Float.compare(
-                left.lineCoordinate, right.lineCoordinate));
-
-        List<StrokeLineGroup> groups = new ArrayList<>();
-        for (StrokeLineSample sample : samples) {
-            StrokeLineGroup matchingGroup = null;
-            for (StrokeLineGroup g : groups) {
-                if (Math.abs(sample.lineCoordinate - g.center()) <= lineTolerance) {
-                    matchingGroup = g;
-                    break;
-                }
-            }
-            if (matchingGroup == null) {
-                matchingGroup = new StrokeLineGroup();
-                groups.add(matchingGroup);
-            }
-            matchingGroup.add(sample);
-        }
-
-        Collections.sort(groups, (left, right) -> Float.compare(left.bounds.top, right.bounds.top));
-        for (StrokeLineGroup group : groups) {
-            Collections.sort(group.samples, (left, right) -> Integer.compare(left.sourceIndex, right.sourceIndex));
-            for (StrokeLineSample sample : group.samples) group.strokes.add(sample.stroke);
-        }
-        return groups;
-    }
-
-    /** Estimate repeated line slant from local windows so page height does not
-     * dominate the estimate when a page contains many separate writing rows. */
-    private static float estimateWritingBaselineAngle(List<StrokeLineSample> samples,
-                                                       float typicalStrokeHeight) {
-        if (samples.size() < 3) {
-            List<Stroke> few = new ArrayList<>();
-            for (StrokeLineSample s : samples) few.add(s.stroke);
-            return org.opennotes.app.util.HandwritingRecognitionEngine.estimateWritingAngleDegrees(few);
-        }
-        final int windowSize = Math.min(12, samples.size());
-        final int step = Math.max(1, windowSize / 2);
-        List<Float> angles = new ArrayList<>();
-        for (int start = 0; start + 2 < samples.size(); start += step) {
-            int end = Math.min(samples.size(), start + windowSize);
-            if (end - start < 3) break;
-            double meanX = 0d;
-            double meanY = 0d;
-            float minX = Float.MAX_VALUE;
-            float maxX = -Float.MAX_VALUE;
-            float minY = Float.MAX_VALUE;
-            float maxY = -Float.MAX_VALUE;
-            for (int i = start; i < end; i++) {
-                StrokeLineSample sample = samples.get(i);
-                float x = sample.bounds.centerX();
-                float y = sample.centerY;
-                meanX += x;
-                meanY += y;
-                minX = Math.min(minX, x);
-                maxX = Math.max(maxX, x);
-                minY = Math.min(minY, y);
-                maxY = Math.max(maxY, y);
-            }
-            float windowWidth = maxX - minX;
-            float windowHeight = maxY - minY;
-            if (windowWidth < typicalStrokeHeight * 1.5f
-                    && windowHeight > typicalStrokeHeight * 2.5f) {
-                angles.add(90f);
-                continue;
-            }
-            if (maxX - minX < Math.max(36f, typicalStrokeHeight * 2.5f)) continue;
-            meanX /= end - start;
-            meanY /= end - start;
-            double xx = 0d;
-            double yy = 0d;
-            double xy = 0d;
-            for (int i = start; i < end; i++) {
-                StrokeLineSample sample = samples.get(i);
-                double dx = sample.bounds.centerX() - meanX;
-                double dy = sample.centerY - meanY;
-                xx += dx * dx;
-                yy += dy * dy;
-                xy += dx * dy;
-            }
-            double angle = 0.5d * Math.atan2(2d * xy, xx - yy);
-            float degrees = (float) Math.toDegrees(angle);
-            if (degrees > 80f && windowWidth > windowHeight * 0.6f) degrees -= 90f;
-            else if (degrees < -80f && windowWidth > windowHeight * 0.6f) degrees += 90f;
-            if (Math.abs(degrees) <= 60f) angles.add(degrees);
-        }
-        if (angles.isEmpty()) return 0f;
-        Collections.sort(angles);
-        float median = angles.get(angles.size() / 2);
-        return Math.abs(median) < 7f ? 0f : median;
-    }
-
-    private static RectF recognitionBounds(Stroke stroke) {
-        List<DrawingPoint> points = stroke == null ? null : stroke.getRecognitionPoints();
-        if (points == null || points.isEmpty()) return null;
-        RectF bounds = new RectF();
-        boolean found = false;
-        for (DrawingPoint point : points) {
-            if (point == null || Float.isNaN(point.x) || Float.isNaN(point.y)
-                    || Float.isInfinite(point.x) || Float.isInfinite(point.y)) continue;
-            if (!found) {
-                bounds.set(point.x, point.y, point.x, point.y);
-                found = true;
-            } else bounds.union(point.x, point.y);
-        }
-        return found ? bounds : null;
     }
 
     private void showRecognitionReview(Page requestedPage,
@@ -1364,8 +1207,33 @@ public class CanvasView extends View {
                     : ("ENGLISH".equalsIgnoreCase(result.language)
                     ? org.opennotes.app.util.TypefaceManager.FONT_CAVEAT
                     : org.opennotes.app.util.TypefaceManager.FONT_KALAM);
-            convertedTexts.add(new TextItem(text.trim(), result.bounds.left,
-                    result.bounds.bottom - 4f, textColor, result.fontSize, fontKey));
+
+            String fullText = text.trim();
+            String[] words = fullText.split("\\s+");
+            textPaint.setTextSize(result.fontSize);
+            textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
+            float spaceWidth = textPaint.measureText(" ");
+            float curX = result.bounds.left;
+            float baselineY = result.bounds.bottom - 4f;
+
+            if (words.length <= 1) {
+                convertedTexts.add(new TextItem(fullText, curX, baselineY, textColor, result.fontSize, fontKey));
+            } else {
+                float totalWordsWidth = 0f;
+                float[] wordWidths = new float[words.length];
+                for (int w = 0; w < words.length; w++) {
+                    wordWidths[w] = textPaint.measureText(words[w]);
+                    totalWordsWidth += wordWidths[w];
+                }
+                float availableWidth = Math.max(result.bounds.width(), totalWordsWidth + (words.length - 1) * spaceWidth);
+                float computedSpace = Math.max(spaceWidth, (availableWidth - totalWordsWidth) / (words.length - 1));
+                computedSpace = Math.min(computedSpace, spaceWidth * 2.5f);
+
+                for (int w = 0; w < words.length; w++) {
+                    convertedTexts.add(new TextItem(words[w], curX, baselineY, textColor, result.fontSize, fontKey));
+                    curX += wordWidths[w] + computedSpace;
+                }
+            }
         }
         if (requestedSet.isEmpty()) return;
         Iterator<Stroke> pageStrokes = requestedPage.strokes.iterator();
@@ -1483,6 +1351,9 @@ public class CanvasView extends View {
             case ADD_TEXT:
                 currentPage.texts.remove(rec.text);
                 break;
+            case REMOVE_TEXT:
+                currentPage.texts.add(rec.text);
+                break;
             case MOVE_SELECTION:
                 translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts, rec.movedImages,
                         -rec.moveDx, -rec.moveDy);
@@ -1552,6 +1423,9 @@ public class CanvasView extends View {
                 break;
             case ADD_TEXT:
                 currentPage.texts.add(rec.text);
+                break;
+            case REMOVE_TEXT:
+                currentPage.texts.remove(rec.text);
                 break;
             case MOVE_SELECTION:
                 translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts, rec.movedImages,
@@ -2514,6 +2388,45 @@ public class CanvasView extends View {
         return !selectedStrokes.isEmpty();
     }
 
+    public List<Stroke> getSelectedStrokes() {
+        return new ArrayList<>(selectedStrokes);
+    }
+
+    public List<TextItem> getSelectedTexts() {
+        return new ArrayList<>(selectedTexts);
+    }
+
+    public void replaceSelectionWithText(String newText) {
+        if (currentPage == null || newText == null || newText.trim().isEmpty()) return;
+        if (!selectedTexts.isEmpty()) {
+            TextItem target = selectedTexts.get(0);
+            target.text = newText.trim();
+            target.markDirty();
+            clearSelection();
+            invalidate();
+            notifyChange();
+            return;
+        }
+        if (!selectedStrokes.isEmpty()) {
+            RectF bounds = getStrokesBounds(selectedStrokes);
+            currentPage.strokes.removeAll(selectedStrokes);
+            float fontSize = Math.max(24f, bounds.height() * 0.75f);
+            String fontKey = beautifyFontKey != null ? beautifyFontKey : "KALAM";
+            TextItem item = new TextItem(newText.trim(), bounds.left, bounds.bottom - 4f, currentColor, fontSize, fontKey);
+            currentPage.texts.add(item);
+            ActionRecord rec = new ActionRecord();
+            rec.type = ActionRecord.Type.CONVERT_TO_TEXT;
+            rec.prevStrokes = new ArrayList<>(selectedStrokes);
+            rec.convertedTexts = Collections.singletonList(item);
+            rec.text = item;
+            undoStack.push(rec);
+            redoStack.clear();
+            clearSelection();
+            invalidate();
+            notifyChange();
+        }
+    }
+
     public boolean hasSystemClipboardText() {
         try {
             android.content.ClipboardManager cb = (android.content.ClipboardManager)
@@ -2978,6 +2891,11 @@ public class CanvasView extends View {
 
         int stylusPointerIndex = findStylusPointerIndex(event);
         boolean hasStylusPointer = stylusPointerIndex >= 0;
+        if (hasStylusPointer) {
+            lastStylusActiveTime = SystemClock.uptimeMillis();
+        }
+        boolean isWithinStylusCooldown = (SystemClock.uptimeMillis() - lastStylusActiveTime) < 800L;
+        boolean isPalm = isPalmTouch(event);
         boolean mixedStylusTouch = hasStylusPointer && pointerCount > 1;
         boolean canceledPointerUp = action == MotionEvent.ACTION_POINTER_UP
                 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
@@ -2985,8 +2903,8 @@ public class CanvasView extends View {
 
         // Android can report a palm as a finger before canceling it. Never let
         // a finger touching during a live stylus stroke start a pinch detector.
-        // Two-finger zoom remains available whenever the stylus is not touching.
-        if (mixedStylusTouch || canceledPointerUp) {
+        // Also suppress scale detector during stylus writing cooldown or when palm is detected.
+        if (mixedStylusTouch || canceledPointerUp || isWithinStylusCooldown || isPalm) {
             if (!scaleDetectorSuppressedForStylus) cancelScaleGestureDetector(event);
             scaleDetectorSuppressedForStylus = true;
         } else {
@@ -3028,10 +2946,15 @@ public class CanvasView extends View {
             hasPredictedInkPoint = false;
         }
 
+        // Reject accidental palm touches when not using stylus
+        if (!hasStylusPointer && isPalm) {
+            return true;
+        }
+
         // Stylus-only mode rejects all finger drawing, but allows a real
-        // two-finger navigation gesture when the stylus is not in contact.
+        // two-finger navigation gesture when the stylus is not in contact and outside cooldown.
         if (isStylusOnly && !hasStylusPointer) {
-            if (pointerCount >= 2 && !isViewportLocked) {
+            if (pointerCount >= 2 && !isViewportLocked && !isWithinStylusCooldown && !isPalm) {
                 if (activeStroke != null) {
                     cancelInProgressGesture();
                 }
@@ -3040,9 +2963,8 @@ public class CanvasView extends View {
             return true;
         }
 
-        // Fingers navigate when no stylus is touching. When pen and hand
-        // contacts overlap, keep the stylus stroke and ignore the palm points.
-        if (!hasStylusPointer && pointerCount >= 2 && !isViewportLocked) {
+        // Fingers navigate when no stylus is touching and not during cooldown/palm.
+        if (!hasStylusPointer && !isWithinStylusCooldown && !isPalm && pointerCount >= 2 && !isViewportLocked) {
             if (activeStroke != null) {
                 cancelInProgressGesture();
             }
@@ -3276,20 +3198,30 @@ public class CanvasView extends View {
         // 7. Stroke Drawing (Fountain, Pen, Brush, Highlighter, Pencil)
         switch (action) {
             case MotionEvent.ACTION_DOWN:
-                // Word Completion Detection:
-                // If user was handwriting a word and now starts a new stroke that advances spatially
-                // (next word to right > 25px, or next line below > 15px, or jump elsewhere),
-                // the previous word is completed! Convert it immediately.
-                if (isAutoConvertTextEnabled && !pendingAutoConvertStrokes.isEmpty()) {
-                    RectF lastWordBounds = getStrokesBounds(pendingAutoConvertStrokes);
-                    if (!lastWordBounds.isEmpty()) {
-                        boolean isNewWord = (canvasX > lastWordBounds.right + 25f)
-                                || (canvasY > lastWordBounds.bottom + 15f)
-                                || (canvasY < lastWordBounds.top - 20f)
-                                || (canvasX < lastWordBounds.left - 40f);
-                        if (isNewWord) {
-                            autoConvertHandler.removeCallbacks(autoConvertRunnable);
-                            autoConvertRunnable.run();
+                // User is actively writing: pause/reset any pending auto-convert timer immediately
+                if (isAutoConvertTextEnabled && isAutoBeautifyEnabled) {
+                    autoConvertHandler.removeCallbacks(autoConvertRunnable);
+                    // Smart Word Completion:
+                    // If the user previously wrote strokes, check if they gave enough space
+                    // between the previous word and this new stroke (space > wordGapThreshold,
+                    // next line below, or jump). If so, the previous word is completed!
+                    if (!pendingAutoConvertStrokes.isEmpty()) {
+                        RectF lastWordBounds = getStrokesBounds(pendingAutoConvertStrokes);
+                        if (!lastWordBounds.isEmpty() && hasEnoughInkForAutoConversion(pendingAutoConvertStrokes)) {
+                            float estHeight = Math.max(35f, lastWordBounds.height());
+                            float wordGapThreshold = Math.max(60f, estHeight * 0.85f);
+                            float lineJumpThreshold = Math.max(50f, estHeight * 0.85f);
+                            boolean isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
+                            boolean isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold)
+                                    || (canvasX < lastWordBounds.left - 50f && canvasY > lastWordBounds.top + 25f);
+                            boolean isDistantJump = (canvasY < lastWordBounds.top - 60f)
+                                    || (canvasX < lastWordBounds.left - 100f);
+
+                            if (isNextWord || isNextLine || isDistantJump) {
+                                List<Stroke> completedWord = new ArrayList<>(pendingAutoConvertStrokes);
+                                pendingAutoConvertStrokes.clear();
+                                convertStrokesToText(completedWord);
+                            }
                         }
                     }
                 }
@@ -3418,10 +3350,10 @@ public class CanvasView extends View {
                         notifyChange();
 
                         // Real-time automatic handwriting to beautified font conversion
-                        if (isAutoConvertTextEnabled) {
+                        if (isAutoConvertTextEnabled && isAutoBeautifyEnabled) {
                             pendingAutoConvertStrokes.add(activeStroke);
                             autoConvertHandler.removeCallbacks(autoConvertRunnable);
-                            autoConvertHandler.postDelayed(autoConvertRunnable, 750);
+                            autoConvertHandler.postDelayed(autoConvertRunnable, 1800);
                         }
                     }
                     activeStroke = null;
@@ -3642,6 +3574,10 @@ public class CanvasView extends View {
                     twoFingerStartSpan = (float) Math.hypot(
                             twoFingerStartX1 - twoFingerStartX0,
                             twoFingerStartY1 - twoFingerStartY0);
+                    if (twoFingerStartSpan < dp(45f)) {
+                        manualTwoFingerPanConfirmed = false;
+                        break;
+                    }
                     manualTwoFingerPanConfirmed = false;
                     initialPanOffsetX = panOffsetX;
                     initialPanOffsetY = panOffsetY;
@@ -3694,6 +3630,19 @@ public class CanvasView extends View {
                     || toolType == MotionEvent.TOOL_TYPE_ERASER) return i;
         }
         return -1;
+    }
+
+    private boolean isPalmTouch(MotionEvent event) {
+        if (event == null) return false;
+        int count = event.getPointerCount();
+        for (int i = 0; i < count; i++) {
+            if (event.getToolType(i) == 5 /* TOOL_TYPE_PALM */) return true;
+            float touchMajor = event.getTouchMajor(i);
+            if (touchMajor > dp(65f)) return true;
+            float size = event.getSize(i);
+            if (size > 0.45f) return true;
+        }
+        return false;
     }
 
     private void cancelScaleGestureDetector(MotionEvent source) {
@@ -3954,8 +3903,31 @@ public class CanvasView extends View {
     }
 
     private void checkStrokeErasure(float touchX, float touchY) {
-        if (currentPage == null || currentPage.strokes.isEmpty()) return;
+        if (currentPage == null) return;
         float hitRadius = 35f / scaleFactor;
+
+        // Check text erasure first (so user can erase individual converted words)
+        if (currentPage.texts != null && !currentPage.texts.isEmpty()) {
+            for (int i = currentPage.texts.size() - 1; i >= 0; i--) {
+                TextItem item = currentPage.texts.get(i);
+                if (item == null) continue;
+                RectF b = item.getBounds();
+                if (touchX >= b.left - hitRadius && touchX <= b.right + hitRadius
+                        && touchY >= b.top - hitRadius && touchY <= b.bottom + hitRadius) {
+                    TextItem removed = currentPage.texts.remove(i);
+                    ActionRecord rec = new ActionRecord();
+                    rec.type = ActionRecord.Type.REMOVE_TEXT;
+                    rec.text = removed;
+                    undoStack.push(rec);
+                    redoStack.clear();
+                    invalidate();
+                    notifyChange();
+                    return;
+                }
+            }
+        }
+
+        if (currentPage.strokes.isEmpty()) return;
         eraserQueryBounds.set(touchX - hitRadius, touchY - hitRadius,
                 touchX + hitRadius, touchY + hitRadius);
         prepareVisibleStrokeIndices(eraserQueryBounds);

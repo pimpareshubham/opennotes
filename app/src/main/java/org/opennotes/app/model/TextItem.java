@@ -25,13 +25,20 @@ public class TextItem {
     }
 
     private transient android.graphics.RectF cachedBounds;
+    private static final android.graphics.Paint MEASURE_PAINT = new android.graphics.Paint();
+
     public void markDirty() {
         cachedBounds = null;
     }
+
     public android.graphics.RectF getBounds() {
         if (cachedBounds == null) {
-            float estimatedWidth = (text != null ? text.length() : 0) * (fontSize * 0.7f);
-            cachedBounds = new android.graphics.RectF(x - 10f, y - fontSize - 10f, x + estimatedWidth + 20f, y + 20f);
+            float width;
+            synchronized (MEASURE_PAINT) {
+                MEASURE_PAINT.setTextSize(fontSize);
+                width = MEASURE_PAINT.measureText(text != null ? text : "");
+            }
+            cachedBounds = new android.graphics.RectF(x - 4f, y - fontSize - 4f, x + width + 4f, y + 6f);
         }
         return cachedBounds;
     }

@@ -220,7 +220,7 @@ public class AppSettings {
     private static final String KEY_AUTO_CONVERT_TEXT = "pref_auto_convert_text";
 
     public boolean isAutoConvertTextEnabled() {
-        return prefs.getBoolean(KEY_AUTO_CONVERT_TEXT, true);
+        return prefs.getBoolean(KEY_AUTO_CONVERT_TEXT, false);
     }
 
     public void setAutoConvertTextEnabled(boolean enabled) {

@@ -182,7 +182,7 @@ public class UserHandwritingModel {
     }
 
     public synchronized int getLearnedCount() {
-        return personalizedReplacements.size() + learnedPrototypes.size();
+        return personalizedReplacements.size() + learnedPrototypes.size() + customVocabulary.size();
     }
 
     public synchronized void clearLearnedData() {

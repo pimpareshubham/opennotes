@@ -514,6 +514,18 @@
             android:background="@drawable/bg_tool_button_active"
             android:contentDescription="Auto Beautify Handwriting" />
 
+        <!-- Teach Handwriting AI Tool -->
+        <ImageView
+            android:id="@+id/btnTeachHandwriting"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
+            android:padding="7dp"
+            android:layout_marginStart="3dp"
+            android:src="@drawable/ic_teach"
+            app:tint="@color/text_primary"
+            android:background="?selectableItemBackgroundBorderless"
+            android:contentDescription="Teach My Handwriting Style" />
+
         <View
             android:layout_width="1dp"
             android:layout_height="22dp"
@@ -1152,6 +1164,29 @@
             android:clickable="true"
             android:focusable="true"
             android:contentDescription="Convert selected handwriting to text" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="18dp"
+            android:background="@color/divider" />
+
+        <!-- Teach Handwriting Style (🎓 Teach) -->
+        <TextView
+            android:id="@+id/btnLassoTeach"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
+            android:gravity="center"
+            android:paddingHorizontal="10dp"
+            android:text="🎓 Teach"
+            android:textColor="#10B981"
+            android:textSize="12sp"
+            android:textStyle="bold"
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Teach my handwriting to AI" />
 
         <View
             android:layout_width="1dp"

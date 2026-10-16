@@ -53,6 +53,8 @@ import org.opennotes.app.model.Notebook;
 import org.opennotes.app.model.Page;
 import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
+import org.opennotes.app.model.Stroke;
+import org.opennotes.app.model.TextItem;
 import org.opennotes.app.util.ErrorDialog;
 import org.opennotes.app.util.HandwritingRecognitionEngine;
 import org.opennotes.app.util.TypefaceManager;
@@ -108,6 +110,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private ImageView toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso;
     private ImageView toolLaser;
     private ImageView btnAutoBeautify;
+    private ImageView btnTeachHandwriting;
     private FrameLayout btnColorPicker;
     private View colorPreviewCircle;
     private ImageView toolShape, toolText, toolMedia;
@@ -145,7 +148,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     // Floating Contextual Lasso Action Bar
     private HorizontalScrollView lassoFloatingActionBar;
-    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoBeautify, btnLassoConvertText;
+    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoBeautify, btnLassoConvertText, btnLassoTeach;
 
     // Fullscreen Zen mode
     private ImageView btnExitFullscreen;
@@ -293,6 +296,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         toolMedia = findViewById(R.id.toolMedia);
         toolLaser = findViewById(R.id.toolLaser);
         btnAutoBeautify = findViewById(R.id.btnAutoBeautify);
+        btnTeachHandwriting = findViewById(R.id.btnTeachHandwriting);
 
         btnExport = findViewById(R.id.btnExport);
         btnPageOverview = findViewById(R.id.btnPageOverview);
@@ -352,6 +356,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnLassoColor = findViewById(R.id.btnLassoColor);
         btnLassoBeautify = findViewById(R.id.btnLassoBeautify);
         btnLassoConvertText = findViewById(R.id.btnLassoConvertText);
+        btnLassoTeach = findViewById(R.id.btnLassoTeach);
 
         btnExitFullscreen = findViewById(R.id.btnExitFullscreen);
 
@@ -436,7 +441,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         int[] drawingTools = {
                 R.id.toolFountain, R.id.toolPen, R.id.toolEraser, R.id.toolLasso,
                 R.id.toolHighlighter, R.id.toolPencil, R.id.toolShape, R.id.toolText,
-                R.id.toolMedia, R.id.toolLaser, R.id.btnAutoBeautify
+                R.id.toolMedia, R.id.toolLaser, R.id.btnAutoBeautify, R.id.btnTeachHandwriting
         };
         for (int id : drawingTools) setViewSize(findViewById(id), toolButtonSize, toolButtonSize);
 
@@ -673,22 +678,38 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             btnAutoBeautify.setOnClickListener(v -> {
                 v.animate().scaleX(1.3f).scaleY(1.3f).setDuration(120)
                         .withEndAction(() -> v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start()).start();
-                boolean newState = !canvasView.isAutoBeautifyEnabled();
+                boolean currentState = canvasView.isAutoBeautifyEnabled() || canvasView.isAutoConvertTextEnabled();
+                boolean newState = !currentState;
                 canvasView.setAutoBeautifyEnabled(newState);
-                if (appSettings != null) appSettings.setAutoBeautifyEnabled(newState);
+                canvasView.setAutoConvertTextEnabled(newState);
+                if (!newState) {
+                    canvasView.cancelPendingAutoConversion();
+                }
+                if (appSettings != null) {
+                    appSettings.setAutoBeautifyEnabled(newState);
+                    appSettings.setAutoConvertTextEnabled(newState);
+                }
                 updateAutoBeautifyToolbarIcon(newState);
                 String lang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
                 String langDisplay = "MARATHI".equalsIgnoreCase(lang) ? "मराठी" : ("HINDI".equalsIgnoreCase(lang) ? "हिन्दी" : "English");
                 if (newState) {
                     Toast.makeText(this, "✨ Auto-Beautification ON (" + langDisplay + ")\nLong-press icon to customize language & font", Toast.LENGTH_SHORT).show();
                 } else {
-                    Toast.makeText(this, "Auto-Beautification OFF", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Auto-Beautification & Conversion OFF", Toast.LENGTH_SHORT).show();
                 }
             });
 
             btnAutoBeautify.setOnLongClickListener(v -> {
                 showAutoBeautifySettingsDialog();
                 return true;
+            });
+        }
+
+        if (btnTeachHandwriting != null) {
+            btnTeachHandwriting.setOnClickListener(v -> {
+                v.animate().scaleX(1.3f).scaleY(1.3f).setDuration(120)
+                        .withEndAction(() -> v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start()).start();
+                showInteractiveTeachDialog();
             });
         }
 
@@ -869,6 +890,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 Toast.makeText(this, "✍️ Converted to font text!", Toast.LENGTH_SHORT).show();
             });
         }
+        if (btnLassoTeach != null) {
+            btnLassoTeach.setOnClickListener(v -> showInteractiveTeachDialog());
+        }
 
         btnExitFullscreen.setOnClickListener(v -> setZenFullscreen(false));
     }
@@ -953,7 +977,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         canvasView.setBeautifyFontKey(savedFont);
         canvasView.setShirorekhaSnapEnabled(savedShirorekha);
         canvasView.setBeautifySmoothing(savedSmoothing);
-        canvasView.setAutoConvertTextEnabled(appSettings.isAutoConvertTextEnabled());
+        canvasView.setAutoConvertTextEnabled(savedBeautify && appSettings.isAutoConvertTextEnabled());
         updateAutoBeautifyToolbarIcon(savedBeautify);
     }
 
@@ -1529,7 +1553,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         Button btnTeach = new Button(this);
         btnTeach.setText("🎓 Teach Word or Cursive Style");
-        btnTeach.setOnClickListener(v -> showTeachHandwritingDialog("", null));
+        btnTeach.setOnClickListener(v -> showInteractiveTeachDialog());
         layout.addView(btnTeach);
 
         Button btnExport = new Button(this);
@@ -1959,7 +1983,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             String lang = selectedLang[0];
             String font = selectedFont[0];
             boolean shirorekha = checkShirorekhaSnap.isChecked();
-            boolean autoConvert = (checkAutoConvertText != null && checkAutoConvertText.isChecked());
+            boolean autoConvert = enabled && (checkAutoConvertText != null && checkAutoConvertText.isChecked());
 
             if (appSettings != null) {
                 appSettings.setAutoBeautifyEnabled(enabled);
@@ -1974,6 +1998,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             canvasView.setBeautifyFontKey(font);
             canvasView.setShirorekhaSnapEnabled(shirorekha);
             canvasView.setAutoConvertTextEnabled(autoConvert);
+            if (!enabled || !autoConvert) {
+                canvasView.cancelPendingAutoConversion();
+            }
 
             updateAutoBeautifyToolbarIcon(enabled);
             dialog.dismiss();
@@ -2273,6 +2300,87 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
 
         builder.show();
+    }
+
+    private void showInteractiveTeachDialog() {
+        View view = LayoutInflater.from(this).inflate(R.layout.dialog_teach_handwriting, null);
+
+        TextView textSelectionNotice = view.findViewById(R.id.textTeachSelectionNotice);
+        EditText editWrongText = view.findViewById(R.id.editTeachWrongText);
+        EditText editIntendedText = view.findViewById(R.id.editTeachIntendedText);
+        TextView btnPadUndo = view.findViewById(R.id.btnTeachPadUndo);
+        TextView btnPadClear = view.findViewById(R.id.btnTeachPadClear);
+        DrawingPadView teachDrawingPad = view.findViewById(R.id.teachDrawingPad);
+        TextView textModelStats = view.findViewById(R.id.textTeachModelStats);
+        TextView btnExport = view.findViewById(R.id.btnExportProfile);
+        TextView btnImport = view.findViewById(R.id.btnImportProfile);
+        Button btnCancel = view.findViewById(R.id.btnTeachCancel);
+        Button btnSave = view.findViewById(R.id.btnTeachSave);
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(view)
+                .create();
+
+        UserHandwritingModel model = UserHandwritingModel.getInstance(this);
+        int learnedCount = model.getLearnedCount();
+        textModelStats.setText("Currently learned: " + learnedCount + " user styles & words. Adaptive neural matching active.");
+
+        // Check canvas selection to prefill
+        List<TextItem> selectedTexts = canvasView.getSelectedTexts();
+        List<Stroke> selectedStrokes = canvasView.getSelectedStrokes();
+        boolean hasSelectedText = !selectedTexts.isEmpty();
+        boolean hasSelectedStrokes = !selectedStrokes.isEmpty();
+
+        if (hasSelectedText) {
+            String misrecognized = selectedTexts.get(0).text;
+            editWrongText.setText(misrecognized);
+            editIntendedText.setText(misrecognized);
+            editIntendedText.selectAll();
+            textSelectionNotice.setVisibility(View.VISIBLE);
+            textSelectionNotice.setText("💡 Selected text: \"" + misrecognized + "\" • Correct the text or redraw below.");
+        } else if (hasSelectedStrokes) {
+            textSelectionNotice.setVisibility(View.VISIBLE);
+            textSelectionNotice.setText("💡 Selected " + selectedStrokes.size() + " ink stroke(s) from your note. Redraw clearly or specify the correction.");
+        }
+
+        btnPadUndo.setOnClickListener(v -> teachDrawingPad.undo());
+        btnPadClear.setOnClickListener(v -> teachDrawingPad.clear());
+
+        btnExport.setOnClickListener(v -> {
+            dialog.dismiss();
+            exportProfileLauncher.launch("my_handwriting_profile.onhw");
+        });
+
+        btnImport.setOnClickListener(v -> {
+            dialog.dismiss();
+            importProfileLauncher.launch("*/*");
+        });
+
+        btnCancel.setOnClickListener(v -> dialog.dismiss());
+
+        btnSave.setOnClickListener(v -> {
+            String intended = editIntendedText.getText() != null ? editIntendedText.getText().toString().trim() : "";
+            if (intended.isEmpty()) {
+                Toast.makeText(this, "Please enter what you intended to write", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            String wrong = editWrongText.getText() != null ? editWrongText.getText().toString().trim() : "";
+
+            List<Stroke> padStrokes = teachDrawingPad.getStrokes();
+            List<Stroke> trainingStrokes = (!padStrokes.isEmpty()) ? padStrokes : selectedStrokes;
+
+            model.learnCorrection(wrong, intended, trainingStrokes);
+
+            // If user had content selected on canvas, update canvas directly
+            if (canvasView.hasSelection()) {
+                canvasView.replaceSelectionWithText(intended);
+            }
+
+            Toast.makeText(this, "🎓 AI learned your handwriting!\nSaved style for \"" + intended + "\"", Toast.LENGTH_SHORT).show();
+            dialog.dismiss();
+        });
+
+        dialog.show();
     }
 
     private void showVoiceRecorderDialog() {
