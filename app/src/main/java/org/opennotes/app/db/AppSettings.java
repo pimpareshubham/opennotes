@@ -242,4 +242,17 @@ public class AppSettings {
     public void setShownHandwritingModelSetup() {
         prefs.edit().putBoolean("pref_handwriting_model_setup_shown", true).apply();
     }
+
+    public boolean hasDismissedHandwritingModelSetupToday() {
+        long lastDismissed = prefs.getLong("pref_handwriting_model_dismissed_time", 0L);
+        return (System.currentTimeMillis() - lastDismissed) < (24 * 60 * 60 * 1000L);
+    }
+
+    public void setDismissedHandwritingModelSetupToday() {
+        prefs.edit().putLong("pref_handwriting_model_dismissed_time", System.currentTimeMillis()).apply();
+    }
+
+    public void clearDismissedHandwritingModelSetup() {
+        prefs.edit().remove("pref_handwriting_model_dismissed_time").apply();
+    }
 }

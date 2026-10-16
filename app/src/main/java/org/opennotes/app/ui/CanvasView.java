@@ -881,9 +881,9 @@ public class CanvasView extends View {
             post(() -> {
                 if (currentPage != requestedPage) return;
                 if (lines.isEmpty()) {
-                    org.opennotes.app.util.ErrorDialog.show(getContext(),
-                            "Could not convert handwriting (your ink was kept)",
-                            new IllegalArgumentException("No usable handwriting points were found."));
+                    android.widget.Toast.makeText(getContext(),
+                            "No usable handwriting strokes found. Your ink was kept.",
+                            android.widget.Toast.LENGTH_SHORT).show();
                     return;
                 }
                 recognizeStrokeLine(requestedPage, lines, 0, new ArrayList<>(),
@@ -916,9 +916,9 @@ public class CanvasView extends View {
                     public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result) {
                         if (currentPage != requestedPage) return;
                         if (result == null || result.text.trim().isEmpty()) {
-                            org.opennotes.app.util.ErrorDialog.show(getContext(),
-                                    "Could not convert handwriting (your ink was kept)",
-                                    new IllegalArgumentException("The recognizer returned an empty line."));
+                            android.widget.Toast.makeText(getContext(),
+                                    "Could not decipher handwriting on line " + (index + 1) + ". Your ink was kept.",
+                                    android.widget.Toast.LENGTH_SHORT).show();
                             return;
                         }
                         recognized.add(new RecognizedStrokeLine(line.strokes, result));
@@ -932,7 +932,12 @@ public class CanvasView extends View {
                         if (org.opennotes.app.util.HandwritingRecognitionEngine
                                 .isModelDownloadCancellation(error)) {
                             android.widget.Toast.makeText(getContext(),
-                                    "Recognition model not downloaded. Your ink is safe; download the language model to convert it.",
+                                    "Recognition cancelled. Your ink has been kept intact.",
+                                    android.widget.Toast.LENGTH_SHORT).show();
+                        } else if (org.opennotes.app.util.HandwritingRecognitionEngine
+                                .isEmptyRecognitionFailure(error)) {
+                            android.widget.Toast.makeText(getContext(),
+                                    "Could not decipher handwriting. Try writing a bit clearer or select another language.",
                                     android.widget.Toast.LENGTH_LONG).show();
                         } else {
                             org.opennotes.app.util.ErrorDialog.show(getContext(),
@@ -1019,7 +1024,11 @@ public class CanvasView extends View {
      * dominate the estimate when a page contains many separate writing rows. */
     private static float estimateWritingBaselineAngle(List<StrokeLineSample> samples,
                                                        float typicalStrokeHeight) {
-        if (samples.size() < 3) return 0f;
+        if (samples.size() < 3) {
+            List<Stroke> few = new ArrayList<>();
+            for (StrokeLineSample s : samples) few.add(s.stroke);
+            return org.opennotes.app.util.HandwritingRecognitionEngine.estimateWritingAngleDegrees(few);
+        }
         final int windowSize = Math.min(12, samples.size());
         final int step = Math.max(1, windowSize / 2);
         List<Float> angles = new ArrayList<>();

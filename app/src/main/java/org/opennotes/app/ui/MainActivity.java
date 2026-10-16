@@ -130,18 +130,28 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
 
     private void offerHandwritingModelSetup() {
         AppSettings settings = AppSettings.getInstance(this);
-        if (settings.hasShownHandwritingModelSetup() || isFinishing() || isDestroyed()) return;
-        settings.setShownHandwritingModelSetup();
-        new MaterialAlertDialogBuilder(this)
-                .setTitle("Set up handwriting recognition")
-                .setMessage("Download the English and Marathi handwriting models now (about 40 MB total). They are stored on this device, work offline after setup, and your handwriting is not uploaded.")
-                .setNegativeButton("Later", null)
-                .setPositiveButton("Download models", (dialog, which) -> {
-                    settings.setAcceptedHandwritingModelDownload("en-IN", true);
-                    settings.setAcceptedHandwritingModelDownload("mr-IN", true);
-                    startHandwritingModelDownloads();
-                })
-                .show();
+        settings.setAcceptedHandwritingModelDownload("en-IN", true);
+        settings.setAcceptedHandwritingModelDownload("mr-IN", true);
+        settings.setAcceptedHandwritingModelDownload("hi", true);
+
+        org.opennotes.app.util.HandwritingRecognitionEngine.checkModelsDownloaded(
+                getApplicationContext(), (englishReady, marathiReady) -> {
+                    if (englishReady && marathiReady) return;
+                    // Auto-download in background on first start without bothering the user for permission
+                    org.opennotes.app.util.HandwritingRecognitionEngine.downloadLanguageModel(
+                            getApplicationContext(), "ENGLISH", englishErr -> {
+                                org.opennotes.app.util.HandwritingRecognitionEngine.downloadLanguageModel(
+                                        getApplicationContext(), "MARATHI", marathiErr -> {
+                                            if (englishErr == null || marathiErr == null) {
+                                                if (!isFinishing() && !isDestroyed()) {
+                                                    Toast.makeText(MainActivity.this,
+                                                            "Offline handwriting recognition engine ready.",
+                                                            Toast.LENGTH_SHORT).show();
+                                                }
+                                            }
+                                        });
+                            });
+                });
     }
 
     private void startHandwritingModelDownloads() {
