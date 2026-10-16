@@ -40,6 +40,14 @@ public class AppSettings {
 
     private AppSettings(Context context) {
         prefs = context.getApplicationContext().getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+        // The original release defaulted real-time conversion off. Enable it once for
+        // existing installs so the handwriting conversion feature works after upgrade.
+        if (prefs.getInt("pref_auto_convert_default_migration", 0) < 1) {
+            prefs.edit()
+                    .putBoolean(KEY_AUTO_CONVERT_TEXT, true)
+                    .putInt("pref_auto_convert_default_migration", 1)
+                    .apply();
+        }
     }
 
     public static synchronized AppSettings getInstance(Context context) {
