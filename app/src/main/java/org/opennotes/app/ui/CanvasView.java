@@ -25,7 +25,7 @@ import android.view.Display;
 import android.util.LongSparseArray;
 
 import androidx.annotation.Nullable;
-import androidx.core.view.AccessibilityViewCommand;
+import androidx.core.view.accessibility.AccessibilityViewCommand;
 import androidx.core.view.ViewCompat;
 import androidx.input.motionprediction.MotionEventPredictor;
 
