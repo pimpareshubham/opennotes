@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -53,14 +54,15 @@ public final class HandwritingRecognitionEngine {
         public final String language;
         public final RectF bounds;
         public final float fontSize;
-        public final float confidence;
+        public final List<String> alternatives;
 
-        RecognitionResult(String text, String language, RectF bounds, float fontSize) {
+        RecognitionResult(String text, String language, RectF bounds, float fontSize,
+                          List<String> alternatives) {
             this.text = text;
             this.language = language;
             this.bounds = bounds;
             this.fontSize = fontSize;
-            this.confidence = 1f; // ML Kit does not expose text confidence scores.
+            this.alternatives = Collections.unmodifiableList(new ArrayList<>(alternatives));
         }
     }
 
@@ -239,7 +241,7 @@ public final class HandwritingRecognitionEngine {
             }
             Ink ink = inkBuilder.build();
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
-                    DigitalInkRecognizerOptions.builder(model).build());
+                    DigitalInkRecognizerOptions.builder(model).setMaxResultCount(5).build());
             RecognitionContext recognitionContext = RecognitionContext.builder()
                     .setWritingArea(new WritingArea(Math.max(1f, bounds.width()), Math.max(1f, bounds.height())))
                     .build();
@@ -250,7 +252,7 @@ public final class HandwritingRecognitionEngine {
                             recognizeWithoutWritingArea(recognizer, ink, language,
                                     bounds, callback, null);
                         } else {
-                            completeRecognition(recognizer, text, language, bounds, callback);
+                            completeRecognition(recognizer, result, language, bounds, callback);
                         }
                     })
                     .addOnFailureListener(error -> recognizeWithoutWritingArea(
@@ -275,7 +277,7 @@ public final class HandwritingRecognitionEngine {
                             if (firstError != null) error.addSuppressed(firstError);
                             postFailure(callback, error);
                         } else {
-                            completeRecognition(recognizer, text, language, bounds, callback);
+                            completeRecognition(recognizer, result, language, bounds, callback);
                         }
                     })
                     .addOnFailureListener(error -> {
@@ -290,20 +292,35 @@ public final class HandwritingRecognitionEngine {
         }
     }
 
-    private static String firstCandidate(com.google.mlkit.vision.digitalink.recognition.RecognitionResult result) {
+    private static String firstCandidate(com.google.mlkit.vision.digitalink.common.RecognitionResult result) {
         if (result == null || result.getCandidates().isEmpty()) return "";
         String text = result.getCandidates().get(0).getText();
         return text == null ? "" : text;
     }
 
-    private static void completeRecognition(DigitalInkRecognizer recognizer, String text,
+    private static void completeRecognition(DigitalInkRecognizer recognizer,
+                                            com.google.mlkit.vision.digitalink.common.RecognitionResult result,
                                             String language, RectF bounds, Callback callback) {
         try {
+            List<String> alternatives = new ArrayList<>();
+            for (com.google.mlkit.vision.digitalink.common.RecognitionCandidate candidate
+                    : result.getCandidates()) {
+                String candidateText = candidate.getText();
+                if (candidateText != null && !candidateText.trim().isEmpty()
+                        && !alternatives.contains(candidateText)) {
+                    alternatives.add(candidateText);
+                }
+            }
+            String text = alternatives.isEmpty() ? "" : alternatives.get(0);
+            if (text.isEmpty()) {
+                postFailure(callback, new IllegalArgumentException("The model returned no readable text."));
+                return;
+            }
             String lang = isLatin(language) ? "ENGLISH"
                     : ("HINDI".equalsIgnoreCase(language) ? "HINDI" : "MARATHI");
             float fontSize = Math.max(26f, Math.min(92f, bounds.height() * 0.85f));
             MAIN.post(() -> callback.onSuccess(
-                    new RecognitionResult(text, lang, new RectF(bounds), fontSize)));
+                    new RecognitionResult(text, lang, new RectF(bounds), fontSize, alternatives)));
         } finally {
             recognizer.close();
         }

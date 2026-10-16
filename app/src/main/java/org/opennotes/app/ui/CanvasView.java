@@ -653,11 +653,15 @@ public class CanvasView extends View {
 
     public void convertSelectionToText() {
         if (!hasSelection() || selectedStrokes.isEmpty()) return;
-        convertStrokesToText(new ArrayList<>(selectedStrokes));
+        convertStrokesToText(new ArrayList<>(selectedStrokes), true);
         clearSelection();
     }
 
     public void convertStrokesToText(List<Stroke> strokesToConvert) {
+        convertStrokesToText(strokesToConvert, false);
+    }
+
+    private void convertStrokesToText(List<Stroke> strokesToConvert, boolean letUserChooseCandidate) {
         if (currentPage == null || strokesToConvert == null || strokesToConvert.isEmpty()) return;
         final List<Stroke> requestedStrokes = new ArrayList<>(strokesToConvert);
         final Page requestedPage = currentPage;
@@ -668,30 +672,25 @@ public class CanvasView extends View {
                     @Override
                     public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult res) {
                         if (currentPage != requestedPage || res == null || res.text.trim().isEmpty()) return;
-                        List<Stroke> stillPresent = new ArrayList<>();
-                        for (Stroke stroke : requestedStrokes) {
-                            if (requestedPage.strokes.contains(stroke)) stillPresent.add(stroke);
-                        }
-                        if (stillPresent.isEmpty()) return;
-
                         String fontKey = beautifyFontKey;
                         if (fontKey == null || fontKey.isEmpty()) {
                             fontKey = "ENGLISH".equalsIgnoreCase(res.language)
                                     ? org.opennotes.app.util.TypefaceManager.FONT_CAVEAT
                                     : org.opennotes.app.util.TypefaceManager.FONT_KALAM;
                         }
-                        requestedPage.strokes.removeAll(stillPresent);
-                        TextItem textItem = new TextItem(res.text, res.bounds.left,
-                                res.bounds.bottom - 4f, textColor, res.fontSize, fontKey);
-                        requestedPage.texts.add(textItem);
-                        ActionRecord rec = new ActionRecord();
-                        rec.type = ActionRecord.Type.CONVERT_TO_TEXT;
-                        rec.prevStrokes = stillPresent;
-                        rec.text = textItem;
-                        undoStack.push(rec);
-                        redoStack.clear();
-                        invalidate();
-                        notifyChange();
+                        if (letUserChooseCandidate && res.alternatives.size() > 1) {
+                            CharSequence[] candidates = res.alternatives.toArray(new String[0]);
+                            new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
+                                    .setTitle("Choose recognized text")
+                                    .setItems(candidates, (dialog, which) -> applyRecognizedText(
+                                            requestedPage, requestedStrokes, res, textColor,
+                                            fontKey, candidates[which].toString()))
+                                    .setNegativeButton("Keep handwriting", null)
+                                    .show();
+                        } else {
+                            applyRecognizedText(requestedPage, requestedStrokes, res,
+                                    textColor, fontKey, res.text);
+                        }
                     }
 
                     @Override
@@ -706,6 +705,30 @@ public class CanvasView extends View {
                                 android.widget.Toast.LENGTH_LONG).show();
                     }
                 });
+    }
+
+    private void applyRecognizedText(Page requestedPage, List<Stroke> requestedStrokes,
+                                     org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult res,
+                                     int textColor, String fontKey, String text) {
+        if (currentPage != requestedPage || res == null || text == null || text.trim().isEmpty()) return;
+        List<Stroke> stillPresent = new ArrayList<>();
+        for (Stroke stroke : requestedStrokes) {
+            if (requestedPage.strokes.contains(stroke)) stillPresent.add(stroke);
+        }
+        if (stillPresent.isEmpty()) return;
+
+        requestedPage.strokes.removeAll(stillPresent);
+        TextItem textItem = new TextItem(text, res.bounds.left,
+                res.bounds.bottom - 4f, textColor, res.fontSize, fontKey);
+        requestedPage.texts.add(textItem);
+        ActionRecord rec = new ActionRecord();
+        rec.type = ActionRecord.Type.CONVERT_TO_TEXT;
+        rec.prevStrokes = stillPresent;
+        rec.text = textItem;
+        undoStack.push(rec);
+        redoStack.clear();
+        invalidate();
+        notifyChange();
     }
 
     public float getZoomPercent() {
