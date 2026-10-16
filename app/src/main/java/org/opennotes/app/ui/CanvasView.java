@@ -18,6 +18,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Build;
 import android.view.Display;
+import android.util.LongSparseArray;
 
 import androidx.annotation.Nullable;
 
@@ -31,11 +32,15 @@ import org.opennotes.app.model.TextItem;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.BitSet;
 import java.util.Collections;
 import java.util.Deque;
 import java.util.List;
 
 public class CanvasView extends View {
+    private static final float STROKE_GRID_CELL_SIZE = 512f;
+    private static final long MAX_STROKE_GRID_CELLS = 64L;
+    private static final long MAX_VISIBLE_GRID_CELLS = 128L;
 
     public interface OnCanvasChangeListener {
         void onCanvasChanged();
@@ -93,6 +98,12 @@ public class CanvasView extends View {
         }
     }
     private final List<LaserPoint> laserTrail = new ArrayList<>();
+    private Page spatialIndexPage;
+    private int spatialIndexStrokeCount;
+    private final LongSparseArray<List<Integer>> strokeSpatialGrid = new LongSparseArray<>();
+    private final List<Integer> oversizedStrokeIndices = new ArrayList<>();
+    private final BitSet visibleStrokeIndices = new BitSet();
+    private boolean strokeSpatialIndexDirty = true;
     private Paint laserGlowPaint;
     private Paint laserCorePaint;
     private Paint laserTipPaint;
@@ -303,6 +314,7 @@ public class CanvasView extends View {
 
     public void setPage(Page page) {
         this.currentPage = page;
+        strokeSpatialIndexDirty = true;
         if (page != null) {
             this.paperTemplate = page.template;
             this.pageBackgroundColor = page.backgroundColor != 0 ? page.backgroundColor : 0xFF121214;
@@ -490,6 +502,7 @@ public class CanvasView extends View {
         for (Stroke s : selectedStrokes) {
             applyAutoBeautification(s);
         }
+        strokeSpatialIndexDirty = true;
         invalidate();
         notifyChange();
     }
@@ -1021,6 +1034,94 @@ public class CanvasView extends View {
         if (viewportOffsetY > max) viewportOffsetY = max;
     }
 
+    private void prepareVisibleStrokeIndices(RectF viewport) {
+        if (currentPage == null || currentPage.strokes == null) {
+            visibleStrokeIndices.clear();
+            return;
+        }
+        ensureStrokeSpatialIndex();
+        List<Stroke> strokes = currentPage.strokes;
+        visibleStrokeIndices.clear();
+        if (isMovingSelection) {
+            visibleStrokeIndices.set(0, strokes.size());
+            return;
+        }
+
+        int minCellX = (int) Math.floor(viewport.left / STROKE_GRID_CELL_SIZE);
+        int maxCellX = (int) Math.floor(viewport.right / STROKE_GRID_CELL_SIZE);
+        int minCellY = (int) Math.floor(viewport.top / STROKE_GRID_CELL_SIZE);
+        int maxCellY = (int) Math.floor(viewport.bottom / STROKE_GRID_CELL_SIZE);
+        long cellsWide = (long) maxCellX - minCellX + 1L;
+        long cellsHigh = (long) maxCellY - minCellY + 1L;
+        if (cellsWide <= 0L || cellsHigh <= 0L
+                || cellsWide > MAX_VISIBLE_GRID_CELLS / cellsHigh) {
+            visibleStrokeIndices.set(0, strokes.size());
+            return;
+        }
+
+        for (int cellY = minCellY; cellY <= maxCellY; cellY++) {
+            for (int cellX = minCellX; cellX <= maxCellX; cellX++) {
+                List<Integer> cellStrokes = strokeSpatialGrid.get(strokeCellKey(cellX, cellY));
+                if (cellStrokes == null) continue;
+                for (int index : cellStrokes) visibleStrokeIndices.set(index);
+            }
+        }
+        for (int index : oversizedStrokeIndices) visibleStrokeIndices.set(index);
+    }
+
+    private void ensureStrokeSpatialIndex() {
+        List<Stroke> strokes = currentPage.strokes;
+        if (spatialIndexPage != currentPage) strokeSpatialIndexDirty = true;
+        if (!strokeSpatialIndexDirty && strokes.size() < spatialIndexStrokeCount) {
+            strokeSpatialIndexDirty = true;
+        }
+
+        if (strokeSpatialIndexDirty) {
+            spatialIndexPage = currentPage;
+            strokeSpatialGrid.clear();
+            oversizedStrokeIndices.clear();
+            for (int i = 0; i < strokes.size(); i++) addStrokeToSpatialIndex(strokes.get(i), i);
+            spatialIndexStrokeCount = strokes.size();
+            strokeSpatialIndexDirty = false;
+        } else {
+            for (int i = spatialIndexStrokeCount; i < strokes.size(); i++) {
+                addStrokeToSpatialIndex(strokes.get(i), i);
+            }
+            spatialIndexStrokeCount = strokes.size();
+        }
+    }
+
+    private void addStrokeToSpatialIndex(Stroke stroke, int index) {
+        if (stroke == null) return;
+        RectF bounds = stroke.getBounds();
+        int minCellX = (int) Math.floor(bounds.left / STROKE_GRID_CELL_SIZE);
+        int maxCellX = (int) Math.floor(bounds.right / STROKE_GRID_CELL_SIZE);
+        int minCellY = (int) Math.floor(bounds.top / STROKE_GRID_CELL_SIZE);
+        int maxCellY = (int) Math.floor(bounds.bottom / STROKE_GRID_CELL_SIZE);
+        long cellsWide = (long) maxCellX - minCellX + 1L;
+        long cellsHigh = (long) maxCellY - minCellY + 1L;
+        if (cellsWide <= 0L || cellsHigh <= 0L
+                || cellsWide > MAX_STROKE_GRID_CELLS / cellsHigh) {
+            oversizedStrokeIndices.add(index);
+            return;
+        }
+        for (int cellY = minCellY; cellY <= maxCellY; cellY++) {
+            for (int cellX = minCellX; cellX <= maxCellX; cellX++) {
+                long key = strokeCellKey(cellX, cellY);
+                List<Integer> cellStrokes = strokeSpatialGrid.get(key);
+                if (cellStrokes == null) {
+                    cellStrokes = new ArrayList<>();
+                    strokeSpatialGrid.put(key, cellStrokes);
+                }
+                cellStrokes.add(index);
+            }
+        }
+    }
+
+    private long strokeCellKey(int cellX, int cellY) {
+        return ((long) cellX << 32) | (cellY & 0xffffffffL);
+    }
+
     @Override
     protected void onSizeChanged(int w, int h, int oldw, int oldh) {
         super.onSizeChanged(w, h, oldw, oldh);
@@ -1062,6 +1163,8 @@ public class CanvasView extends View {
         drawPaperTemplate(canvas, viewWidth, effectiveHeight, isDarkBackground);
 
         if (currentPage != null) {
+            prepareVisibleStrokeIndices(visibleViewport);
+
             // 3. Draw Committed Shapes (culled to visible screen)
             for (ShapeItem shape : currentPage.shapes) {
                 if (!RectF.intersects(shape.getBounds(), visibleViewport)) continue;
@@ -1077,8 +1180,11 @@ public class CanvasView extends View {
                 canvas.drawText(item.text, item.x, item.y, textPaint);
             }
 
-            // 5. Draw Committed Strokes (culled to visible screen with pre-cached GPU paths)
-            for (Stroke stroke : currentPage.strokes) {
+            // 5. Draw only the visible spatial-grid candidates, preserving ink order.
+            for (int index = visibleStrokeIndices.nextSetBit(0); index >= 0;
+                 index = visibleStrokeIndices.nextSetBit(index + 1)) {
+                if (index >= currentPage.strokes.size()) break;
+                Stroke stroke = currentPage.strokes.get(index);
                 if (!RectF.intersects(stroke.getBounds(), visibleViewport)) continue;
                 drawStroke(canvas, stroke);
             }
@@ -1607,11 +1713,17 @@ public class CanvasView extends View {
             sh.strokeWidth = width;
             sh.markDirty();
         }
+        strokeSpatialIndexDirty = true;
         invalidate();
         notifyChange();
     }
 
     private void translateItems(List<Stroke> strokes, List<ShapeItem> shapes, float dx, float dy) {
+        translateItems(strokes, shapes, dx, dy, true);
+    }
+
+    private void translateItems(List<Stroke> strokes, List<ShapeItem> shapes,
+                                float dx, float dy, boolean invalidateStrokeSpatialIndex) {
         if (strokes != null) {
             for (Stroke s : strokes) {
                 for (DrawingPoint pt : s.points) {
@@ -1629,6 +1741,9 @@ public class CanvasView extends View {
                 sh.endY += dy;
                 sh.markDirty();
             }
+        }
+        if (invalidateStrokeSpatialIndex && strokes != null && !strokes.isEmpty()) {
+            strokeSpatialIndexDirty = true;
         }
     }
 
@@ -1775,7 +1890,7 @@ public class CanvasView extends View {
                     if (isMovingSelection) {
                         float dx = canvasX - lassoMoveStartX;
                         float dy = canvasY - lassoMoveStartY;
-                        translateItems(selectedStrokes, selectedShapes, dx, dy);
+                        translateItems(selectedStrokes, selectedShapes, dx, dy, false);
                         selectionBounds.offset(dx, dy);
                         lassoMoveStartX = canvasX;
                         lassoMoveStartY = canvasY;
@@ -1791,6 +1906,7 @@ public class CanvasView extends View {
                 case MotionEvent.ACTION_UP:
                     if (isMovingSelection) {
                         isMovingSelection = false;
+                        if (!selectedStrokes.isEmpty()) strokeSpatialIndexDirty = true;
                         notifyChange();
                         notifyLassoSelection();
                     } else if (isDrawingLasso) {
