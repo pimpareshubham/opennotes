@@ -596,15 +596,44 @@ public class CanvasView extends View {
     private final Handler autoConvertHandler = new Handler(Looper.getMainLooper());
     private final Runnable autoConvertRunnable = () -> {
         if (!isAutoConvertTextEnabled || pendingAutoConvertStrokes.isEmpty()) return;
+        if (currentPage == null) {
+            pendingAutoConvertStrokes.clear();
+            return;
+        }
+        pendingAutoConvertStrokes.retainAll(currentPage.strokes);
+        if (pendingAutoConvertStrokes.isEmpty()) return;
         List<Stroke> toConvert = new ArrayList<>(pendingAutoConvertStrokes);
-        pendingAutoConvertStrokes.clear();
-        if (currentPage != null) {
-            toConvert.retainAll(currentPage.strokes);
-            if (!toConvert.isEmpty()) {
-                convertStrokesToText(toConvert);
-            }
+        if (hasEnoughInkForAutoConversion(toConvert)) {
+            pendingAutoConvertStrokes.clear();
+            convertStrokesToText(toConvert);
         }
     };
+
+    /** Avoid converting a pause between letters into a guessed word. */
+    private boolean hasEnoughInkForAutoConversion(List<Stroke> strokes) {
+        int pointCount = 0;
+        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
+        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (Stroke stroke : strokes) {
+            if (stroke == null) continue;
+            List<DrawingPoint> points = stroke.getRecognitionPoints();
+            if (points == null) continue;
+            pointCount += points.size();
+            for (DrawingPoint point : points) {
+                minX = Math.min(minX, point.x);
+                minY = Math.min(minY, point.y);
+                maxX = Math.max(maxX, point.x);
+                maxY = Math.max(maxY, point.y);
+            }
+        }
+        if (pointCount < 24 || minX == Float.MAX_VALUE) return false;
+        float width = maxX - minX;
+        float height = maxY - minY;
+        // Normal handwriting usually contains several pen lifts. Also allow a
+        // long connected cursive word, while keeping a single unfinished glyph.
+        return (strokes.size() >= 3 && width >= Math.max(12f, height * 0.65f))
+                || (strokes.size() == 1 && width >= Math.max(36f, height * 2.2f));
+    }
 
     public void cancelPendingAutoConversion() {
         autoConvertHandler.removeCallbacks(autoConvertRunnable);
@@ -1930,7 +1959,7 @@ public class CanvasView extends View {
                         if (isAutoConvertTextEnabled) {
                             pendingAutoConvertStrokes.add(activeStroke);
                             autoConvertHandler.removeCallbacks(autoConvertRunnable);
-                            autoConvertHandler.postDelayed(autoConvertRunnable, 900);
+                            autoConvertHandler.postDelayed(autoConvertRunnable, 1500);
                         }
                     }
                     activeStroke = null;
