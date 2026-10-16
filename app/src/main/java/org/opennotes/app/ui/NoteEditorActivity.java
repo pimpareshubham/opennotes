@@ -4,6 +4,7 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.GradientDrawable;
 import android.media.MediaPlayer;
@@ -12,7 +13,9 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.content.Context;
+import android.view.MotionEvent;
 import android.view.Gravity;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
@@ -122,7 +125,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private View quickColorWhite, quickColorOrange, quickColorGreen, quickColorCyan, quickColorPurple;
 
     // Floating Viewport Pill
-    private LinearLayout floatingViewportPill;
+    private LinearLayout floatingViewportPill, floatingPageNavPill;
     private ImageView btnFavorite;
     private TextView textZoomPercent;
     private ImageView btnLockViewport, btnResetZoom;
@@ -330,6 +333,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         textPageCounter = findViewById(R.id.textPageCounter);
         btnNextPage = findViewById(R.id.btnNextPage);
         btnAddPage = findViewById(R.id.btnAddPage);
+        floatingPageNavPill = findViewById(R.id.floatingPageNavPill);
 
         cardToolProperties = findViewById(R.id.cardToolProperties);
         textToolPropertyTitle = findViewById(R.id.textToolPropertyTitle);
@@ -659,13 +663,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         toolHighlighter.setOnClickListener(v -> selectOrToggleTool(DrawingTool.HIGHLIGHTER, "Highlighter Settings"));
         toolPencil.setOnClickListener(v -> selectOrToggleTool(DrawingTool.PENCIL, "Pencil Settings"));
         toolEraser.setOnClickListener(v -> {
-            cardToolProperties.setVisibility(View.GONE);
+            closeToolPropertiesCard();
             canvasView.setTool(DrawingTool.ERASER_STROKE);
             updateToolUi(DrawingTool.ERASER_STROKE);
             if (appSettings != null) appSettings.setLastTool(DrawingTool.ERASER_STROKE);
         });
         toolLasso.setOnClickListener(v -> {
-            cardToolProperties.setVisibility(View.GONE);
+            closeToolPropertiesCard();
             canvasView.setTool(DrawingTool.LASSO);
             updateToolUi(DrawingTool.LASSO);
             if (appSettings != null) appSettings.setLastTool(DrawingTool.LASSO);
@@ -678,7 +682,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         if (toolHand != null) {
             toolHand.setOnClickListener(v -> {
-                cardToolProperties.setVisibility(View.GONE);
+                closeToolPropertiesCard();
                 if (canvasView.getTool() == DrawingTool.HAND) {
                     DrawingTool fallback = DrawingTool.FOUNTAIN;
                     canvasView.setTool(fallback);
@@ -733,17 +737,26 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             });
         }
 
-        btnColorPicker.setOnClickListener(v -> showColorPickerDialog());
+        btnColorPicker.setOnClickListener(v -> {
+            closeToolPropertiesCard();
+            showColorPickerDialog();
+        });
 
-        toolShape.setOnClickListener(v -> showShapeSelectorDialog());
+        toolShape.setOnClickListener(v -> {
+            closeToolPropertiesCard();
+            showShapeSelectorDialog();
+        });
         toolText.setOnClickListener(v -> {
-            cardToolProperties.setVisibility(View.GONE);
+            closeToolPropertiesCard();
             canvasView.setTool(DrawingTool.TEXT);
             updateToolUi(DrawingTool.TEXT);
             if (appSettings != null) appSettings.setLastTool(DrawingTool.TEXT);
             Toast.makeText(this, "Tap anywhere on canvas to type text", Toast.LENGTH_SHORT).show();
         });
-        toolMedia.setOnClickListener(v -> imagePickerLauncher.launch("image/*"));
+        toolMedia.setOnClickListener(v -> {
+            closeToolPropertiesCard();
+            imagePickerLauncher.launch("image/*");
+        });
 
         btnExport.setOnClickListener(v -> showExportDialog());
         btnPageOverview.setOnClickListener(v -> showPageOverviewDialog());
@@ -911,18 +924,47 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnExitFullscreen.setOnClickListener(v -> setZenFullscreen(false));
     }
 
+    private long lastToolClickTime = 0L;
+    private DrawingTool lastClickedTool = null;
+
+    public void closeToolPropertiesCard() {
+        if (cardToolProperties != null && cardToolProperties.getVisibility() == View.VISIBLE) {
+            cardToolProperties.animate().cancel();
+            cardToolProperties.animate().alpha(0f).translationY(-25f).setDuration(160)
+                    .withEndAction(() -> cardToolProperties.setVisibility(View.GONE)).start();
+        }
+    }
+
+    public void openToolPropertiesCard(String title) {
+        if (cardToolProperties == null) return;
+        if (textToolPropertyTitle != null && title != null) {
+            textToolPropertyTitle.setText(title);
+        }
+        cardToolProperties.animate().cancel();
+        cardToolProperties.setVisibility(View.VISIBLE);
+        cardToolProperties.setAlpha(0f);
+        cardToolProperties.setTranslationY(-25f);
+        cardToolProperties.animate().alpha(1f).translationY(0f).setDuration(220)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+    }
+
     private void selectOrToggleTool(DrawingTool tool, String title) {
+        long now = SystemClock.uptimeMillis();
+        boolean isQuickDoubleClick = (tool == lastClickedTool && (now - lastToolClickTime) < 450L);
+        lastToolClickTime = now;
+        lastClickedTool = tool;
+
         if (canvasView.getTool() == tool) {
-            // Second tap toggles property card with smooth slide and fade
-            if (cardToolProperties.getVisibility() == View.VISIBLE) {
-                cardToolProperties.animate().alpha(0f).translationY(-25f).setDuration(180)
-                        .withEndAction(() -> cardToolProperties.setVisibility(View.GONE)).start();
+            if (isQuickDoubleClick) {
+                // User double-clicked tool: open menu and keep it open
+                openToolPropertiesCard(title);
             } else {
-                cardToolProperties.setVisibility(View.VISIBLE);
-                cardToolProperties.setAlpha(0f);
-                cardToolProperties.setTranslationY(-25f);
-                cardToolProperties.animate().alpha(1f).translationY(0f).setDuration(220)
-                        .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
+                // Second tap toggles property card with smooth slide and fade
+                if (cardToolProperties.getVisibility() == View.VISIBLE) {
+                    closeToolPropertiesCard();
+                } else {
+                    openToolPropertiesCard(title);
+                }
             }
         } else {
             canvasView.setTool(tool);
@@ -930,12 +972,116 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if (appSettings != null) {
                 appSettings.setLastTool(tool);
             }
-            if (cardToolProperties.getVisibility() == View.VISIBLE) {
-                cardToolProperties.animate().alpha(0f).translationY(-25f).setDuration(180)
-                        .withEndAction(() -> cardToolProperties.setVisibility(View.GONE)).start();
+            if (isQuickDoubleClick) {
+                // Double-clicked to switch and open settings directly
+                openToolPropertiesCard(title);
+            } else {
+                closeToolPropertiesCard();
             }
         }
-        textToolPropertyTitle.setText(title);
+        if (textToolPropertyTitle != null && title != null) {
+            textToolPropertyTitle.setText(title);
+        }
+    }
+
+    @Override
+    public boolean dispatchTouchEvent(MotionEvent ev) {
+        if (ev.getAction() == MotionEvent.ACTION_DOWN) {
+            float rawX = ev.getRawX();
+            float rawY = ev.getRawY();
+            boolean closedAnyMenu = false;
+
+            // 1. Tool properties popup menu (Frame 50)
+            if (cardToolProperties != null && cardToolProperties.getVisibility() == View.VISIBLE) {
+                Rect cardRect = new Rect();
+                cardToolProperties.getGlobalVisibleRect(cardRect);
+                if (!cardRect.contains((int) rawX, (int) rawY)) {
+                    // Check if clicked the active tool button (its own onClick will toggle/handle it)
+                    View activeToolBtn = getActiveToolButtonView();
+                    boolean clickedActiveTool = isTouchInsideView(activeToolBtn, (int) rawX, (int) rawY);
+                    if (!clickedActiveTool) {
+                        closeToolPropertiesCard();
+                        closedAnyMenu = true;
+                    }
+                }
+            }
+
+            // 2. Long press paste popup
+            if (layoutLongPressPastePopup != null && layoutLongPressPastePopup.getVisibility() == View.VISIBLE) {
+                Rect pasteRect = new Rect();
+                layoutLongPressPastePopup.getGlobalVisibleRect(pasteRect);
+                if (!pasteRect.contains((int) rawX, (int) rawY)) {
+                    hideLongPressPastePopup();
+                    closedAnyMenu = true;
+                }
+            }
+
+            // 3. When any menu was closed by clicking outside:
+            if (closedAnyMenu) {
+                // If user tapped on the open canvas to dismiss the menu, consume the ACTION_DOWN
+                // so no accidental ink dot, line, or gesture is drawn on the page!
+                // But if they clicked another toolbar control (undo, redo, tool, export, etc.),
+                // dispatch it so the toolbar button activates!
+                if (isTouchOnlyOnCanvas((int) rawX, (int) rawY)) {
+                    return true;
+                }
+            }
+        }
+        return super.dispatchTouchEvent(ev);
+    }
+
+    private View getActiveToolButtonView() {
+        DrawingTool current = canvasView != null ? canvasView.getTool() : null;
+        if (current == null) return null;
+        switch (current) {
+            case FOUNTAIN: return toolFountain;
+            case PEN: return toolPen;
+            case HIGHLIGHTER: return toolHighlighter;
+            case PENCIL: return toolPencil;
+            case LASER: return toolLaser;
+            default: return null;
+        }
+    }
+
+    private boolean isTouchInsideView(View v, int rawX, int rawY) {
+        if (v == null || v.getVisibility() != View.VISIBLE) return false;
+        Rect rect = new Rect();
+        v.getGlobalVisibleRect(rect);
+        return rect.contains(rawX, rawY);
+    }
+
+    private boolean isTouchOnlyOnCanvas(int rawX, int rawY) {
+        if (canvasView == null) return false;
+        Rect canvasRect = new Rect();
+        canvasView.getGlobalVisibleRect(canvasRect);
+        if (!canvasRect.contains(rawX, rawY)) {
+            return false;
+        }
+
+        View[] toolbarContainers = {
+                topBar, mainToolDock, floatingViewportPill, floatingPageNavPill,
+                btnExitFullscreen, lassoFloatingActionBar
+        };
+        for (View v : toolbarContainers) {
+            if (isTouchInsideView(v, rawX, rawY)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (cardToolProperties != null && cardToolProperties.getVisibility() == View.VISIBLE) {
+            closeToolPropertiesCard();
+            return;
+        }
+        if (layoutLongPressPastePopup != null && layoutLongPressPastePopup.getVisibility() == View.VISIBLE) {
+            hideLongPressPastePopup();
+            return;
+        }
+        saveCurrentPage();
+        super.onBackPressed();
     }
 
     private void restoreUserSettings() {
