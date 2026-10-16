@@ -1532,7 +1532,7 @@ public class CanvasView extends View {
         canvas.scale(scaleFactor, scaleFactor);
 
         // 2. Draw Paper Template lines (culled to visible viewport)
-        drawPaperTemplate(canvas, viewWidth, effectiveHeight, isDarkBackground);
+        drawPaperTemplate(canvas, viewWidth, effectiveHeight, isDarkBackground, scaleFactor);
 
         if (currentPage != null) {
             prepareVisibleStrokeIndices(visibleViewport);
@@ -1778,11 +1778,19 @@ public class CanvasView extends View {
         canvas.drawRoundRect(rect, barWidth / 2f, barWidth / 2f, scrollbarPaint);
     }
 
-    private void drawPaperTemplate(Canvas canvas, int width, float totalHeight, boolean isDark) {
+    private void drawPaperTemplate(Canvas canvas, int width, float totalHeight, boolean isDark, float drawingScale) {
         if (paperTemplate == PaperTemplate.BLANK) return;
 
-        templateLinePaint.setColor(isDark ? 0x22FFFFFF : 0xFFE2E8F0);
+        // Thin template guides otherwise fade into sub-pixel coverage at low zoom. Keep
+        // their screen-space weight legible while preserving the lighter look at 1x+.
+        float safeScale = Math.max(0.01f, drawingScale);
+        float lowZoomBoost = Math.max(0f, Math.min(1f, (0.75f - safeScale) / 0.55f));
+        int lightLineColor = blendTemplateColor(0xFFE2E8F0, 0xFFB8C2CE, lowZoomBoost);
+        int darkLineColor = blendTemplateColor(0x22FFFFFF, 0x66FFFFFF, lowZoomBoost);
+        templateLinePaint.setColor(isDark ? darkLineColor : lightLineColor);
+        templateLinePaint.setStrokeWidth(Math.max(1.25f, 1.5f * safeScale) / safeScale);
         templateMarginPaint.setColor(isDark ? 0x55F87171 : 0xFFFCA5A5);
+        templateMarginPaint.setStrokeWidth(Math.max(1.5f, 2.0f * safeScale) / safeScale);
 
         if (paperTemplate == PaperTemplate.RULED) {
             float lineSpacing = 60f;
@@ -1821,7 +1829,10 @@ public class CanvasView extends View {
             }
         } else if (paperTemplate == PaperTemplate.DOTS) {
             float dotSpacing = 50f;
-            templateDotPaint.setColor(isDark ? 0x33FFFFFF : 0xFFCBD5E1);
+            templateDotPaint.setColor(isDark
+                    ? blendTemplateColor(0x33FFFFFF, 0x77FFFFFF, lowZoomBoost)
+                    : blendTemplateColor(0xFFCBD5E1, 0xFFAAB4C0, lowZoomBoost));
+            float dotRadius = Math.max(0.75f, 2.5f * safeScale) / safeScale;
             float firstX = Math.max(dotSpacing, (float) Math.floor(visibleViewport.left / dotSpacing) * dotSpacing);
             float lastX = Math.min(width * 2f, visibleViewport.right + dotSpacing);
             float firstY = Math.max(dotSpacing, (float) Math.floor(visibleViewport.top / dotSpacing) * dotSpacing);
@@ -1829,7 +1840,7 @@ public class CanvasView extends View {
 
             for (float x = firstX; x <= lastX; x += dotSpacing) {
                 for (float y = firstY; y <= lastY; y += dotSpacing) {
-                    canvas.drawCircle(x, y, 2.5f, templateDotPaint);
+                    canvas.drawCircle(x, y, dotRadius, templateDotPaint);
                 }
             }
         } else if (paperTemplate == PaperTemplate.CORNELL) {
@@ -1851,6 +1862,15 @@ public class CanvasView extends View {
                 canvas.drawLine(minLineX, y, maxLineX, y, templateLinePaint);
             }
         }
+    }
+
+    private static int blendTemplateColor(int from, int to, float amount) {
+        float t = Math.max(0f, Math.min(1f, amount));
+        int a = Math.round(((from >>> 24) & 0xFF) + (((to >>> 24) & 0xFF) - ((from >>> 24) & 0xFF)) * t);
+        int r = Math.round(((from >>> 16) & 0xFF) + (((to >>> 16) & 0xFF) - ((from >>> 16) & 0xFF)) * t);
+        int g = Math.round(((from >>> 8) & 0xFF) + (((to >>> 8) & 0xFF) - ((from >>> 8) & 0xFF)) * t);
+        int b = Math.round((from & 0xFF) + ((to & 0xFF) - (from & 0xFF)) * t);
+        return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
     private void drawStroke(Canvas canvas, Stroke stroke) {
@@ -3375,7 +3395,7 @@ public class CanvasView extends View {
         boolean isDark = isColorDark(pageBackgroundColor);
         canvas.drawColor(pageBackgroundColor);
         visibleViewport.set(0, 0, Math.max(getWidth(), targetWidth) * 2f, effectiveHeight);
-        drawPaperTemplate(canvas, getWidth(), effectiveHeight, isDark);
+        drawPaperTemplate(canvas, getWidth(), effectiveHeight, isDark, scaleX);
 
         if (currentPage != null) {
             for (ShapeItem shape : currentPage.shapes) {
