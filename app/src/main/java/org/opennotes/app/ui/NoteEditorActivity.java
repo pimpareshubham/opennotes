@@ -1573,6 +1573,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         String fontName = TypefaceManager.importCustomFont(this, uri);
         if (fontName != null) {
             if (canvasView != null) {
+                canvasView.clearTextTypefaceCache();
                 canvasView.setBeautifyFontKey(fontName);
             }
             if (appSettings != null) {

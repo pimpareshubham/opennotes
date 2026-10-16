@@ -8,6 +8,7 @@ import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
@@ -34,8 +35,10 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.Deque;
 import java.util.List;
+import java.util.Map;
 
 public class CanvasView extends View {
     private static final float STROKE_GRID_CELL_SIZE = 512f;
@@ -103,6 +106,8 @@ public class CanvasView extends View {
     private final LongSparseArray<List<Integer>> strokeSpatialGrid = new LongSparseArray<>();
     private final List<Integer> oversizedStrokeIndices = new ArrayList<>();
     private final BitSet visibleStrokeIndices = new BitSet();
+    // Avoid a synchronized TypefaceManager lookup for every visible text item on each frame.
+    private final Map<String, Typeface> textTypefaceCache = new HashMap<>();
     private boolean strokeSpatialIndexDirty = true;
     private Paint laserGlowPaint;
     private Paint laserCorePaint;
@@ -1176,7 +1181,7 @@ public class CanvasView extends View {
                 if (!RectF.intersects(item.getBounds(), visibleViewport)) continue;
                 textPaint.setColor(item.color);
                 textPaint.setTextSize(item.fontSize);
-                textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), item.fontKey));
+                textPaint.setTypeface(getCachedTypeface(item.fontKey));
                 canvas.drawText(item.text, item.x, item.y, textPaint);
             }
 
@@ -1264,6 +1269,22 @@ public class CanvasView extends View {
         if (isInfinite && effectiveHeight > viewHeight) {
             drawScrollbar(canvas, viewWidth, viewHeight, effectiveHeight);
         }
+    }
+
+    private Typeface getCachedTypeface(String fontKey) {
+        String key = (fontKey == null || fontKey.isEmpty())
+                ? org.opennotes.app.util.TypefaceManager.FONT_KALAM : fontKey;
+        Typeface typeface = textTypefaceCache.get(key);
+        if (typeface == null) {
+            typeface = org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), key);
+            textTypefaceCache.put(key, typeface);
+        }
+        return typeface;
+    }
+
+    public void clearTextTypefaceCache() {
+        textTypefaceCache.clear();
+        invalidate();
     }
 
     public RectF getSelectionScreenBounds() {
