@@ -1570,23 +1570,32 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void handleImportCustomFont(Uri uri) {
-        String fontName = TypefaceManager.importCustomFont(this, uri);
-        if (fontName != null) {
-            if (canvasView != null) {
-                canvasView.clearTextTypefaceCache();
-                canvasView.setBeautifyFontKey(fontName);
-            }
-            if (appSettings != null) {
-                appSettings.setBeautifyFont(fontName);
-            }
-            Toast.makeText(this, "✓ Custom Font Imported: " + fontName + "\nReady for auto-beautification & text conversion", Toast.LENGTH_LONG).show();
-            showAutoBeautifySettingsDialog();
-        } else {
-            String details = TypefaceManager.getLastFontImportError();
-            ErrorDialog.show(this, "Font import failed", details == null
-                    ? "The selected file could not be imported. Choose a readable .ttf or .otf font file."
-                    : details);
-        }
+        if (uri == null) return;
+        Toast.makeText(this, "Importing font…", Toast.LENGTH_SHORT).show();
+        Context applicationContext = getApplicationContext();
+        fontIoExecutor.execute(() -> {
+            String fontName = TypefaceManager.importCustomFont(applicationContext, uri);
+            String errorDetails = TypefaceManager.getLastFontImportError();
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (fontName != null) {
+                    if (canvasView != null) {
+                        canvasView.clearTextTypefaceCache();
+                        canvasView.setBeautifyFontKey(fontName);
+                    }
+                    if (appSettings != null) {
+                        appSettings.setBeautifyFont(fontName);
+                    }
+                    Toast.makeText(this, "✓ Custom Font Imported: " + fontName
+                            + "\nReady for auto-beautification & text conversion", Toast.LENGTH_LONG).show();
+                    showAutoBeautifySettingsDialog();
+                } else {
+                    ErrorDialog.show(this, "Font import failed", errorDetails == null
+                            ? "The selected file could not be imported. Choose a readable .ttf or .otf font file."
+                            : errorDetails);
+                }
+            });
+        });
     }
 
     private void setZenFullscreen(boolean fullscreen) {

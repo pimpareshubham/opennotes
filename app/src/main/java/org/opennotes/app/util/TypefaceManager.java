@@ -121,7 +121,9 @@ public class TypefaceManager {
 
                 Typeface tf = Typeface.createFromFile(destFile);
                 String key = CUSTOM_PREFIX + destFile.getName();
-                sCache.put(key, tf);
+                synchronized (TypefaceManager.class) {
+                    sCache.put(key, tf);
+                }
                 return key;
             }
             lastFontImportError = "The selected font file could not be opened by the Android document provider.";

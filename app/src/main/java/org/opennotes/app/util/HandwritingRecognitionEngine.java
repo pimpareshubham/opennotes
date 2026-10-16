@@ -225,6 +225,18 @@ public final class HandwritingRecognitionEngine {
     private static void runRecognition(DigitalInkRecognitionModel model, List<Stroke> strokes,
                                        String language, String preContext,
                                        RectF bounds, Callback callback) {
+        // ML Kit Task listeners normally run on the main thread. Building Ink
+        // walks every captured point and can take long enough to hitch the
+        // editor for page-wide conversion, so always prepare and submit it on
+        // the dedicated recognition worker.
+        WORKER.execute(() -> buildInkAndRecognize(
+                model, strokes, language, preContext, bounds, callback));
+    }
+
+    private static void buildInkAndRecognize(DigitalInkRecognitionModel model,
+                                             List<Stroke> strokes, String language,
+                                             String preContext, RectF bounds,
+                                             Callback callback) {
         try {
             Ink.Builder inkBuilder = Ink.builder();
             long lastInkTime = -1L;

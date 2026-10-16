@@ -37,9 +37,12 @@ import java.util.ArrayList;
 import java.util.BitSet;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Deque;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class CanvasView extends View {
     private static final float STROKE_GRID_CELL_SIZE = 512f;
@@ -777,12 +780,18 @@ public class CanvasView extends View {
                                      int textColor, String fontKey, String text) {
         if (currentPage != requestedPage || res == null || text == null || text.trim().isEmpty()) return;
         List<Stroke> stillPresent = new ArrayList<>();
-        for (Stroke stroke : requestedStrokes) {
-            if (requestedPage.strokes.contains(stroke)) stillPresent.add(stroke);
+        Set<Stroke> requestedSet = Collections.newSetFromMap(new IdentityHashMap<>());
+        requestedSet.addAll(requestedStrokes);
+        Iterator<Stroke> pageStrokes = requestedPage.strokes.iterator();
+        while (pageStrokes.hasNext()) {
+            Stroke stroke = pageStrokes.next();
+            if (requestedSet.contains(stroke)) {
+                stillPresent.add(stroke);
+                pageStrokes.remove();
+            }
         }
         if (stillPresent.isEmpty()) return;
 
-        requestedPage.strokes.removeAll(stillPresent);
         TextItem textItem = new TextItem(text, res.bounds.left,
                 res.bounds.bottom - 4f, textColor, res.fontSize, fontKey);
         requestedPage.texts.add(textItem);
