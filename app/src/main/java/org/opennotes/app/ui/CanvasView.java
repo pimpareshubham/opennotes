@@ -286,6 +286,9 @@ public class CanvasView extends View {
     private Paint selectionHandlePaint;
     private Paint selectionRotateHandlePaint;
     private Paint selectionRotateBorderPaint;
+    private Paint selectionRotateIconPaint;
+    private Paint selectionRotateBadgePaint;
+    private Paint selectionRotateTextPaint;
 
     // Hand pan tool dedicated tracking
     private float handPanStartX, handPanStartY;
@@ -478,12 +481,27 @@ public class CanvasView extends View {
 
         selectionRotateHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         selectionRotateHandlePaint.setStyle(Paint.Style.FILL);
-        selectionRotateHandlePaint.setColor(0xFFA855F7);
+        selectionRotateHandlePaint.setColor(0xFF6366F1);
 
         selectionRotateBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         selectionRotateBorderPaint.setStyle(Paint.Style.STROKE);
         selectionRotateBorderPaint.setColor(0xFFFFFFFF);
         selectionRotateBorderPaint.setStrokeWidth(2.0f);
+
+        selectionRotateIconPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        selectionRotateIconPaint.setStyle(Paint.Style.STROKE);
+        selectionRotateIconPaint.setColor(0xFFFFFFFF);
+        selectionRotateIconPaint.setStrokeCap(Paint.Cap.ROUND);
+        selectionRotateIconPaint.setStrokeJoin(Paint.Join.ROUND);
+
+        selectionRotateBadgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        selectionRotateBadgePaint.setStyle(Paint.Style.FILL);
+        selectionRotateBadgePaint.setColor(0xEE1E1E2E);
+
+        selectionRotateTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        selectionRotateTextPaint.setColor(0xFFFFFFFF);
+        selectionRotateTextPaint.setTextAlign(Paint.Align.CENTER);
+        selectionRotateTextPaint.setFakeBoldText(true);
 
         predictedInkPaint.setStyle(Paint.Style.STROKE);
         predictedInkPaint.setStrokeCap(Paint.Cap.ROUND);
@@ -1178,30 +1196,56 @@ public class CanvasView extends View {
                     : org.opennotes.app.util.TypefaceManager.FONT_KALAM);
 
             String fullText = text.trim();
-            String[] words = fullText.split("\\s+");
-            textPaint.setTextSize(result.fontSize);
-            textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
-            float spaceWidth = textPaint.measureText(" ");
+            String[] subLines = fullText.split("\r?\n");
             float rotation = Math.abs(result.angleDegrees) <= 5.0f ? 0f : result.angleDegrees;
-            float curX = (result.startX != 0f || result.startY != 0f) ? result.startX : result.bounds.left;
-            float baselineY = (result.startX != 0f || result.startY != 0f) ? result.startY : result.bounds.bottom - 4f;
-
-            if (Math.abs(rotation) > 5.0f || words.length <= 1) {
-                convertedTexts.add(new TextItem(fullText, curX, baselineY, textColor, result.fontSize, fontKey, rotation));
-            } else {
-                float totalWordsWidth = 0f;
-                float[] wordWidths = new float[words.length];
-                for (int w = 0; w < words.length; w++) {
-                    wordWidths[w] = textPaint.measureText(words[w]);
-                    totalWordsWidth += wordWidths[w];
+            float linePitch = result.fontSize * 1.35f;
+            if (subLines.length > 1) {
+                float computedPitch = result.bounds.height() / (float) subLines.length;
+                if (computedPitch >= result.fontSize * 0.8f && computedPitch <= result.fontSize * 2.5f) {
+                    linePitch = computedPitch;
                 }
-                float availableWidth = Math.max(result.bounds.width(), totalWordsWidth + (words.length - 1) * spaceWidth);
-                float computedSpace = Math.max(spaceWidth, (availableWidth - totalWordsWidth) / (words.length - 1));
-                computedSpace = Math.min(computedSpace, spaceWidth * 2.5f);
+            }
+            float baseStartX = (result.startX != 0f || result.startY != 0f) ? result.startX : result.bounds.left;
+            float baseStartY = (result.startX != 0f || result.startY != 0f) ? result.startY : result.bounds.bottom - 4f;
+            if (subLines.length > 1 && (result.startX == 0f && result.startY == 0f || baseStartY >= result.bounds.bottom - 10f)) {
+                baseStartY = result.bounds.top + linePitch * 0.85f;
+            }
 
-                for (int w = 0; w < words.length; w++) {
-                    convertedTexts.add(new TextItem(words[w], curX, baselineY, textColor, result.fontSize, fontKey, 0f));
-                    curX += wordWidths[w] + computedSpace;
+            for (int sIdx = 0; sIdx < subLines.length; sIdx++) {
+                String subLine = subLines[sIdx].trim();
+                if (subLine.isEmpty()) continue;
+                float lineBaselineY = baseStartY + sIdx * linePitch;
+                float lineStartX = baseStartX;
+                if (Math.abs(rotation) > 5.0f) {
+                    double rad = Math.toRadians(rotation);
+                    float offsetY = sIdx * linePitch;
+                    lineStartX = baseStartX - (float) (offsetY * Math.sin(rad));
+                    lineBaselineY = baseStartY + (float) (offsetY * Math.cos(rad));
+                }
+
+                String[] words = subLine.split("\\s+");
+                textPaint.setTextSize(result.fontSize);
+                textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
+                float spaceWidth = textPaint.measureText(" ");
+
+                if (Math.abs(rotation) > 5.0f || words.length <= 1) {
+                    convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, rotation));
+                } else {
+                    float totalWordsWidth = 0f;
+                    float[] wordWidths = new float[words.length];
+                    for (int w = 0; w < words.length; w++) {
+                        wordWidths[w] = textPaint.measureText(words[w]);
+                        totalWordsWidth += wordWidths[w];
+                    }
+                    float availableWidth = Math.max(result.bounds.width(), totalWordsWidth + (words.length - 1) * spaceWidth);
+                    float computedSpace = Math.max(spaceWidth, (availableWidth - totalWordsWidth) / (words.length - 1));
+                    computedSpace = Math.min(computedSpace, spaceWidth * 2.5f);
+
+                    float curX = lineStartX;
+                    for (int w = 0; w < words.length; w++) {
+                        convertedTexts.add(new TextItem(words[w], curX, lineBaselineY, textColor, result.fontSize, fontKey, 0f));
+                        curX += wordWidths[w] + computedSpace;
+                    }
                 }
             }
         }
@@ -1824,14 +1868,20 @@ public class CanvasView extends View {
 
                 // Draw Rotation Stalk and Handle Knob
                 float cx = selectionBounds.centerX();
-                float stalkLength = 34f / Math.max(0.5f, scaleFactor);
+                float stalkLength = 46f / Math.max(0.5f, scaleFactor);
                 float rotKnobY = selectionBounds.top - stalkLength;
-                float rotKnobRadius = 9f / Math.max(0.5f, scaleFactor);
+                float rotKnobRadius = 18f / Math.max(0.5f, scaleFactor);
 
                 canvas.drawLine(cx, selectionBounds.top, cx, rotKnobY, selectionBoxPaint);
                 canvas.drawCircle(cx, rotKnobY, rotKnobRadius, selectionRotateHandlePaint);
-                selectionRotateBorderPaint.setStrokeWidth(2f / Math.max(0.5f, scaleFactor));
+                selectionRotateBorderPaint.setStrokeWidth(2.5f / Math.max(0.5f, scaleFactor));
                 canvas.drawCircle(cx, rotKnobY, rotKnobRadius, selectionRotateBorderPaint);
+
+                drawRotationIcon(canvas, cx, rotKnobY, rotKnobRadius * 0.58f);
+
+                if (isRotatingSelection) {
+                    drawRotationAngleBadge(canvas, cx, rotKnobY - rotKnobRadius - 12f / Math.max(0.5f, scaleFactor));
+                }
             }
 
             // 9. Draw Laser Pointer Presentation Trail & Glowing Tip
@@ -2187,6 +2237,41 @@ public class CanvasView extends View {
         brushPaint.setStyle(Paint.Style.FILL);
         canvas.drawPath(stroke.getPressurePath(pressureSensitivity), brushPaint);
         brushPaint.setStyle(Paint.Style.STROKE);
+    }
+
+    private void drawRotationIcon(Canvas canvas, float cx, float cy, float r) {
+        float strokeW = Math.max(1.8f, 2.2f / Math.max(0.5f, scaleFactor));
+        selectionRotateIconPaint.setStrokeWidth(strokeW);
+        RectF arcRect = new RectF(cx - r, cy - r, cx + r, cy + r);
+        // Draw 260° arc from -40° to 220° (clockwise)
+        canvas.drawArc(arcRect, -40f, 260f, false, selectionRotateIconPaint);
+
+        // Arrow head at arc start (-40 degrees)
+        double rad = Math.toRadians(-40.0);
+        float tipX = cx + (float) (r * Math.cos(rad));
+        float tipY = cy + (float) (r * Math.sin(rad));
+        float arrowSize = r * 0.70f;
+        canvas.drawLine(tipX, tipY, tipX + arrowSize * 0.75f, tipY - arrowSize * 0.15f, selectionRotateIconPaint);
+        canvas.drawLine(tipX, tipY, tipX - arrowSize * 0.15f, tipY - arrowSize * 0.75f, selectionRotateIconPaint);
+    }
+
+    private void drawRotationAngleBadge(Canvas canvas, float cx, float topY) {
+        int rounded = Math.round(currentLiveRotation);
+        while (rounded > 180) rounded -= 360;
+        while (rounded <= -180) rounded += 360;
+        String label = (rounded > 0 ? "+" : "") + rounded + "°";
+        float textSize = Math.max(11f, 13f / Math.max(0.5f, scaleFactor));
+        selectionRotateTextPaint.setTextSize(textSize);
+        float textW = selectionRotateTextPaint.measureText(label);
+        float padH = 10f / Math.max(0.5f, scaleFactor);
+        float padV = 5f / Math.max(0.5f, scaleFactor);
+        float pillW = textW + padH * 2f;
+        float pillH = textSize + padV * 2f;
+        RectF pillRect = new RectF(cx - pillW / 2f, topY - pillH, cx + pillW / 2f, topY);
+        canvas.drawRoundRect(pillRect, pillH / 2f, pillH / 2f, selectionRotateBadgePaint);
+        Paint.FontMetrics fm = selectionRotateTextPaint.getFontMetrics();
+        float textY = pillRect.centerY() - (fm.descent + fm.ascent) / 2f;
+        canvas.drawText(label, cx, textY, selectionRotateTextPaint);
     }
 
     private void drawShape(Canvas canvas, ShapeItem.Type type, float x1, float y1, float x2, float y2, int color, float strokeWidth) {
@@ -2930,12 +3015,16 @@ public class CanvasView extends View {
 
     public void beginLiveRotation() {
         currentLiveRotation = 0f;
+        if (hasSelection()) {
+            rotationCenterX = selectionBounds.centerX();
+            rotationCenterY = selectionBounds.centerY();
+        }
     }
 
     public void updateLiveRotation(float angleDeltaFromLast) {
         if (!hasSelection() || Math.abs(angleDeltaFromLast) < 0.001f) return;
-        float cx = selectionBounds.centerX();
-        float cy = selectionBounds.centerY();
+        float cx = rotationCenterX != 0f ? rotationCenterX : selectionBounds.centerX();
+        float cy = rotationCenterY != 0f ? rotationCenterY : selectionBounds.centerY();
         rotateItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages, cx, cy, angleDeltaFromLast);
         currentLiveRotation += angleDeltaFromLast;
         updateSelectionBounds();
@@ -2948,8 +3037,8 @@ public class CanvasView extends View {
             ActionRecord record = new ActionRecord();
             record.type = ActionRecord.Type.ROTATE_SELECTION;
             record.rotateAngle = currentLiveRotation;
-            record.rotateCenterX = selectionBounds.centerX();
-            record.rotateCenterY = selectionBounds.centerY();
+            record.rotateCenterX = rotationCenterX != 0f ? rotationCenterX : selectionBounds.centerX();
+            record.rotateCenterY = rotationCenterY != 0f ? rotationCenterY : selectionBounds.centerY();
             record.rotatedStrokes = new ArrayList<>(selectedStrokes);
             record.rotatedShapes = new ArrayList<>(selectedShapes);
             record.rotatedTexts = new ArrayList<>(selectedTexts);
@@ -2963,8 +3052,8 @@ public class CanvasView extends View {
 
     public void cancelLiveRotation() {
         if (Math.abs(currentLiveRotation) > 0.001f && hasSelection()) {
-            float cx = selectionBounds.centerX();
-            float cy = selectionBounds.centerY();
+            float cx = rotationCenterX != 0f ? rotationCenterX : selectionBounds.centerX();
+            float cy = rotationCenterY != 0f ? rotationCenterY : selectionBounds.centerY();
             rotateItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages, cx, cy, -currentLiveRotation);
             updateSelectionBounds();
             invalidate();
@@ -3264,9 +3353,9 @@ public class CanvasView extends View {
                 case MotionEvent.ACTION_DOWN:
                     if (hasLassoSelection && !selectionBounds.isEmpty()) {
                         float cx = selectionBounds.centerX();
-                        float stalkLength = 34f / Math.max(0.5f, scaleFactor);
+                        float stalkLength = 46f / Math.max(0.5f, scaleFactor);
                         float rotKnobY = selectionBounds.top - stalkLength;
-                        float hitRadius = 28f / Math.max(0.5f, scaleFactor);
+                        float hitRadius = 56f / Math.max(0.5f, scaleFactor);
                         float hdx = canvasX - cx;
                         float hdy = canvasY - rotKnobY;
                         if (hdx * hdx + hdy * hdy <= hitRadius * hitRadius) {
@@ -3275,6 +3364,9 @@ public class CanvasView extends View {
                             rotationCenterY = selectionBounds.centerY();
                             lastRotationTouchAngle = (float) Math.toDegrees(Math.atan2(canvasY - rotationCenterY, canvasX - rotationCenterX));
                             beginLiveRotation();
+                            try {
+                                performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                            } catch (Exception ignored) {}
                             return true;
                         }
                     }
@@ -3451,7 +3543,8 @@ public class CanvasView extends View {
                                     float wordGapThreshold = Math.max(70f, estHeight * 1.1f);
                                     float lineJumpThreshold = Math.max(65f, estHeight * 1.1f);
                                     isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
-                                    isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold);
+                                    isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold)
+                                            || (canvasX < lastWordBounds.centerX() - 30f && canvasY > lastWordBounds.centerY() + 20f);
                                     isDistantJump = (canvasY < lastWordBounds.top - estHeight * 2.0f)
                                             || (canvasX < lastWordBounds.left - 100f && canvasY > lastWordBounds.bottom + 20f);
                                 }
@@ -3461,7 +3554,7 @@ public class CanvasView extends View {
                                 float lineJumpThreshold = Math.max(45f, estHeight * 0.75f);
                                 isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
                                 isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold)
-                                        || (canvasX < lastWordBounds.left - 50f && canvasY > lastWordBounds.top + 25f);
+                                        || (canvasX < lastWordBounds.centerX() - 30f && canvasY > lastWordBounds.centerY() + 15f);
                                 isDistantJump = (canvasY < lastWordBounds.top - 60f)
                                         || (canvasX < lastWordBounds.left - 90f);
                             }

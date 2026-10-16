@@ -182,9 +182,9 @@ public class SemanticStrokeClusterer {
         }
         float totalHeight = Math.max(1f, totalMaxY - totalMinY);
 
-        // If the total vertical span is within normal single-line height (< 2.6x medianHeight)
-        // or small stroke count, it is definitively a SINGLE LINE (e.g. single word/character like "बे", "कि", "hello")
-        if (totalHeight < medianHeight * 2.6f || strokes.size() <= 8) {
+        // If the total vertical span is within normal single-line height (< 1.60x medianHeight)
+        // or 2 or fewer strokes, it is definitively a SINGLE LINE
+        if (totalHeight < medianHeight * 1.60f || strokes.size() <= 2) {
             RectF lineBounds = InkNormalizer.getBounds(strokes);
             List<StrokeWord> words = Collections.singletonList(new StrokeWord(new ArrayList<>(strokes), lineBounds, dominantAngle));
             result.add(new StrokeLine(new ArrayList<>(strokes), words, lineBounds, dominantAngle));
@@ -194,50 +194,67 @@ public class SemanticStrokeClusterer {
         // 3. Sort projected strokes along vertical canonical axis (top to bottom)
         Collections.sort(projectedList, (a, b) -> Float.compare(a.cy, b.cy));
 
-        // 4. Cluster into lines based on Y-distance & bounding box vertical overlap
+        // 4. Cluster into lines based on baseline distance and localized diacritic matching
         List<List<ProjectedStroke>> lineClusters = new ArrayList<>();
-        List<ProjectedStroke> currentLine = new ArrayList<>();
-        currentLine.add(projectedList.get(0));
-        lineClusters.add(currentLine);
 
-        for (int i = 1; i < projectedList.size(); i++) {
-            ProjectedStroke ps = projectedList.get(i);
+        for (ProjectedStroke ps : projectedList) {
+            List<ProjectedStroke> bestLine = null;
+            float bestDist = Float.MAX_VALUE;
 
-            // Compute line cluster statistics
-            float lineMinY = Float.MAX_VALUE, lineMaxY = -Float.MAX_VALUE;
-            float lineMinX = Float.MAX_VALUE, lineMaxX = -Float.MAX_VALUE;
-            float lineSumY = 0f;
-            for (ProjectedStroke member : currentLine) {
-                lineMinY = Math.min(lineMinY, member.minY);
-                lineMaxY = Math.max(lineMaxY, member.maxY);
-                lineMinX = Math.min(lineMinX, member.minX);
-                lineMaxX = Math.max(lineMaxX, member.maxX);
-                lineSumY += member.cy;
+            for (List<ProjectedStroke> line : lineClusters) {
+                float lineSumY = 0f;
+                for (ProjectedStroke m : line) lineSumY += m.cy;
+                float lineAvgY = lineSumY / line.size();
+                float distY = Math.abs(ps.cy - lineAvgY);
+
+                // Check 1: Direct baseline alignment (standard character body/stem)
+                if (distY <= medianHeight * 0.55f) {
+                    if (distY < bestDist) {
+                        bestDist = distY;
+                        bestLine = line;
+                    }
+                    continue;
+                }
+
+                // Check 2: Diacritic / Matra / Dot / Shirorekha belonging to this line
+                // In Devanagari and English, a diacritic or matra sits directly above or below
+                // an existing character on that line (localized X overlap, small stroke height).
+                if (distY <= medianHeight * 1.25f) {
+                    boolean isSmallMark = ps.height <= medianHeight * 0.70f;
+                    boolean isShirorekha = (ps.maxX - ps.minX > medianHeight * 1.2f) && (ps.height <= medianHeight * 0.40f);
+                    if (isSmallMark || isShirorekha) {
+                        boolean overlapsCharacterX = false;
+                        for (ProjectedStroke m : line) {
+                            float charTolerance = Math.max(medianHeight * 0.95f, (m.maxX - m.minX) * 0.85f);
+                            if (Math.abs(ps.cx - m.cx) <= charTolerance
+                                    || (ps.minX <= m.maxX && ps.maxX >= m.minX)) {
+                                overlapsCharacterX = true;
+                                break;
+                            }
+                        }
+                        if (overlapsCharacterX && distY < bestDist) {
+                            bestDist = distY;
+                            bestLine = line;
+                        }
+                    }
+                }
             }
-            float lineAvgY = lineSumY / currentLine.size();
 
-            // Check if ps is a diacritic / matra / ascender / descender belonging to currentLine
-            // In Devanagari (Marathi/Hindi), matras like "े", "ै", "ो", "ौ", "ं" sit above the shirorekha,
-            // while "ु", "ू", "ृ" sit below. They horizontally overlap with the character and must NOT be split.
-            boolean overlapsX = (ps.minX <= lineMaxX + medianHeight * 0.55f)
-                    && (ps.maxX >= lineMinX - medianHeight * 0.55f);
-            boolean inMatraZone = (ps.maxY >= lineMinY - medianHeight * 1.35f)
-                    && (ps.minY <= lineMaxY + medianHeight * 1.35f);
-            boolean isMatraOrDiacritic = overlapsX && inMatraZone;
-
-            // Start a new line ONLY if it is NOT a matra/diacritic AND there is genuine line pitch separation
-            boolean isDistinctNewLine = !isMatraOrDiacritic
-                    && (Math.abs(ps.cy - lineAvgY) > medianHeight * 1.55f)
-                    && (ps.minY > lineMaxY + medianHeight * 0.40f || lineMinY > ps.maxY + medianHeight * 0.40f);
-
-            if (isDistinctNewLine) {
-                currentLine = new ArrayList<>();
-                currentLine.add(ps);
-                lineClusters.add(currentLine);
+            if (bestLine != null) {
+                bestLine.add(ps);
             } else {
-                currentLine.add(ps);
+                List<ProjectedStroke> newLine = new ArrayList<>();
+                newLine.add(ps);
+                lineClusters.add(newLine);
             }
         }
+
+        // Sort line clusters from top to bottom
+        Collections.sort(lineClusters, (l1, l2) -> {
+            float sum1 = 0f; for (ProjectedStroke p : l1) sum1 += p.cy;
+            float sum2 = 0f; for (ProjectedStroke p : l2) sum2 += p.cy;
+            return Float.compare(sum1 / l1.size(), sum2 / l2.size());
+        });
 
         // 5. Within each line, preserve natural human chronological stroke drawing order
         for (List<ProjectedStroke> cluster : lineClusters) {
@@ -249,9 +266,11 @@ public class SemanticStrokeClusterer {
                 if (clusterStrokeSet.contains(s)) lineStrokes.add(s);
             }
 
-            RectF lineBounds = InkNormalizer.getBounds(lineStrokes);
-            List<StrokeWord> lineWords = Collections.singletonList(new StrokeWord(lineStrokes, lineBounds, dominantAngle));
-            result.add(new StrokeLine(lineStrokes, lineWords, lineBounds, dominantAngle));
+            if (!lineStrokes.isEmpty()) {
+                RectF lineBounds = InkNormalizer.getBounds(lineStrokes);
+                List<StrokeWord> lineWords = Collections.singletonList(new StrokeWord(lineStrokes, lineBounds, dominantAngle));
+                result.add(new StrokeLine(lineStrokes, lineWords, lineBounds, dominantAngle));
+            }
         }
 
         return result;

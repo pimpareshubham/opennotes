@@ -228,15 +228,12 @@ public class InkNormalizer {
         float pivotX = bounds.centerX();
         float pivotY = bounds.centerY();
 
-        boolean isIndic = isIndicLanguage(language);
-        // In Devanagari (Marathi/Hindi), characters have natural vertical stands (kana) and
-        // diagonal matras. Cursive slant de-shearing MUST NOT be applied because it distorts
-        // and severs matras and kana from their consonants!
-        // But rigid rotation (writingAngle) MUST be applied so sloped lines are leveled for ML Kit.
-        float slantAngle = isIndic ? 0f : detectSlantAngleDegrees(strokes);
+        // ML Kit's digital ink neural network is trained on natural human handwriting
+        // (including both cursive and printed scripts). Artificial shearing deforms letter
+        // shapes and harms recognition. We only apply rigid rotation to level sloped baselines.
         float writingAngle = detectWritingAngleDegrees(strokes);
 
-        if (Math.abs(writingAngle) < 6.0f && Math.abs(slantAngle) < 10f) {
+        if (Math.abs(writingAngle) < 6.0f) {
             return new NormalizedInk(strokes, new OrientationTransform(0f, pivotX, pivotY, 0f));
         }
 
@@ -244,7 +241,6 @@ public class InkNormalizer {
         double rotRad = Math.toRadians(-writingAngle);
         float cos = (float) Math.cos(rotRad);
         float sin = (float) Math.sin(rotRad);
-        float shearFactor = (float) Math.tan(Math.toRadians(-slantAngle));
 
         for (Stroke s : strokes) {
             if (s == null) continue;
@@ -253,23 +249,20 @@ public class InkNormalizer {
             if (pts == null || pts.isEmpty()) pts = s.points;
             if (pts != null) {
                 for (DrawingPoint p : pts) {
-                    // Step 1: Rotate into horizontal frame
+                    // Rotate rigidly into horizontal frame without shearing
                     float dx = p.x - pivotX;
                     float dy = p.y - pivotY;
                     float rx = dx * cos - dy * sin + pivotX;
                     float ry = dx * sin + dy * cos + pivotY;
 
-                    // Step 2: De-shear cursive slant relative to baseline
-                    float sx = rx + (ry - pivotY) * shearFactor;
-
-                    clone.addPoint(sx, ry, p.pressure, p.timeMillis);
-                    clone.addRecognitionPoint(sx, ry, p.pressure, p.timeMillis);
+                    clone.addPoint(rx, ry, p.pressure, p.timeMillis);
+                    clone.addRecognitionPoint(rx, ry, p.pressure, p.timeMillis);
                 }
             }
             normalizedStrokes.add(clone);
         }
 
-        OrientationTransform transform = new OrientationTransform(writingAngle, pivotX, pivotY, slantAngle);
+        OrientationTransform transform = new OrientationTransform(writingAngle, pivotX, pivotY, 0f);
         return new NormalizedInk(normalizedStrokes, transform);
     }
 

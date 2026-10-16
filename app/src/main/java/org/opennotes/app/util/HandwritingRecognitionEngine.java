@@ -1282,9 +1282,11 @@ public final class HandwritingRecognitionEngine {
             return pool;
         }
 
+        // English / Latin:
+        // Google's Digital Ink ML model for English features an extensive built-in language
+        // model and dictionary. Respect ML Kit's top-ranked candidate while prioritizing
+        // user-trained personalized corrections if available.
         UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
-
-        // 1. Personalized learned handwriting style lookup (trained prototypes & substitutions)
         if (userModel != null) {
             for (String cand : alternatives) {
                 String learned = userModel.predictLearnedCorrection(cand, strokes);
@@ -1294,56 +1296,7 @@ public final class HandwritingRecognitionEngine {
             }
         }
 
-        // 2. Doctor handwriting & careless handwriting replacements
-        Map<String, String> wordReplacements = getCarelessHandwritingReplacements();
-        int initialSize = pool.size();
-        for (int i = 0; i < initialSize; i++) {
-            String candidate = pool.get(i);
-            String corrected = applyWordReplacements(candidate, wordReplacements);
-            if (!corrected.equals(candidate) && !pool.contains(corrected)) {
-                pool.add(corrected);
-            }
-        }
-
-        // 3. Score each candidate using language probability, user vocabulary, doctor terminology, bigrams, and penalties
-        String lastPreContextWord = getLastToken(preContext);
-
-        class ScoredCandidate implements Comparable<ScoredCandidate> {
-            final String text;
-            final float score;
-            final int originalRank;
-
-            ScoredCandidate(String text, float score, int originalRank) {
-                this.text = text;
-                this.score = score;
-                this.originalRank = originalRank;
-            }
-
-            @Override
-            public int compareTo(ScoredCandidate other) {
-                int cmp = Float.compare(other.score, this.score);
-                if (cmp != 0) return cmp;
-                return Integer.compare(this.originalRank, other.originalRank);
-            }
-        }
-
-        List<ScoredCandidate> scoredList = new ArrayList<>();
-        for (int rank = 0; rank < pool.size(); rank++) {
-            String cand = pool.get(rank);
-            float score = calculateProbabilisticScore(context, cand, rank, lastPreContextWord);
-            scoredList.add(new ScoredCandidate(cand, score, rank));
-        }
-
-        Collections.sort(scoredList);
-
-        List<String> reranked = new ArrayList<>();
-        for (ScoredCandidate sc : scoredList) {
-            if (!reranked.contains(sc.text)) {
-                reranked.add(sc.text);
-            }
-        }
-
-        return reranked;
+        return pool;
     }
 
     private static String getLastToken(String text) {

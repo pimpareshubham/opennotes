@@ -1136,28 +1136,6 @@
             android:layout_height="18dp"
             android:background="@color/divider" />
 
-        <!-- Tilt / Rotate Angle -->
-        <TextView
-            android:id="@+id/btnLassoRotate"
-            android:layout_width="wrap_content"
-            android:layout_height="match_parent"
-            android:minWidth="48dp"
-            android:minHeight="48dp"
-            android:gravity="center"
-            android:paddingHorizontal="10dp"
-            android:text="🔄 Tilt"
-            android:textColor="#C084FC"
-            android:textSize="12sp"
-            android:textStyle="bold"
-            android:background="?selectableItemBackgroundBorderless"
-            android:clickable="true"
-            android:focusable="true"
-            android:contentDescription="Tilt or rotate selected content" />
-
-        <View
-            android:layout_width="1dp"
-            android:layout_height="18dp"
-            android:background="@color/divider" />
 
 
         <!-- Convert to Text (✍️ Text Convert) -->
