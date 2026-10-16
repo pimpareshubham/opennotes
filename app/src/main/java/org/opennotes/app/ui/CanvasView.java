@@ -658,6 +658,17 @@ public class CanvasView extends View {
         clearSelection();
     }
 
+    /** Starts recognition for every handwritten stroke on the current page. */
+    public boolean convertPageToBeautifulText() {
+        if (currentPage == null || currentPage.strokes == null || currentPage.strokes.isEmpty()) {
+            return false;
+        }
+        cancelPendingAutoConversion();
+        clearSelection();
+        convertStrokesToText(new ArrayList<>(currentPage.strokes), true);
+        return true;
+    }
+
     public void convertStrokesToText(List<Stroke> strokesToConvert) {
         convertStrokesToText(strokesToConvert, false);
     }

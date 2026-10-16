@@ -1126,6 +1126,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         popup.getMenu().add(0, 5, 4, "✨ Auto-Beautification Settings");
         popup.getMenu().add(0, 6, 5, "Clear Canvas");
         popup.getMenu().add(0, 7, 6, "Select All Handwriting");
+        popup.getMenu().add(0, 8, 7, "Convert Entire Page to Beautiful Font");
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -1158,6 +1159,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 case 7:
                     if (!canvasView.selectAllHandwriting()) {
                         Toast.makeText(this, "There is no handwriting on this page to select", Toast.LENGTH_SHORT).show();
+                    }
+                    return true;
+                case 8:
+                    if (!canvasView.convertPageToBeautifulText()) {
+                        Toast.makeText(this, "There is no handwriting on this page to convert", Toast.LENGTH_SHORT).show();
                     }
                     return true;
             }
