@@ -104,8 +104,34 @@ public class Stroke {
     }
 
     public void addPoint(float x, float y, float pressure, long timeMillis) {
-        points.add(new DrawingPoint(x, y, pressure, timeMillis));
-        markDirty();
+        int previousCount = points.size();
+        DrawingPoint previous = previousCount == 0 ? null : points.get(previousCount - 1);
+        DrawingPoint point = new DrawingPoint(x, y, pressure, timeMillis);
+        boolean canExtendPath = cachedPath != null && !pathDirty && previousCount >= 2;
+        boolean canExtendBounds = cachedBounds != null && !boundsDirty;
+        points.add(point);
+
+        // The current path ends at the previous sample. Append just the new
+        // quadratic segment instead of rebuilding every earlier point on each
+        // display frame while a long stroke is still in progress.
+        if (canExtendPath) {
+            float midX = (previous.x + point.x) * 0.5f;
+            float midY = (previous.y + point.y) * 0.5f;
+            cachedPath.quadTo(previous.x, previous.y, midX, midY);
+            cachedPath.lineTo(point.x, point.y);
+        } else {
+            cachedPath = null;
+            pathDirty = true;
+        }
+
+        float pad = Math.max(width * 2f, 15f);
+        if (canExtendBounds) {
+            cachedBounds.union(x - pad, y - pad);
+            cachedBounds.union(x + pad, y + pad);
+        } else {
+            cachedBounds = null;
+            boundsDirty = true;
+        }
     }
 
     public void addRecognitionPoint(float x, float y, float pressure, long timeMillis) {
