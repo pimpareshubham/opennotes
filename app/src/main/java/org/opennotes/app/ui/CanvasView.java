@@ -1815,6 +1815,11 @@ public class CanvasView extends View {
                 break;
             }
         }
+        if (action == MotionEvent.ACTION_DOWN && hasStylusPointer) {
+            // Avoid waiting for batched move events during handwriting. We still
+            // consume historical samples if the platform supplies them.
+            requestUnbufferedDispatch(event);
+        }
 
         // Stylus-Only Mode check: palm rejection
         if (isStylusOnly && !hasStylusPointer) {
