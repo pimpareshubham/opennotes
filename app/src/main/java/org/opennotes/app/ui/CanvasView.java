@@ -186,6 +186,7 @@ public class CanvasView extends View {
 
     // Zero-lag high performance rendering buffers
     private final RectF visibleViewport = new RectF();
+    private final RectF eraserQueryBounds = new RectF();
     private final Rect visibleClip = new Rect();
     private final Path reusableSegPath = new Path();
 
@@ -2264,8 +2265,12 @@ public class CanvasView extends View {
     private void checkStrokeErasure(float touchX, float touchY) {
         if (currentPage == null || currentPage.strokes.isEmpty()) return;
         float hitRadius = 35f / scaleFactor;
+        eraserQueryBounds.set(touchX - hitRadius, touchY - hitRadius,
+                touchX + hitRadius, touchY + hitRadius);
+        prepareVisibleStrokeIndices(eraserQueryBounds);
 
-        for (int i = currentPage.strokes.size() - 1; i >= 0; i--) {
+        for (int i = visibleStrokeIndices.previousSetBit(currentPage.strokes.size() - 1);
+             i >= 0; i = visibleStrokeIndices.previousSetBit(i - 1)) {
             Stroke s = currentPage.strokes.get(i);
             RectF bounds = s.getBounds();
             if (touchX < bounds.left - hitRadius || touchX > bounds.right + hitRadius
