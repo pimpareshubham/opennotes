@@ -22,11 +22,17 @@ import com.google.mlkit.vision.digitalink.recognition.WritingArea;
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.db.AppSettings;
+import org.opennotes.app.ai.InkNormalizer;
+import org.opennotes.app.ai.SemanticStrokeClusterer;
+import org.opennotes.app.ai.UserHandwritingModel;
 
 import java.util.List;
 import java.util.HashMap;
 import java.util.ArrayList;
 import java.util.Map;
+import java.util.Set;
+import java.util.HashSet;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -87,6 +93,10 @@ public final class HandwritingRecognitionEngine {
         void onStatus(boolean englishReady, boolean marathiReady);
     }
 
+    public interface AllModelsStatusCallback {
+        void onStatus(boolean englishReady, boolean marathiReady, boolean hindiReady);
+    }
+
     private HandwritingRecognitionEngine() { }
 
     /** Check if offline models are already installed on the device. */
@@ -117,6 +127,104 @@ public final class HandwritingRecognitionEngine {
                 });
             } catch (Exception e) {
                 MAIN.post(() -> callback.onStatus(false, false));
+            }
+        });
+    }
+
+    /** Check offline download status of all supported language models (English, Marathi, Hindi). */
+    public static void checkAllModelsDownloaded(Context context, AllModelsStatusCallback callback) {
+        if (callback == null) return;
+        WORKER.execute(() -> {
+            try {
+                RemoteModelManager manager = RemoteModelManager.getInstance();
+                String enTag = languageTag("ENGLISH");
+                String mrTag = languageTag("MARATHI");
+                String hiTag = languageTag("HINDI");
+
+                DigitalInkRecognitionModelIdentifier idEn = DigitalInkRecognitionModelIdentifier.fromLanguageTag(enTag);
+                DigitalInkRecognitionModelIdentifier idMr = DigitalInkRecognitionModelIdentifier.fromLanguageTag(mrTag);
+                DigitalInkRecognitionModelIdentifier idHi = DigitalInkRecognitionModelIdentifier.fromLanguageTag(hiTag);
+
+                DigitalInkRecognitionModel modelEn = idEn != null ? DigitalInkRecognitionModel.builder(idEn).build() : null;
+                DigitalInkRecognitionModel modelMr = idMr != null ? DigitalInkRecognitionModel.builder(idMr).build() : null;
+                DigitalInkRecognitionModel modelHi = idHi != null ? DigitalInkRecognitionModel.builder(idHi).build() : null;
+
+                final boolean[] status = new boolean[3]; // [en, mr, hi]
+                final int[] pending = {3};
+
+                Runnable checkDone = () -> {
+                    pending[0]--;
+                    if (pending[0] <= 0) {
+                        MAIN.post(() -> callback.onStatus(status[0], status[1], status[2]));
+                    }
+                };
+
+                if (modelEn != null) {
+                    manager.isModelDownloaded(modelEn).addOnCompleteListener(t -> {
+                        status[0] = t.isSuccessful() && Boolean.TRUE.equals(t.getResult());
+                        checkDone.run();
+                    });
+                } else checkDone.run();
+
+                if (modelMr != null) {
+                    manager.isModelDownloaded(modelMr).addOnCompleteListener(t -> {
+                        status[1] = t.isSuccessful() && Boolean.TRUE.equals(t.getResult());
+                        checkDone.run();
+                    });
+                } else checkDone.run();
+
+                if (modelHi != null) {
+                    manager.isModelDownloaded(modelHi).addOnCompleteListener(t -> {
+                        status[2] = t.isSuccessful() && Boolean.TRUE.equals(t.getResult());
+                        checkDone.run();
+                    });
+                } else checkDone.run();
+
+            } catch (Exception e) {
+                MAIN.post(() -> callback.onStatus(false, false, false));
+            }
+        });
+    }
+
+    public interface SingleModelStatusCallback {
+        void onStatus(boolean downloaded);
+    }
+
+    public static void isModelDownloaded(String language, SingleModelStatusCallback callback) {
+        if (callback == null) return;
+        WORKER.execute(() -> {
+            try {
+                String tag = languageTag(language);
+                DigitalInkRecognitionModelIdentifier id = DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+                if (id == null) {
+                    MAIN.post(() -> callback.onStatus(false));
+                    return;
+                }
+                DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(id).build();
+                RemoteModelManager.getInstance().isModelDownloaded(model)
+                        .addOnCompleteListener(t -> {
+                            boolean ready = t.isSuccessful() && Boolean.TRUE.equals(t.getResult());
+                            MAIN.post(() -> callback.onStatus(ready));
+                        });
+            } catch (Exception e) {
+                MAIN.post(() -> callback.onStatus(false));
+            }
+        });
+    }
+
+    public static void downloadModel(String language, ModelDownloadCallback callback) {
+        WORKER.execute(() -> {
+            try {
+                String tag = languageTag(language);
+                DigitalInkRecognitionModelIdentifier id = DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+                if (id == null) {
+                    if (callback != null) MAIN.post(() -> callback.onComplete(new IllegalArgumentException("Model not found: " + language)));
+                    return;
+                }
+                DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(id).build();
+                downloadModelForSetup(RemoteModelManager.getInstance(), model, tag, callback != null ? callback : error -> {});
+            } catch (Exception e) {
+                if (callback != null) MAIN.post(() -> callback.onComplete(e));
             }
         });
     }
@@ -220,16 +328,29 @@ public final class HandwritingRecognitionEngine {
                                                  Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
         final String contextText = preContext == null ? "" : preContext;
-        final float writingAngle = estimateWritingAngleDegrees(strokes);
-        final boolean isSlanted = Math.abs(writingAngle) >= 4.0f;
 
-        // Pass 1: Primary recognition.
-        // If the handwriting is distinctly slanted (e.g. tilted uphill, downhill, or vertical margin),
-        // deskewing to horizontal baseline dramatically boosts recognition accuracy.
-        List<Stroke> primaryStrokes = isSlanted
-                ? transformedStrokeCopies(strokes, writingAngle, true, false)
+        // Multi-line and any-angle segmentation:
+        // If the handwriting spans multiple lines (written one below another at any angle),
+        // cleanly segmenting into lines prevents ML Kit from confusing overlapping bounding boxes.
+        if (SemanticStrokeClusterer.isMultiLine(strokes)) {
+            List<SemanticStrokeClusterer.StrokeLine> lines = SemanticStrokeClusterer.segmentIntoLines(strokes);
+            if (lines != null && lines.size() > 1) {
+                recognizeMultiLineStatements(context, lines, 0, preferredLanguage, contextText,
+                        new StringBuilder(), new ArrayList<>(), new RectF(), callback);
+                return;
+            }
+        }
+
+        // Pass 1: Advanced Ink Normalization (slant de-shearing & orientation deskewing)
+        // Uprights cursive downstrokes and rotates tilted baselines to horizontal.
+        InkNormalizer.NormalizedInk normalized = InkNormalizer.normalizeInk(strokes);
+        List<Stroke> primaryStrokes = (normalized != null && normalized.strokes != null && !normalized.strokes.isEmpty())
+                ? normalized.strokes
                 : strokes;
-        if (primaryStrokes.isEmpty()) primaryStrokes = strokes;
+        final float writingAngle = (normalized != null && normalized.transform != null)
+                ? normalized.transform.angleDegrees
+                : estimateWritingAngleDegrees(strokes);
+        final boolean isSlanted = Math.abs(writingAngle) >= 3.5f;
 
         final List<Stroke> effectivePrimary = primaryStrokes;
         executeSingleRecognitionPass(context, effectivePrimary, preferredLanguage, contextText, new Callback() {
@@ -255,6 +376,66 @@ public final class HandwritingRecognitionEngine {
         });
     }
 
+    private static void recognizeMultiLineStatements(Context context,
+                                                     List<SemanticStrokeClusterer.StrokeLine> lines,
+                                                     int index,
+                                                     String preferredLanguage,
+                                                     String preContext,
+                                                     StringBuilder combinedText,
+                                                     List<String> combinedAlternatives,
+                                                     RectF combinedBounds,
+                                                     Callback callback) {
+        if (index >= lines.size()) {
+            String text = combinedText.toString().trim();
+            if (text.isEmpty()) {
+                callback.onFailure(new IllegalArgumentException("No text could be deciphered from handwriting lines."));
+                return;
+            }
+            float lineCount = Math.max(1f, (float) lines.size());
+            float fontSize = Math.max(26f, Math.min(92f, (combinedBounds.height() / lineCount) * 0.85f));
+            String lang = isLatin(preferredLanguage) ? "ENGLISH"
+                    : ("HINDI".equalsIgnoreCase(preferredLanguage) ? "HINDI" : "MARATHI");
+            final String finalText = text;
+            final String finalLang = lang;
+            final float finalFontSize = fontSize;
+            MAIN.post(() -> callback.onSuccess(
+                    new RecognitionResult(finalText, finalLang, new RectF(combinedBounds), finalFontSize, combinedAlternatives)));
+            return;
+        }
+
+        SemanticStrokeClusterer.StrokeLine line = lines.get(index);
+        recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, false, new Callback() {
+            @Override
+            public void onSuccess(RecognitionResult result) {
+                if (combinedText.length() > 0) combinedText.append("\n");
+                combinedText.append(result.text);
+
+                if (combinedBounds.isEmpty()) {
+                    combinedBounds.set(result.bounds);
+                } else {
+                    combinedBounds.union(result.bounds);
+                }
+
+                for (String alt : result.alternatives) {
+                    if (!combinedAlternatives.contains(alt)) combinedAlternatives.add(alt);
+                }
+
+                recognizeMultiLineStatements(context, lines, index + 1, preferredLanguage,
+                        result.text, combinedText, combinedAlternatives, combinedBounds, callback);
+            }
+
+            @Override
+            public void onFailure(Exception error) {
+                // If multi-line decomposition fails on any subline, fall back to single-pass block recognition
+                List<Stroke> allStrokes = new ArrayList<>();
+                for (SemanticStrokeClusterer.StrokeLine l : lines) {
+                    if (l != null && l.strokes != null) allStrokes.addAll(l.strokes);
+                }
+                executeSingleRecognitionPass(context, allStrokes, preferredLanguage, preContext, callback);
+            }
+        });
+    }
+
     private static void tryAlternativeHypothesis(Context context,
                                                  List<Stroke> originalStrokes,
                                                  String language,
@@ -269,17 +450,17 @@ public final class HandwritingRecognitionEngine {
             candidatesToTry.add(originalStrokes);
         }
 
-        // Test cleaned + resampled (ideal for lazy/rushed handwriting with hooks or uneven sampling)
+        // Test cleaned variations without destructive hook trimming
         candidatesToTry.add(transformedStrokeCopies(originalStrokes,
-                primaryWasDeskewed ? writingAngle : 0f, true, true));
+                primaryWasDeskewed ? writingAngle : 0f, false, false));
 
         // Test common tilt variations: +15°, -15°, +30°, -30°, 90°
         if (!primaryWasDeskewed) {
-            candidatesToTry.add(transformedStrokeCopies(originalStrokes, 15f, true, false));
-            candidatesToTry.add(transformedStrokeCopies(originalStrokes, -15f, true, false));
+            candidatesToTry.add(transformedStrokeCopies(originalStrokes, 15f, false, false));
+            candidatesToTry.add(transformedStrokeCopies(originalStrokes, -15f, false, false));
             RectF bounds = boundsOf(originalStrokes);
             if (bounds != null && bounds.height() > bounds.width() * 1.5f) {
-                candidatesToTry.add(transformedStrokeCopies(originalStrokes, 90f, true, false));
+                candidatesToTry.add(transformedStrokeCopies(originalStrokes, 90f, false, false));
             }
         }
 
@@ -354,7 +535,7 @@ public final class HandwritingRecognitionEngine {
             RemoteModelManager manager = RemoteModelManager.getInstance();
             manager.isModelDownloaded(model).addOnSuccessListener(isDownloaded -> {
                 if (isDownloaded) {
-                    runRecognition(model, strokes, preferredLanguage, preContext, bounds, callback);
+                    runRecognition(context, model, strokes, preferredLanguage, preContext, bounds, callback);
                 } else {
                     requestModelDownloadApproval(context, manager, model, tag,
                             strokes, preferredLanguage, preContext, bounds, callback);
@@ -580,7 +761,7 @@ public final class HandwritingRecognitionEngine {
                                                      RectF bounds, Callback callback) {
         AppSettings settings = AppSettings.getInstance(context);
         settings.setAcceptedHandwritingModelDownload(tag, true);
-        downloadThenRecognize(manager, model, tag, strokes, language, preContext, bounds, callback);
+        downloadThenRecognize(context, manager, model, tag, strokes, language, preContext, bounds, callback);
     }
 
     private static void finishApproval(String tag, boolean approved, AppSettings settings, String reason) {
@@ -618,7 +799,7 @@ public final class HandwritingRecognitionEngine {
     }
 
 
-    private static void downloadThenRecognize(RemoteModelManager manager,
+    private static void downloadThenRecognize(Context context, RemoteModelManager manager,
                                              DigitalInkRecognitionModel model,
                                              String tag, List<Stroke> strokes, String language,
                                              String preContext,
@@ -641,10 +822,10 @@ public final class HandwritingRecognitionEngine {
                     .addOnSuccessListener(isDownloaded -> {
                         removeCompletedDownload(tag, downloadTask);
                         if (isDownloaded) {
-                            runRecognition(model, strokes, language, preContext, bounds, callback);
+                            runRecognition(context, model, strokes, language, preContext, bounds, callback);
                         } else {
                             postFailure(callback, new IllegalStateException(
-                                    "The language model download finished but the model is not installed yet. Please try again."));
+                                     "The language model download finished but the model is not installed yet. Please try again."));
                         }
                     })
                     .addOnFailureListener(error -> {
@@ -663,7 +844,7 @@ public final class HandwritingRecognitionEngine {
         }
     }
 
-    private static void runRecognition(DigitalInkRecognitionModel model, List<Stroke> strokes,
+    private static void runRecognition(Context context, DigitalInkRecognitionModel model, List<Stroke> strokes,
                                        String language, String preContext,
                                        RectF bounds, Callback callback) {
         // ML Kit Task listeners normally run on the main thread. Building Ink
@@ -671,10 +852,10 @@ public final class HandwritingRecognitionEngine {
         // editor for page-wide conversion, so always prepare and submit it on
         // the dedicated recognition worker.
         WORKER.execute(() -> buildInkAndRecognize(
-                model, strokes, language, preContext, bounds, callback));
+                context, model, strokes, language, preContext, bounds, callback));
     }
 
-    private static void buildInkAndRecognize(DigitalInkRecognitionModel model,
+    private static void buildInkAndRecognize(Context context, DigitalInkRecognitionModel model,
                                              List<Stroke> strokes, String language,
                                              String preContext, RectF bounds,
                                              Callback callback) {
@@ -722,31 +903,40 @@ public final class HandwritingRecognitionEngine {
             }
             Ink ink = inkBuilder.build();
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
-                    DigitalInkRecognizerOptions.builder(model).setMaxResultCount(5).build());
+                    DigitalInkRecognizerOptions.builder(model).setMaxResultCount(12).build());
+
+            boolean isBigLine = bounds.width() > 400f || bounds.width() > bounds.height() * 2.8f;
+            if (isBigLine) {
+                // For big lines or long continuous writing, unconstrained recognition gives
+                // the neural beam search freedom across arbitrary line length without coordinate clipping.
+                recognizeWithoutWritingArea(context, strokes, recognizer, ink, language, preContext, bounds, callback, null);
+                return;
+            }
+
             RecognitionContext.Builder contextBuilder = RecognitionContext.builder()
                     .setWritingArea(new WritingArea(writingArea.width(), writingArea.height()))
-                    // ML Kit requires preContext even when there is no preceding text.
                     .setPreContext(preContext);
             RecognitionContext recognitionContext = contextBuilder.build();
             recognizer.recognize(ink, recognitionContext)
                     .addOnSuccessListener(result -> {
                         String text = firstCandidate(result);
                         if (text.trim().isEmpty()) {
-                            recognizeWithoutWritingArea(recognizer, ink, language,
+                            recognizeWithoutWritingArea(context, strokes, recognizer, ink, language,
                                     preContext, bounds, callback, null);
                         } else {
-                            completeRecognition(recognizer, result, language, bounds, callback);
+                            completeRecognition(context, strokes, recognizer, result, language, preContext, bounds, callback);
                         }
                     })
                     .addOnFailureListener(error -> recognizeWithoutWritingArea(
-                            recognizer, ink, language, preContext, bounds, callback, error));
+                            context, strokes, recognizer, ink, language, preContext, bounds, callback, error));
         } catch (Exception error) {
             postFailure(callback, error);
         }
     }
 
     /** Retry without the optional writing-area hint, which may be a poor fit for selected ink. */
-    private static void recognizeWithoutWritingArea(DigitalInkRecognizer recognizer, Ink ink,
+    private static void recognizeWithoutWritingArea(Context context, List<Stroke> strokes,
+                                                    DigitalInkRecognizer recognizer, Ink ink,
                                                     String language, String preContext, RectF bounds,
                                                     Callback callback, Exception firstError) {
         try {
@@ -754,9 +944,9 @@ public final class HandwritingRecognitionEngine {
             if (preContext.isEmpty()) {
                 retryTask = recognizer.recognize(ink);
             } else {
-                RecognitionContext context = RecognitionContext.builder()
+                RecognitionContext recContext = RecognitionContext.builder()
                         .setPreContext(preContext).build();
-                retryTask = recognizer.recognize(ink, context);
+                retryTask = recognizer.recognize(ink, recContext);
             }
             retryTask
                     .addOnSuccessListener(result -> {
@@ -764,11 +954,11 @@ public final class HandwritingRecognitionEngine {
                         if (text.trim().isEmpty()) {
                             recognizer.close();
                             IllegalArgumentException error = new IllegalArgumentException(
-                                    "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink.");
+                                     "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink.");
                             if (firstError != null) error.addSuppressed(firstError);
                             postFailure(callback, error);
                         } else {
-                            completeRecognition(recognizer, result, language, bounds, callback);
+                            completeRecognition(context, strokes, recognizer, result, language, preContext, bounds, callback);
                         }
                     })
                     .addOnFailureListener(error -> {
@@ -789,9 +979,10 @@ public final class HandwritingRecognitionEngine {
         return text == null ? "" : text;
     }
 
-    private static void completeRecognition(DigitalInkRecognizer recognizer,
+    private static void completeRecognition(Context context, List<Stroke> strokes,
+                                            DigitalInkRecognizer recognizer,
                                             com.google.mlkit.vision.digitalink.common.RecognitionResult result,
-                                            String language, RectF bounds, Callback callback) {
+                                            String language, String preContext, RectF bounds, Callback callback) {
         try {
             List<String> alternatives = new ArrayList<>();
             for (com.google.mlkit.vision.digitalink.common.RecognitionCandidate candidate
@@ -802,7 +993,8 @@ public final class HandwritingRecognitionEngine {
                     alternatives.add(candidateText);
                 }
             }
-            String text = alternatives.isEmpty() ? "" : alternatives.get(0);
+            List<String> rerankedAlternatives = enhanceAndRerankCandidates(context, strokes, alternatives, language, preContext);
+            String text = rerankedAlternatives.isEmpty() ? "" : rerankedAlternatives.get(0);
             if (text.isEmpty()) {
                 postFailure(callback, new IllegalArgumentException("The model returned no readable text."));
                 return;
@@ -810,11 +1002,455 @@ public final class HandwritingRecognitionEngine {
             String lang = isLatin(language) ? "ENGLISH"
                     : ("HINDI".equalsIgnoreCase(language) ? "HINDI" : "MARATHI");
             float fontSize = Math.max(26f, Math.min(92f, bounds.height() * 0.85f));
+            final float finalFontSize = fontSize;
+            final String finalText = text;
+            final String finalLang = lang;
             MAIN.post(() -> callback.onSuccess(
-                    new RecognitionResult(text, lang, new RectF(bounds), fontSize, alternatives)));
+                    new RecognitionResult(finalText, finalLang, new RectF(bounds), finalFontSize, rerankedAlternatives)));
         } finally {
             recognizer.close();
         }
+    }
+
+    private static List<String> enhanceAndRerankCandidates(Context context, List<Stroke> strokes,
+                                                           List<String> alternatives, String language, String preContext) {
+        if (alternatives == null || alternatives.isEmpty()) return alternatives;
+        List<String> pool = new ArrayList<>(alternatives);
+
+        UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
+
+        // 1. Personalized learned handwriting style lookup (trained prototypes & substitutions)
+        if (userModel != null) {
+            for (String cand : alternatives) {
+                String learned = userModel.predictLearnedCorrection(cand, strokes);
+                if (learned != null && !learned.trim().isEmpty() && !pool.contains(learned)) {
+                    pool.add(0, learned); // Prioritize user-trained style at top
+                }
+            }
+        }
+
+        // 2. Doctor handwriting & careless handwriting replacements
+        Map<String, String> wordReplacements = getCarelessHandwritingReplacements();
+        int initialSize = pool.size();
+        for (int i = 0; i < initialSize; i++) {
+            String candidate = pool.get(i);
+            String corrected = applyWordReplacements(candidate, wordReplacements);
+            if (!corrected.equals(candidate) && !pool.contains(corrected)) {
+                pool.add(corrected);
+            }
+        }
+
+        // 3. Score each candidate using language probability, user vocabulary, doctor terminology, bigrams, and penalties
+        String lastPreContextWord = getLastToken(preContext);
+
+        class ScoredCandidate implements Comparable<ScoredCandidate> {
+            final String text;
+            final float score;
+            final int originalRank;
+
+            ScoredCandidate(String text, float score, int originalRank) {
+                this.text = text;
+                this.score = score;
+                this.originalRank = originalRank;
+            }
+
+            @Override
+            public int compareTo(ScoredCandidate other) {
+                int cmp = Float.compare(other.score, this.score);
+                if (cmp != 0) return cmp;
+                return Integer.compare(this.originalRank, other.originalRank);
+            }
+        }
+
+        List<ScoredCandidate> scoredList = new ArrayList<>();
+        for (int rank = 0; rank < pool.size(); rank++) {
+            String cand = pool.get(rank);
+            float score = calculateProbabilisticScore(context, cand, rank, lastPreContextWord);
+            scoredList.add(new ScoredCandidate(cand, score, rank));
+        }
+
+        Collections.sort(scoredList);
+
+        List<String> reranked = new ArrayList<>();
+        for (ScoredCandidate sc : scoredList) {
+            if (!reranked.contains(sc.text)) {
+                reranked.add(sc.text);
+            }
+        }
+
+        return reranked;
+    }
+
+    private static String getLastToken(String text) {
+        if (text == null || text.trim().isEmpty()) return null;
+        String[] parts = text.trim().split("\\s+");
+        if (parts.length == 0) return null;
+        String last = parts[parts.length - 1].replaceAll("[^a-zA-Z0-9]", "");
+        return last.isEmpty() ? null : last.toLowerCase();
+    }
+
+    private static String applyWordReplacements(String text, Map<String, String> wordReplacements) {
+        if (text == null || text.trim().isEmpty()) return text;
+        String[] words = text.split(" ");
+        boolean changed = false;
+        StringBuilder fixedLine = new StringBuilder();
+        for (int w = 0; w < words.length; w++) {
+            if (w > 0) fixedLine.append(" ");
+            String word = words[w];
+            String clean = word.replaceAll("[^a-zA-Z0-9]", "");
+            String punctuation = word.substring(clean.length());
+            String lower = clean.toLowerCase();
+            if (wordReplacements.containsKey(lower)) {
+                String replacement = wordReplacements.get(lower);
+                if (clean.length() > 0 && Character.isUpperCase(clean.charAt(0)) && replacement.length() > 0) {
+                    replacement = Character.toUpperCase(replacement.charAt(0))
+                            + (replacement.length() > 1 ? replacement.substring(1) : "");
+                }
+                fixedLine.append(replacement).append(punctuation);
+                changed = true;
+            } else if (clean.equalsIgnoreCase("12") || clean.equalsIgnoreCase("l2") || clean.equalsIgnoreCase("1z") || clean.equalsIgnoreCase("lz")) {
+                fixedLine.append("R").append(punctuation);
+                changed = true;
+            } else {
+                fixedLine.append(word);
+            }
+        }
+        return changed ? fixedLine.toString() : text;
+    }
+
+    private static float calculateProbabilisticScore(Context context, String text, int originalRank, String lastPreContextWord) {
+        float score = Math.max(0f, 32f - (originalRank * 2.5f));
+        String[] tokens = text.trim().split("\\s+");
+        String prev = lastPreContextWord;
+
+        UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
+        List<String> customVocab = (userModel != null) ? userModel.getCustomVocabulary() : Collections.emptyList();
+
+        for (String token : tokens) {
+            String clean = token.replaceAll("[^a-zA-Z0-9]", "").toLowerCase();
+            if (clean.isEmpty()) continue;
+
+            if (customVocab.contains(token) || customVocab.contains(clean)) {
+                score += 50f; // Boost user-taught vocabulary words
+            } else if (clean.equals("r")) {
+                score += 26f;
+            } else if (clean.equals("12") || clean.equals("l2") || clean.equals("1z") || clean.equals("lz")) {
+                score -= 15f; // penalize mistaken digit for R
+            } else if (isDoctorTerm(clean)) {
+                score += 30f; // Boost medical/doctor terminology and abbreviations
+            } else if (isFrequentWord(clean)) {
+                score += 22f;
+            } else if (isInLexicon(clean)) {
+                score += 14f;
+            } else if (isNumeric(clean)) {
+                score += 10f;
+            } else if (isProperNoun(token)) {
+                score += 12f;
+            } else if (hasDigitMixedWithLetters(clean)) {
+                score -= 30f; // definitely garbage (e.g. peop1e, w0rk)
+            } else if (clean.length() >= 3) {
+                score -= 8f; // unrecognized non-dictionary word
+            }
+
+            if (prev != null) {
+                String bigram = prev + " " + clean;
+                if (isFrequentBigram(bigram)) {
+                    score += 40f; // decisive boost for natural phrases
+                }
+            }
+            prev = clean;
+        }
+
+        return score;
+    }
+
+    private static boolean isNumeric(String s) {
+        if (s == null || s.isEmpty()) return false;
+        for (int i = 0; i < s.length(); i++) {
+            if (!Character.isDigit(s.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    private static boolean isProperNoun(String word) {
+        if (word == null || word.length() < 2) return false;
+        return Character.isUpperCase(word.charAt(0)) && Character.isLowerCase(word.charAt(1));
+    }
+
+    private static boolean hasDigitMixedWithLetters(String s) {
+        boolean hasDigit = false;
+        boolean hasLetter = false;
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (Character.isDigit(c)) hasDigit = true;
+            else if (Character.isLetter(c)) hasLetter = true;
+        }
+        return hasDigit && hasLetter;
+    }
+
+    private static final Set<String> FREQUENT_WORDS_SET = new HashSet<>(Arrays.asList(
+            "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not", "on", "with", "he",
+            "as", "you", "do", "at", "this", "but", "his", "by", "from", "they", "we", "say", "her", "she", "or",
+            "an", "will", "my", "one", "all", "would", "there", "their", "what", "so", "up", "out", "if", "about",
+            "who", "get", "which", "go", "me", "when", "make", "can", "like", "time", "no", "just", "him", "know",
+            "take", "people", "into", "year", "your", "good", "some", "could", "them", "see", "other", "than", "then",
+            "now", "look", "only", "come", "its", "over", "think", "also", "back", "after", "use", "two", "how", "our",
+            "work", "first", "well", "way", "even", "new", "want", "because", "any", "these", "give", "day", "most", "us",
+            "are", "r", "write", "wrote", "written", "writing", "note", "notes", "starnote", "opennotes", "today", "tomorrow",
+            "yesterday", "morning", "evening", "night", "week", "month", "sunday", "monday", "tuesday", "wednesday",
+            "thursday", "friday", "saturday", "meeting", "project", "plan", "task", "tasks", "office", "home", "call",
+            "message", "email", "phone", "contact", "name", "suresh", "shubham", "rahul", "rohit", "amit", "priya",
+            "sneha", "anjali", "pooja", "great", "sure", "pure", "more", "here", "where", "every", "never", "under",
+            "water", "paper", "letter", "print", "create", "share", "stare", "help", "please", "thanks", "thank",
+            "welcome", "ok", "okay", "yes", "done", "important", "remember", "check", "point", "summary", "question", "answer"
+    ));
+
+    private static boolean isFrequentWord(String word) {
+        return FREQUENT_WORDS_SET.contains(word);
+    }
+
+    private static final Set<String> LEXICON_SET = new HashSet<>(Arrays.asList(
+            "able", "about", "above", "accept", "according", "account", "across", "act", "action", "activity",
+            "actually", "add", "address", "admit", "adult", "affect", "after", "again", "against", "age",
+            "agency", "agent", "ago", "agree", "agreement", "ahead", "air", "all", "allow", "almost",
+            "alone", "along", "already", "also", "although", "always", "american", "among", "amount", "analysis",
+            "and", "animal", "another", "answer", "any", "anyone", "anything", "appear", "apply", "approach",
+            "area", "argue", "arm", "around", "arrive", "art", "article", "artist", "as", "ask",
+            "assume", "at", "attack", "attention", "attorney", "audience", "author", "authority", "available", "avoid",
+            "away", "baby", "back", "bad", "bag", "ball", "bank", "bar", "base", "be",
+            "beat", "beautiful", "because", "become", "bed", "before", "begin", "behavior", "behind", "believe",
+            "benefit", "best", "better", "between", "beyond", "big", "bill", "billion", "bit", "black",
+            "blood", "blue", "board", "body", "book", "born", "both", "box", "boy", "break",
+            "bring", "brother", "budget", "build", "building", "business", "but", "buy", "by", "call",
+            "camera", "campaign", "can", "cancer", "candidate", "capital", "car", "card", "care", "career",
+            "carry", "case", "catch", "cause", "cell", "center", "central", "century", "certain", "certainly",
+            "chair", "challenge", "chance", "change", "character", "charge", "check", "child", "choice", "choose",
+            "church", "citizen", "city", "civil", "claim", "class", "clear", "clearly", "close", "coach",
+            "cold", "collection", "college", "color", "come", "commercial", "common", "community", "company", "compare",
+            "computer", "concern", "condition", "conference", "congress", "consider", "consumer", "contain", "continue", "control",
+            "cost", "could", "country", "couple", "course", "court", "cover", "create", "crime", "cultural",
+            "culture", "cup", "current", "customer", "cut", "dark", "data", "daughter", "day", "dead",
+            "deal", "death", "debate", "decade", "decide", "decision", "deep", "defense", "degree", "democrat",
+            "democratic", "describe", "design", "despite", "detail", "determine", "develop", "development", "device", "differ",
+            "difference", "different", "difficult", "dinner", "direction", "director", "discover", "discuss", "discussion", "disease",
+            "do", "doctor", "dog", "door", "down", "draw", "dream", "drive", "drop", "drug",
+            "during", "each", "early", "east", "easy", "eat", "economic", "economy", "edge", "education",
+            "effect", "effort", "eight", "either", "election", "else", "employee", "end", "energy", "enjoy",
+            "enough", "enter", "entire", "environment", "environmental", "especially", "establish", "even", "evening", "event",
+            "ever", "every", "everybody", "everyone", "everything", "evidence", "exactly", "example", "executive", "exist",
+            "expect", "experience", "expert", "explain", "eye", "face", "fact", "factor", "fail", "fall",
+            "family", "far", "fast", "father", "fear", "federal", "feel", "feeling", "few", "field",
+            "fight", "figure", "fill", "film", "final", "finally", "financial", "find", "fine", "finger",
+            "finish", "fire", "firm", "first", "fish", "five", "floor", "fly", "focus", "follow",
+            "food", "foot", "for", "force", "foreign", "forget", "form", "former", "forward", "four",
+            "free", "friend", "from", "front", "full", "fund", "future", "game", "garden", "gas",
+            "general", "generation", "get", "girl", "give", "glass", "go", "goal", "good", "government",
+            "great", "green", "ground", "group", "grow", "growth", "guess", "gun", "guy", "hair",
+            "half", "hand", "hang", "happen", "happy", "hard", "have", "he", "head", "health",
+            "hear", "heart", "heat", "heavy", "help", "her", "here", "herself", "high", "him",
+            "himself", "his", "history", "hit", "hold", "home", "hope", "hospital", "hot", "hotel",
+            "hour", "house", "how", "however", "huge", "human", "hundred", "husband", "i", "idea",
+            "identify", "if", "image", "imagine", "impact", "important", "improve", "in", "include", "including",
+            "increase", "indeed", "indicate", "individual", "industry", "information", "inside", "instead", "institution", "interest",
+            "interesting", "international", "interview", "into", "investment", "involve", "issue", "it", "item", "its",
+            "itself", "job", "join", "just", "keep", "key", "kid", "kill", "kind", "kitchen",
+            "know", "knowledge", "land", "language", "large", "last", "late", "later", "laugh", "law",
+            "lawyer", "lay", "lead", "leader", "learn", "least", "leave", "left", "leg", "legal",
+            "less", "let", "letter", "level", "lie", "life", "light", "like", "likely", "line",
+            "list", "listen", "little", "live", "local", "long", "look", "lose", "loss", "lot",
+            "love", "low", "machine", "magazine", "main", "maintain", "major", "majority", "make", "man",
+            "manage", "management", "manager", "many", "market", "marriage", "material", "matter", "may", "maybe",
+            "me", "mean", "measure", "media", "medical", "meet", "meeting", "member", "memory", "mention",
+            "message", "method", "middle", "might", "military", "million", "mind", "minute", "miss", "mission",
+            "model", "modern", "moment", "money", "month", "more", "morning", "most", "mother", "mouth",
+            "move", "movement", "movie", "mr", "mrs", "much", "music", "must", "my", "myself",
+            "name", "nation", "national", "natural", "nature", "near", "nearly", "necessary", "need", "network",
+            "never", "new", "news", "newspaper", "next", "nice", "night", "no", "none", "nor",
+            "north", "not", "note", "nothing", "notice", "now", "number", "occur", "of", "off",
+            "offer", "office", "officer", "official", "often", "oh", "oil", "ok", "okay", "old",
+            "on", "once", "one", "only", "onto", "open", "operation", "opportunity", "option", "or",
+            "order", "organization", "other", "others", "our", "out", "outside", "over", "own", "owner",
+            "page", "pain", "painting", "paper", "parent", "part", "participant", "particular", "particularly", "partner",
+            "party", "pass", "past", "patient", "pattern", "pay", "peace", "people", "per", "perform",
+            "performance", "perhaps", "period", "person", "personal", "phone", "physical", "pick", "picture", "piece",
+            "place", "plan", "plant", "play", "player", "point", "police", "policy", "political", "politics",
+            "poor", "popular", "population", "position", "positive", "possible", "power", "practice", "prepare", "present",
+            "president", "pressure", "pretty", "prevent", "price", "private", "probably", "problem", "process", "produce",
+            "product", "production", "professional", "professor", "program", "project", "property", "protect", "prove", "provide",
+            "public", "pull", "purpose", "push", "put", "quality", "question", "quickly", "quite", "race",
+            "radio", "raise", "range", "rate", "rather", "reach", "read", "ready", "real", "reality",
+            "realize", "really", "reason", "receive", "recent", "recently", "recognize", "record", "red", "reduce",
+            "reflect", "region", "relate", "relationship", "religious", "remain", "remember", "remove", "report", "represent",
+            "republican", "require", "research", "resource", "respond", "response", "responsibility", "rest", "result", "return",
+            "reveal", "rich", "right", "rise", "risk", "road", "rock", "role", "room", "rule",
+            "run", "safe", "same", "save", "say", "scene", "school", "science", "scientist", "score",
+            "sea", "season", "seat", "second", "section", "security", "see", "seek", "seem", "sell",
+            "send", "senior", "sense", "series", "serious", "serve", "service", "set", "seven", "several",
+            "sex", "sexual", "shake", "share", "she", "shoot", "short", "shot", "should", "shoulder",
+            "show", "side", "sign", "significant", "similar", "simple", "simply", "since", "sing", "single",
+            "sister", "sit", "site", "situation", "six", "size", "skill", "skin", "small", "smile",
+            "so", "social", "society", "soldier", "some", "somebody", "someone", "something", "sometimes", "son",
+            "song", "soon", "sort", "sound", "source", "south", "southern", "space", "speak", "special",
+            "specific", "speech", "spend", "sport", "spring", "staff", "stage", "stand", "standard", "star",
+            "start", "state", "statement", "station", "stay", "step", "still", "stock", "stop", "store",
+            "story", "strategy", "street", "strong", "structure", "student", "study", "stuff", "style", "subject",
+            "success", "successful", "such", "suddenly", "suffer", "suggest", "summer", "support", "sure", "surface",
+            "system", "table", "take", "talk", "task", "tax", "teach", "teacher", "team", "technology",
+            "television", "tell", "ten", "tend", "term", "test", "than", "thank", "thanks", "that",
+            "the", "their", "them", "themselves", "then", "theory", "there", "these", "they", "thing",
+            "think", "third", "this", "those", "though", "thought", "thousand", "threat", "three", "through",
+            "throughout", "throw", "thus", "time", "to", "today", "together", "tonight", "too", "top",
+            "total", "tough", "toward", "town", "trade", "traditional", "training", "travel", "treat", "treatment",
+            "tree", "trial", "trip", "trouble", "true", "truth", "try", "turn", "tv", "two",
+            "type", "under", "understand", "unit", "until", "up", "upon", "us", "use", "usually",
+            "value", "various", "very", "victim", "view", "violence", "visit", "voice", "vote", "wait",
+            "walk", "wall", "want", "war", "watch", "water", "way", "we", "weapon", "wear",
+            "week", "weight", "well", "west", "western", "what", "whatever", "when", "where", "whether",
+            "which", "while", "white", "who", "whole", "whom", "whose", "why", "wide", "wife",
+            "will", "win", "wind", "window", "wish", "with", "within", "without", "woman", "wonder",
+            "word", "work", "worker", "world", "worry", "would", "write", "writer", "wrong", "yard",
+            "yeah", "year", "yes", "yet", "you", "young", "your", "yourself"
+    ));
+
+    private static boolean isInLexicon(String word) {
+        return LEXICON_SET.contains(word);
+    }
+
+    private static final Set<String> FREQUENT_BIGRAMS = new HashSet<>(Arrays.asList(
+            "how are", "you are", "we are", "they are", "there are", "what are", "where are", "who are",
+            "thank you", "thanks for", "good morning", "good evening", "good night", "good day", "have a",
+            "to be", "will be", "can be", "could be", "should be", "would be", "have been", "has been", "had been",
+            "in the", "on the", "at the", "to the", "for the", "with the", "of the", "from the", "about the",
+            "into the", "over the", "under the", "by the", "through the", "as well", "as soon", "as possible",
+            "as per", "look at", "look for", "based on", "part of", "one of", "out of", "due to", "according to",
+            "in order", "so that", "because of", "kind regards", "please find", "attached here", "let me", "let us",
+            "want to", "need to", "like to", "have to", "going to", "able to", "used to", "try to", "right now",
+            "each other", "every day", "next week", "last week", "next month", "last year", "don't know",
+            "see you", "take care", "well done", "best regards", "best wishes", "no problem", "not only", "but also",
+            "star note", "starnote", "open notes", "opennotes", "written on", "write a", "wrote a", "for your",
+            "is a", "this is", "that is", "there is", "it is", "what is", "where is", "who is", "which is"
+    ));
+
+    private static boolean isFrequentBigram(String bigram) {
+        return FREQUENT_BIGRAMS.contains(bigram);
+    }
+
+    private static final Set<String> DOCTOR_TERMS = new HashSet<>(Arrays.asList(
+            "rx", "tab", "cap", "syp", "inj", "mg", "ml", "mcg", "gm", "kg",
+            "od", "bd", "bid", "tid", "qid", "po", "prn", "sos", "stat", "hs", "ac", "pc",
+            "bp", "hr", "pulse", "temp", "spo2", "ecg", "cxr", "lab", "cbc", "lft", "kft",
+            "dx", "hx", "sx", "tx", "dr", "doc", "doctor", "patient", "clinic", "hospital",
+            "fever", "cough", "cold", "pain", "headache", "throat", "chest", "vomiting", "diarrhea",
+            "paracetamol", "amoxicillin", "ibuprofen", "cetirizine", "azithromycin", "pantoprazole",
+            "metformin", "atorvastatin", "omeprazole", "ciprofloxacin", "doxycycline", "aspirin",
+            "pcm", "ibugesic", "pan", "augmentin", "zithromax", "allegra", "crocin", "dolo",
+            "calpol", "combiflam", "saridon", "vicks", "benadryl", "ascoril", "gargle",
+            "syrup", "drops", "tablet", "capsule", "injection", "ointment", "cream", "lotion",
+            "dose", "daily", "days", "weeks", "months", "review", "consult", "referral",
+            "diagnosis", "treatment", "prescription", "symptoms", "history", "examination"
+    ));
+
+    private static boolean isDoctorTerm(String word) {
+        return DOCTOR_TERMS.contains(word);
+    }
+
+    private static Map<String, String> getCarelessHandwritingReplacements() {
+        Map<String, String> m = new HashMap<>();
+        m.put("ave", "are");
+        m.put("youv", "your");
+        m.put("youn", "your");
+        m.put("yous", "your");
+        m.put("fov", "for");
+        m.put("fon", "for");
+        m.put("fnom", "from");
+        m.put("fvom", "from");
+        m.put("fcom", "from");
+        m.put("theiv", "their");
+        m.put("thein", "their");
+        m.put("theve", "there");
+        m.put("thene", "there");
+        m.put("heve", "here");
+        m.put("wheve", "where");
+        m.put("ovev", "over");
+        m.put("evevy", "every");
+        m.put("nevev", "never");
+        m.put("wvite", "write");
+        m.put("wnite", "write");
+        m.put("woste", "wrote");
+        m.put("wnote", "wrote");
+        m.put("gveat", "great");
+        m.put("gceat", "great");
+        m.put("suve", "sure");
+        m.put("sune", "sure");
+        m.put("puve", "pure");
+        m.put("wosk", "work");
+        m.put("wonk", "work");
+        m.put("wosld", "world");
+        m.put("wonld", "world");
+        m.put("wosd", "word");
+        m.put("wond", "word");
+        m.put("pvint", "print");
+        m.put("cveate", "create");
+        m.put("stave", "stare");
+        m.put("shave", "share");
+        m.put("fist", "first");
+        m.put("undev", "under");
+        m.put("unden", "under");
+        m.put("aftev", "after");
+        m.put("aften", "after");
+        m.put("watev", "water");
+        m.put("waten", "water");
+        m.put("papev", "paper");
+        m.put("papen", "paper");
+        m.put("lettev", "letter");
+        m.put("letten", "letter");
+        m.put("ouy", "our");
+        m.put("ouv", "our");
+        m.put("weve", "were");
+        m.put("mose", "more");
+        m.put("cly", "cry");
+        m.put("tly", "try");
+        m.put("dly", "dry");
+        m.put("hureesh", "Suresh");
+        m.put("sunesh", "Suresh");
+        m.put("suvesh", "Suresh");
+        m.put("sures", "Suresh");
+        m.put("ubham", "Shubham");
+        m.put("12", "R");
+        m.put("l2", "R");
+        m.put("i2", "R");
+        m.put("1z", "R");
+        m.put("lz", "R");
+        m.put("peop1e", "people");
+        m.put("tornorrow", "tomorrow");
+        m.put("inportant", "important");
+        m.put("neeting", "meeting");
+        m.put("problen", "problem");
+        m.put("clate", "date");
+        m.put("olraw", "draw");
+        m.put("olown", "down");
+        m.put("cloor", "door");
+        m.put("clrive", "drive");
+        m.put("vvork", "work");
+        m.put("vvould", "would");
+        m.put("vvith", "with");
+        m.put("vvhat", "what");
+        m.put("vvhere", "where");
+        m.put("vvhen", "when");
+        m.put("cornplete", "complete");
+        m.put("pleasc", "please");
+        m.put("px", "Rx");
+        m.put("bx", "Rx");
+        m.put("para", "Paracetamol");
+        m.put("paracet", "Paracetamol");
+        m.put("pcm", "PCM");
+        m.put("amox", "Amox");
+        m.put("dolo", "Dolo");
+        m.put("crocin", "Crocin");
+        m.put("calpol", "Calpol");
+        m.put("cetriz", "Cetirizine");
+        m.put("panto", "Pantoprazole");
+        return m;
     }
 
     private static RectF boundsOf(List<Stroke> strokes) {
@@ -836,18 +1472,12 @@ public final class HandwritingRecognitionEngine {
     }
 
     private static RectF usableWritingArea(RectF inkBounds) {
-        float width = Math.max(0f, inkBounds.width());
-        float height = Math.max(0f, inkBounds.height());
-        float targetWidth = width;
-        float targetHeight = height;
-        if (targetWidth < MIN_WRITING_AREA_AXIS) {
-            targetWidth = Math.max(MIN_WRITING_AREA_AXIS,
-                    Math.max(height, MIN_WRITING_AREA_AXIS) * DEGENERATE_AXIS_RATIO);
-        }
-        if (targetHeight < MIN_WRITING_AREA_AXIS) {
-            targetHeight = Math.max(MIN_WRITING_AREA_AXIS,
-                    Math.max(width, MIN_WRITING_AREA_AXIS) * DEGENERATE_AXIS_RATIO);
-        }
+        float width = Math.max(MIN_WRITING_AREA_AXIS, inkBounds.width());
+        float height = Math.max(MIN_WRITING_AREA_AXIS, inkBounds.height());
+        // For writing lines, provide ample natural line height so ML Kit does not compress
+        // coordinate space or clip letters on large continuous lines.
+        float targetHeight = Math.max(160f, height * 1.5f);
+        float targetWidth = Math.max(width + 60f, targetHeight * 1.5f);
         float centerX = (inkBounds.left + inkBounds.right) * 0.5f;
         float centerY = (inkBounds.top + inkBounds.bottom) * 0.5f;
         return new RectF(centerX - targetWidth * 0.5f, centerY - targetHeight * 0.5f,

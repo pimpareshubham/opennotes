@@ -17,6 +17,7 @@ public class Page {
     public List<Stroke> strokes;
     public List<ShapeItem> shapes;
     public List<TextItem> texts;
+    public List<ImageItem> images;
     public long createdAt;
     public long updatedAt;
 
@@ -35,6 +36,7 @@ public class Page {
         this.strokes = new ArrayList<>();
         this.shapes = new ArrayList<>();
         this.texts = new ArrayList<>();
+        this.images = new ArrayList<>();
         this.createdAt = System.currentTimeMillis();
         this.updatedAt = this.createdAt;
     }
@@ -53,6 +55,9 @@ public class Page {
         }
         synchronized (this.texts) {
             snapshot.texts = new ArrayList<>(this.texts);
+        }
+        synchronized (this.images) {
+            snapshot.images = new ArrayList<>(this.images);
         }
         return snapshot;
     }
@@ -133,6 +138,33 @@ public class Page {
                 JSONArray arr = new JSONArray(jsonStr);
                 for (int i = 0; i < arr.length(); i++) {
                     texts.add(TextItem.fromJson(arr.getJSONObject(i)));
+                }
+            } catch (JSONException ignored) {}
+        }
+    }
+
+    public String imagesToJson() {
+        JSONArray arr = new JSONArray();
+        List<ImageItem> copy;
+        synchronized (images) {
+            copy = new ArrayList<>(images);
+        }
+        for (ImageItem img : copy) {
+            try {
+                arr.put(img.toJson());
+            } catch (JSONException ignored) {}
+        }
+        return arr.toString();
+    }
+
+    public void imagesFromJson(String jsonStr) {
+        synchronized (images) {
+            images.clear();
+            if (jsonStr == null || jsonStr.trim().isEmpty()) return;
+            try {
+                JSONArray arr = new JSONArray(jsonStr);
+                for (int i = 0; i < arr.length(); i++) {
+                    images.add(ImageItem.fromJson(arr.getJSONObject(i)));
                 }
             } catch (JSONException ignored) {}
         }

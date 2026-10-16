@@ -15,7 +15,7 @@ import java.util.List;
 
 public class NotesDbHelper extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "opennotes.db";
-    private static final int DATABASE_VERSION = 3;
+    private static final int DATABASE_VERSION = 4;
 
     // Notebooks table
     public static final String TABLE_NOTEBOOKS = "notebooks";
@@ -43,6 +43,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     public static final String COL_PAGE_STROKES = "strokes_json";
     public static final String COL_PAGE_SHAPES = "shapes_json";
     public static final String COL_PAGE_TEXTS = "texts_json";
+    public static final String COL_PAGE_IMAGES = "images_json";
     public static final String COL_PAGE_CREATED_AT = "created_at";
     public static final String COL_PAGE_UPDATED_AT = "updated_at";
 
@@ -86,6 +87,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 + COL_PAGE_STROKES + " TEXT, "
                 + COL_PAGE_SHAPES + " TEXT, "
                 + COL_PAGE_TEXTS + " TEXT, "
+                + COL_PAGE_IMAGES + " TEXT, "
                 + COL_PAGE_CREATED_AT + " INTEGER, "
                 + COL_PAGE_UPDATED_AT + " INTEGER, "
                 + "FOREIGN KEY(" + COL_PAGE_NB_ID + ") REFERENCES " + TABLE_NOTEBOOKS + "(" + COL_NB_ID + ") ON DELETE CASCADE"
@@ -107,6 +109,11 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         }
         if (oldVersion < 3) {
             removeUntouchedSeedNotebook(db);
+        }
+        if (oldVersion < 4) {
+            try {
+                db.execSQL("ALTER TABLE " + TABLE_PAGES + " ADD COLUMN " + COL_PAGE_IMAGES + " TEXT;");
+            } catch (Exception ignored) {}
         }
     }
 
@@ -301,6 +308,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             newPage.strokesFromJson(p.strokesToJson());
             newPage.shapesFromJson(p.shapesToJson());
             newPage.textsFromJson(p.textsToJson());
+            newPage.imagesFromJson(p.imagesToJson());
             insertPage(newPage);
         }
 
@@ -347,6 +355,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_PAGE_STROKES, page.strokesToJson());
         cv.put(COL_PAGE_SHAPES, page.shapesToJson());
         cv.put(COL_PAGE_TEXTS, page.textsToJson());
+        cv.put(COL_PAGE_IMAGES, page.imagesToJson());
         long now = System.currentTimeMillis();
         cv.put(COL_PAGE_CREATED_AT, now);
         cv.put(COL_PAGE_UPDATED_AT, now);
@@ -369,6 +378,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_PAGE_STROKES, page.strokesToJson());
         cv.put(COL_PAGE_SHAPES, page.shapesToJson());
         cv.put(COL_PAGE_TEXTS, page.textsToJson());
+        cv.put(COL_PAGE_IMAGES, page.imagesToJson());
         cv.put(COL_PAGE_UPDATED_AT, System.currentTimeMillis());
 
         int rows = db.update(TABLE_PAGES, cv,
@@ -476,6 +486,10 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         page.strokesFromJson(c.getString(c.getColumnIndexOrThrow(COL_PAGE_STROKES)));
         page.shapesFromJson(c.getString(c.getColumnIndexOrThrow(COL_PAGE_SHAPES)));
         page.textsFromJson(c.getString(c.getColumnIndexOrThrow(COL_PAGE_TEXTS)));
+        int imgIdx = c.getColumnIndex(COL_PAGE_IMAGES);
+        if (imgIdx != -1 && !c.isNull(imgIdx)) {
+            page.imagesFromJson(c.getString(imgIdx));
+        }
         page.createdAt = c.getLong(c.getColumnIndexOrThrow(COL_PAGE_CREATED_AT));
         page.updatedAt = c.getLong(c.getColumnIndexOrThrow(COL_PAGE_UPDATED_AT));
         return page;

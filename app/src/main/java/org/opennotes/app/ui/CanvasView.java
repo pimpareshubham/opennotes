@@ -23,6 +23,9 @@ import android.os.Build;
 import android.os.SystemClock;
 import android.view.Display;
 import android.util.LongSparseArray;
+import android.view.HapticFeedbackConstants;
+import android.view.ViewConfiguration;
+import android.graphics.BitmapFactory;
 
 import androidx.annotation.Nullable;
 import androidx.core.view.accessibility.AccessibilityViewCommand;
@@ -31,6 +34,7 @@ import androidx.input.motionprediction.MotionEventPredictor;
 
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.DrawingTool;
+import org.opennotes.app.model.ImageItem;
 import org.opennotes.app.model.Page;
 import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
@@ -38,6 +42,7 @@ import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
 import org.opennotes.app.util.SelectionClipboard;
 
+import java.io.File;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -181,6 +186,7 @@ public class CanvasView extends View {
     private final List<Stroke> selectedStrokes = new ArrayList<>();
     private final List<ShapeItem> selectedShapes = new ArrayList<>();
     private final List<TextItem> selectedTexts = new ArrayList<>();
+    private final List<ImageItem> selectedImages = new ArrayList<>();
     private final RectF selectionBounds = new RectF();
     private boolean isMovingSelection = false;
     private float lassoMoveStartX, lassoMoveStartY;
@@ -191,26 +197,33 @@ public class CanvasView extends View {
     private final List<Stroke> clipboardStrokes = new ArrayList<>();
     private final List<ShapeItem> clipboardShapes = new ArrayList<>();
     private final List<TextItem> clipboardTexts = new ArrayList<>();
+    private final List<ImageItem> clipboardImages = new ArrayList<>();
     private float clipboardCenterX;
     private float clipboardCenterY;
+
+    // Bitmap cache for fast rendering of on-page images
+    private final Map<String, Bitmap> imageCache = new HashMap<>();
 
     // Scrollbar indicator
     private final Paint scrollbarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     // Undo / Redo history
     private static class ActionRecord {
-        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT }
+        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, ADD_IMAGE, REMOVE_IMAGE, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT }
         Type type;
         Stroke stroke;
         ShapeItem shape;
         TextItem text;
+        ImageItem image;
         float moveDx, moveDy;
         List<Stroke> movedStrokes;
         List<ShapeItem> movedShapes;
         List<TextItem> movedTexts;
+        List<ImageItem> movedImages;
         List<Stroke> prevStrokes;
         List<ShapeItem> prevShapes;
         List<TextItem> prevTexts;
+        List<ImageItem> prevImages;
         List<Stroke> styleTargetsStrokes;
         List<ShapeItem> styleTargetsShapes;
         List<TextItem> styleTargetsTexts;
@@ -307,6 +320,38 @@ public class CanvasView extends View {
     private final Rect visibleClip = new Rect();
 
     private OnCanvasChangeListener changeListener;
+    public interface OnCanvasLongPressListener {
+        void onCanvasLongPress(float rawX, float rawY, float canvasX, float canvasY);
+    }
+    private OnCanvasLongPressListener longPressListener;
+    public void setOnCanvasLongPressListener(OnCanvasLongPressListener listener) {
+        this.longPressListener = listener;
+    }
+
+    private float touchSlop = 24f;
+    private float touchDownRawX;
+    private float touchDownRawY;
+    private float touchDownCanvasX;
+    private float touchDownCanvasY;
+    private boolean longPressTriggered = false;
+
+    private final Runnable longPressPasteRunnable = new Runnable() {
+        @Override
+        public void run() {
+            if (hasClipboardContents()) {
+                longPressTriggered = true;
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                if (activeStroke != null && activeStroke.points != null && activeStroke.points.size() <= 6) {
+                    activeStroke = null;
+                    invalidate();
+                }
+                if (longPressListener != null) {
+                    longPressListener.onCanvasLongPress(touchDownRawX, touchDownRawY, touchDownCanvasX, touchDownCanvasY);
+                }
+            }
+        }
+    };
+
     private OnZoomChangeListener zoomListener;
     private OnLassoSelectionListener lassoSelectionListener;
     private int selectAllAccessibilityAction = -1;
@@ -335,6 +380,7 @@ public class CanvasView extends View {
 
     private void init() {
         scroller = new OverScroller(getContext());
+        touchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
         setFocusable(true);
         setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
         setContentDescription("Note page. Use the lasso tool to select ink, shapes, and text. Drag a selection to move it.");
@@ -370,8 +416,8 @@ public class CanvasView extends View {
                 }
                 float factor = detector.getScaleFactor();
                 float targetScale = scaleFactor * factor;
-                // Clamp between 20% and 1600% (matching StarNote tablet app in vdo.mp4)
-                zoomAround(Math.max(0.20f, Math.min(16.0f, targetScale)),
+                // Clamp between 10% and 1600% for expansive infinite canvas overview
+                zoomAround(Math.max(0.10f, Math.min(16.0f, targetScale)),
                         detector.getFocusX(), detector.getFocusY());
 
                 invalidate();
@@ -510,7 +556,7 @@ public class CanvasView extends View {
 
     /** Restores the user's viewing position after the editor is recreated. */
     public void restoreViewport(float zoomPercent, float panX, float panY, float scrollY) {
-        scaleFactor = Math.max(0.20f, Math.min(16.0f, zoomPercent / 100f));
+        scaleFactor = Math.max(0.10f, Math.min(16.0f, zoomPercent / 100f));
         panOffsetX = panX;
         panOffsetY = panY;
         viewportOffsetY = isInfinite ? Math.max(0f, Math.min(scrollY, getMaxScrollY())) : 0f;
@@ -618,7 +664,7 @@ public class CanvasView extends View {
         float oldScale = Math.max(0.01f, scaleFactor);
         float canvasFocusX = (focusX - panOffsetX) / oldScale;
         float canvasFocusY = (focusY - panOffsetY) / oldScale + viewportOffsetY;
-        scaleFactor = Math.max(0.20f, Math.min(16.0f, targetScale));
+        scaleFactor = Math.max(0.10f, Math.min(16.0f, targetScale));
         panOffsetX = focusX - canvasFocusX * scaleFactor;
         panOffsetY = focusY - (canvasFocusY - viewportOffsetY) * scaleFactor;
     }
@@ -808,14 +854,16 @@ public class CanvasView extends View {
         }
     };
 
-    /** Avoid converting a pause between letters into a guessed word. */
+    /** Checks if strokes contain sufficient handwriting ink for conversion (handles single words, short words, or long cursive lines). */
     private boolean hasEnoughInkForAutoConversion(List<Stroke> strokes) {
+        if (strokes == null || strokes.isEmpty()) return false;
         int pointCount = 0;
         float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
         float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         for (Stroke stroke : strokes) {
             if (stroke == null) continue;
             List<DrawingPoint> points = stroke.getRecognitionPoints();
+            if (points == null || points.isEmpty()) points = stroke.points;
             if (points == null) continue;
             pointCount += points.size();
             for (DrawingPoint point : points) {
@@ -825,13 +873,10 @@ public class CanvasView extends View {
                 maxY = Math.max(maxY, point.y);
             }
         }
-        if (pointCount < 24 || minX == Float.MAX_VALUE) return false;
+        if (pointCount < 2 || minX == Float.MAX_VALUE) return false;
         float width = maxX - minX;
         float height = maxY - minY;
-        // Normal handwriting usually contains several pen lifts. Also allow a
-        // long connected cursive word, while keeping a single unfinished glyph.
-        return (strokes.size() >= 3 && width >= Math.max(12f, height * 0.65f))
-                || (strokes.size() == 1 && width >= Math.max(36f, height * 2.2f));
+        return (width >= 3f || height >= 4f);
     }
 
     public void cancelPendingAutoConversion() {
@@ -991,25 +1036,40 @@ public class CanvasView extends View {
         heightPercentile = Math.min(heights.size() - 1,
                 (int) Math.ceil((heights.size() - 1) * 0.8f));
         float typicalStrokeHeight = heights.get(heightPercentile);
-        // Use an upper percentile so short Devanagari headline/matra strokes
-        // do not get split away from the taller body strokes on the same row.
-        // Roughly written letters vary more in height and baseline. A little
-        // extra tolerance keeps those marks with their line while still leaving
-        // normally spaced notebook rows separate.
-        float lineTolerance = Math.max(12f, typicalStrokeHeight * 1.05f);
+
+        // Check if all strokes represent a single writing row / big continuous line
+        RectF overallBounds = new RectF();
+        for (StrokeLineSample sample : samples) {
+            if (overallBounds.isEmpty()) overallBounds.set(sample.bounds);
+            else overallBounds.union(sample.bounds);
+        }
+        if (overallBounds.height() <= Math.max(180f, typicalStrokeHeight * 2.8f)) {
+            // Keep the entire big line / continuous sentence unified without artificial splits
+            StrokeLineGroup singleGroup = new StrokeLineGroup();
+            for (StrokeLineSample sample : samples) singleGroup.add(sample);
+            Collections.sort(singleGroup.samples, (left, right) -> Integer.compare(left.sourceIndex, right.sourceIndex));
+            for (StrokeLineSample sample : singleGroup.samples) singleGroup.strokes.add(sample.stroke);
+            return Collections.singletonList(singleGroup);
+        }
+
+        float lineTolerance = Math.max(28f, typicalStrokeHeight * 1.5f);
         Collections.sort(samples, (left, right) -> Float.compare(
                 left.lineCoordinate, right.lineCoordinate));
 
         List<StrokeLineGroup> groups = new ArrayList<>();
         for (StrokeLineSample sample : samples) {
-            // Samples are already sorted top-to-bottom. A new row can only
-            // match the last open cluster, avoiding a quadratic page scan.
-            StrokeLineGroup current = groups.isEmpty() ? null : groups.get(groups.size() - 1);
-            if (current == null || Math.abs(sample.lineCoordinate - current.center()) > lineTolerance) {
-                current = new StrokeLineGroup();
-                groups.add(current);
+            StrokeLineGroup matchingGroup = null;
+            for (StrokeLineGroup g : groups) {
+                if (Math.abs(sample.lineCoordinate - g.center()) <= lineTolerance) {
+                    matchingGroup = g;
+                    break;
+                }
             }
-            current.add(sample);
+            if (matchingGroup == null) {
+                matchingGroup = new StrokeLineGroup();
+                groups.add(matchingGroup);
+            }
+            matchingGroup.add(sample);
         }
 
         Collections.sort(groups, (left, right) -> Float.compare(left.bounds.top, right.bounds.top));
@@ -1130,9 +1190,12 @@ public class CanvasView extends View {
                     android.view.ViewGroup.LayoutParams.WRAP_CONTENT));
             editors.add(editor);
 
+            android.widget.LinearLayout btnRow = new android.widget.LinearLayout(getContext());
+            btnRow.setOrientation(android.widget.LinearLayout.HORIZONTAL);
+
             if (line.result.alternatives.size() > 1) {
                 android.widget.Button alternatives = new android.widget.Button(getContext());
-                alternatives.setText("Other suggestions");
+                alternatives.setText("Suggestions");
                 alternatives.setOnClickListener(view -> {
                     CharSequence[] options = line.result.alternatives.toArray(new String[0]);
                     new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
@@ -1140,8 +1203,23 @@ public class CanvasView extends View {
                             .setItems(options, (dialog, which) -> editor.setText(options[which]))
                             .show();
                 });
-                rows.addView(alternatives);
+                btnRow.addView(alternatives);
             }
+
+            android.widget.Button btnTeach = new android.widget.Button(getContext());
+            btnTeach.setText("🎓 Teach Style");
+            btnTeach.setOnClickListener(view -> {
+                String intended = editor.getText().toString().trim();
+                if (!intended.isEmpty()) {
+                    org.opennotes.app.ai.UserHandwritingModel.getInstance(getContext())
+                            .learnCorrection(line.result.text, intended, line.strokes);
+                    android.widget.Toast.makeText(getContext(),
+                            "✨ Learned! Style saved for \"" + intended + "\"",
+                            android.widget.Toast.LENGTH_SHORT).show();
+                }
+            });
+            btnRow.addView(btnTeach);
+            rows.addView(btnRow);
         }
 
         android.widget.ScrollView scrollView = new android.widget.ScrollView(getContext());
@@ -1156,8 +1234,16 @@ public class CanvasView extends View {
                 .setNegativeButton("Keep handwriting", null)
                 .setPositiveButton("Convert", (dialog, which) -> {
                     List<String> reviewedText = new ArrayList<>();
-                    for (android.widget.EditText editor : editors) {
-                        reviewedText.add(editor.getText().toString().trim());
+                    for (int i = 0; i < editors.size(); i++) {
+                        String edited = editors.get(i).getText().toString().trim();
+                        reviewedText.add(edited);
+                        if (i < lines.size()) {
+                            RecognizedStrokeLine l = lines.get(i);
+                            if (!edited.isEmpty() && !edited.equals(l.result.text)) {
+                                org.opennotes.app.ai.UserHandwritingModel.getInstance(getContext())
+                                        .learnCorrection(l.result.text, edited, l.strokes);
+                            }
+                        }
                     }
                     applyRecognizedText(requestedPage, lines, textColor, reviewedText);
                 })
@@ -1388,11 +1474,17 @@ public class CanvasView extends View {
             case REMOVE_SHAPE:
                 currentPage.shapes.add(rec.shape);
                 break;
+            case ADD_IMAGE:
+                if (currentPage.images != null) currentPage.images.remove(rec.image);
+                break;
+            case REMOVE_IMAGE:
+                if (currentPage.images != null) currentPage.images.add(rec.image);
+                break;
             case ADD_TEXT:
                 currentPage.texts.remove(rec.text);
                 break;
             case MOVE_SELECTION:
-                translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts,
+                translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts, rec.movedImages,
                         -rec.moveDx, -rec.moveDy);
                 break;
             case ADD_SELECTION:
@@ -1411,6 +1503,9 @@ public class CanvasView extends View {
                 currentPage.strokes = new ArrayList<>(rec.prevStrokes);
                 currentPage.shapes = new ArrayList<>(rec.prevShapes);
                 currentPage.texts = new ArrayList<>(rec.prevTexts);
+                if (rec.prevImages != null) {
+                    currentPage.images = new ArrayList<>(rec.prevImages);
+                }
                 break;
             case CONVERT_TO_TEXT:
                 if (rec.convertedTexts != null) {
@@ -1449,11 +1544,17 @@ public class CanvasView extends View {
             case REMOVE_SHAPE:
                 currentPage.shapes.remove(rec.shape);
                 break;
+            case ADD_IMAGE:
+                if (currentPage.images != null) currentPage.images.add(rec.image);
+                break;
+            case REMOVE_IMAGE:
+                if (currentPage.images != null) currentPage.images.remove(rec.image);
+                break;
             case ADD_TEXT:
                 currentPage.texts.add(rec.text);
                 break;
             case MOVE_SELECTION:
-                translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts,
+                translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts, rec.movedImages,
                         rec.moveDx, rec.moveDy);
                 break;
             case ADD_SELECTION:
@@ -1472,6 +1573,7 @@ public class CanvasView extends View {
                 currentPage.strokes.clear();
                 currentPage.shapes.clear();
                 currentPage.texts.clear();
+                if (currentPage.images != null) currentPage.images.clear();
                 break;
             case CONVERT_TO_TEXT:
                 if (rec.prevStrokes != null) {
@@ -1496,13 +1598,21 @@ public class CanvasView extends View {
 
     public void clearAll() {
         if (currentPage == null) return;
-        if (currentPage.strokes.isEmpty() && currentPage.shapes.isEmpty() && currentPage.texts.isEmpty()) return;
+        boolean hasStrokes = currentPage.strokes != null && !currentPage.strokes.isEmpty();
+        boolean hasShapes = currentPage.shapes != null && !currentPage.shapes.isEmpty();
+        boolean hasTexts = currentPage.texts != null && !currentPage.texts.isEmpty();
+        boolean hasImages = currentPage.images != null && !currentPage.images.isEmpty();
+        if (!hasStrokes && !hasShapes && !hasTexts && !hasImages) return;
 
         ActionRecord rec = new ActionRecord();
         rec.type = ActionRecord.Type.CLEAR_ALL;
         rec.prevStrokes = new ArrayList<>(currentPage.strokes);
         rec.prevShapes = new ArrayList<>(currentPage.shapes);
         rec.prevTexts = new ArrayList<>(currentPage.texts);
+        if (currentPage.images != null) {
+            rec.prevImages = new ArrayList<>(currentPage.images);
+            currentPage.images.clear();
+        }
 
         currentPage.strokes.clear();
         currentPage.shapes.clear();
@@ -1520,6 +1630,7 @@ public class CanvasView extends View {
         if (record.prevStrokes != null) currentPage.strokes.addAll(record.prevStrokes);
         if (record.prevShapes != null) currentPage.shapes.addAll(record.prevShapes);
         if (record.prevTexts != null) currentPage.texts.addAll(record.prevTexts);
+        if (record.prevImages != null && currentPage.images != null) currentPage.images.addAll(record.prevImages);
     }
 
     private void removeRecordedSelection(ActionRecord record) {
@@ -1527,6 +1638,7 @@ public class CanvasView extends View {
         if (record.prevStrokes != null) currentPage.strokes.removeAll(record.prevStrokes);
         if (record.prevShapes != null) currentPage.shapes.removeAll(record.prevShapes);
         if (record.prevTexts != null) currentPage.texts.removeAll(record.prevTexts);
+        if (record.prevImages != null && currentPage.images != null) currentPage.images.removeAll(record.prevImages);
     }
 
     public void addTextItem(String text, float x, float y, String fontKey) {
@@ -1551,6 +1663,66 @@ public class CanvasView extends View {
 
     public void addTextItem(String text, float x, float y) {
         addTextItem(text, x, y, beautifyFontKey);
+    }
+
+    public void addImageItem(ImageItem item) {
+        if (currentPage == null || item == null) return;
+        if (currentPage.images == null) {
+            currentPage.images = new ArrayList<>();
+        }
+        currentPage.images.add(item);
+
+        ActionRecord rec = new ActionRecord();
+        rec.type = ActionRecord.Type.ADD_IMAGE;
+        rec.image = item;
+        undoStack.push(rec);
+        redoStack.clear();
+
+        ensureContentHeight(item.y + item.height + 100);
+        invalidate();
+        notifyChange();
+    }
+
+    public float getCenterCanvasX() {
+        return ((getWidth() * 0.5f) - panOffsetX) / scaleFactor;
+    }
+
+    public float getCenterCanvasY() {
+        return ((getHeight() * 0.5f) - panOffsetY) / scaleFactor + viewportOffsetY;
+    }
+
+    private void drawImage(Canvas canvas, ImageItem img) {
+        if (img == null || img.imagePath == null) return;
+        Bitmap bmp = imageCache.get(img.imagePath);
+        if (bmp == null || bmp.isRecycled()) {
+            try {
+                File file = new File(img.imagePath);
+                if (file.exists()) {
+                    BitmapFactory.Options opts = new BitmapFactory.Options();
+                    opts.inJustDecodeBounds = true;
+                    BitmapFactory.decodeFile(img.imagePath, opts);
+                    opts.inSampleSize = 1;
+                    int maxDim = Math.max(opts.outWidth, opts.outHeight);
+                    while (maxDim / opts.inSampleSize > 2048) {
+                        opts.inSampleSize *= 2;
+                    }
+                    opts.inJustDecodeBounds = false;
+                    bmp = BitmapFactory.decodeFile(img.imagePath, opts);
+                    if (bmp != null) {
+                        imageCache.put(img.imagePath, bmp);
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
+        if (bmp != null && !bmp.isRecycled()) {
+            canvas.drawBitmap(bmp, null, img.getBounds(), null);
+        } else {
+            Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
+            border.setStyle(Paint.Style.STROKE);
+            border.setColor(0x88888888);
+            border.setStrokeWidth(2f);
+            canvas.drawRect(img.getBounds(), border);
+        }
     }
 
     private void ensureContentHeight(float targetY) {
@@ -1733,6 +1905,15 @@ public class CanvasView extends View {
 
         if (currentPage != null) {
             prepareVisibleStrokeIndices(visibleViewport);
+
+            // 2.5. Draw Committed Images (culled to visible screen)
+            if (currentPage.images != null) {
+                for (ImageItem img : currentPage.images) {
+                    if (img != null && RectF.intersects(img.getBounds(), visibleViewport)) {
+                        drawImage(canvas, img);
+                    }
+                }
+            }
 
             // 3. Draw Committed Shapes (culled to visible screen)
             for (ShapeItem shape : currentPage.shapes) {
@@ -1991,69 +2172,66 @@ public class CanvasView extends View {
 
         if (paperTemplate == PaperTemplate.RULED) {
             float lineSpacing = 60f;
-            float startY = 120f;
             float marginX = 140f;
-            if (marginX >= visibleViewport.left && marginX <= visibleViewport.right) {
-                canvas.drawLine(marginX, Math.max(0, visibleViewport.top), marginX, Math.min(totalHeight, visibleViewport.bottom), templateMarginPaint);
+            if (marginX >= visibleViewport.left - 50f && marginX <= visibleViewport.right + 50f) {
+                canvas.drawLine(marginX, visibleViewport.top - 100f, marginX, visibleViewport.bottom + 100f, templateMarginPaint);
             }
 
-            float firstLineY = Math.max(startY, (float) Math.floor(visibleViewport.top / lineSpacing) * lineSpacing);
-            float lastLineY = Math.min(totalHeight, visibleViewport.bottom + lineSpacing);
-            float drawX1 = Math.max(0, visibleViewport.left);
-            float drawX2 = Math.min(width * 2f, visibleViewport.right);
+            // Generate seamlessly across the entire visible screen at any zoom level
+            float firstLineY = ((float) Math.floor((visibleViewport.top - lineSpacing) / lineSpacing)) * lineSpacing;
+            float lastLineY = visibleViewport.bottom + lineSpacing * 2f;
+            float drawX1 = visibleViewport.left - 200f;
+            float drawX2 = visibleViewport.right + 200f;
 
             for (float y = firstLineY; y <= lastLineY; y += lineSpacing) {
                 canvas.drawLine(drawX1, y, drawX2, y, templateLinePaint);
             }
         } else if (paperTemplate == PaperTemplate.GRID) {
             float gridSize = 50f;
-            float firstX = Math.max(0, (float) Math.floor(visibleViewport.left / gridSize) * gridSize);
-            float lastX = Math.min(width * 2f, visibleViewport.right + gridSize);
-            float minY = Math.max(0, visibleViewport.top);
-            float maxY = Math.min(totalHeight, visibleViewport.bottom);
+            float firstX = ((float) Math.floor((visibleViewport.left - gridSize) / gridSize)) * gridSize;
+            float lastX = visibleViewport.right + gridSize * 2f;
+            float firstY = ((float) Math.floor((visibleViewport.top - gridSize) / gridSize)) * gridSize;
+            float lastY = visibleViewport.bottom + gridSize * 2f;
 
             for (float x = firstX; x <= lastX; x += gridSize) {
-                canvas.drawLine(x, minY, x, maxY, templateLinePaint);
+                canvas.drawLine(x, firstY, x, lastY, templateLinePaint);
             }
 
-            float firstY = Math.max(0, (float) Math.floor(visibleViewport.top / gridSize) * gridSize);
-            float lastY = Math.min(totalHeight, visibleViewport.bottom + gridSize);
-            float minX = Math.max(0, visibleViewport.left);
-            float maxX = Math.min(width * 2f, visibleViewport.right);
-
             for (float y = firstY; y <= lastY; y += gridSize) {
-                canvas.drawLine(minX, y, maxX, y, templateLinePaint);
+                canvas.drawLine(firstX, y, lastX, y, templateLinePaint);
             }
         } else if (paperTemplate == PaperTemplate.DOTS) {
             float dotSpacing = 50f;
+            int stride = safeScale < 0.25f ? 2 : 1;
+            float effectiveSpacing = dotSpacing * stride;
             templateDotPaint.setColor(isDark
                     ? blendTemplateColor(0x33FFFFFF, 0x77FFFFFF, lowZoomBoost)
                     : blendTemplateColor(0xFFCBD5E1, 0xFFAAB4C0, lowZoomBoost));
             float dotRadius = Math.max(0.75f, 2.5f * safeScale) / safeScale;
-            float firstX = Math.max(dotSpacing, (float) Math.floor(visibleViewport.left / dotSpacing) * dotSpacing);
-            float lastX = Math.min(width * 2f, visibleViewport.right + dotSpacing);
-            float firstY = Math.max(dotSpacing, (float) Math.floor(visibleViewport.top / dotSpacing) * dotSpacing);
-            float lastY = Math.min(totalHeight, visibleViewport.bottom + dotSpacing);
+            float firstX = ((float) Math.floor((visibleViewport.left - effectiveSpacing) / effectiveSpacing)) * effectiveSpacing;
+            float lastX = visibleViewport.right + effectiveSpacing;
+            float firstY = ((float) Math.floor((visibleViewport.top - effectiveSpacing) / effectiveSpacing)) * effectiveSpacing;
+            float lastY = visibleViewport.bottom + effectiveSpacing;
 
-            for (float x = firstX; x <= lastX; x += dotSpacing) {
-                for (float y = firstY; y <= lastY; y += dotSpacing) {
+            for (float x = firstX; x <= lastX; x += effectiveSpacing) {
+                for (float y = firstY; y <= lastY; y += effectiveSpacing) {
                     canvas.drawCircle(x, y, dotRadius, templateDotPaint);
                 }
             }
         } else if (paperTemplate == PaperTemplate.CORNELL) {
             float headerY = 140f;
             float marginX = 240f;
-            if (headerY >= visibleViewport.top && headerY <= visibleViewport.bottom) {
-                canvas.drawLine(Math.max(0, visibleViewport.left), headerY, Math.min(width * 2f, visibleViewport.right), headerY, templateLinePaint);
+            if (headerY >= visibleViewport.top - 50f && headerY <= visibleViewport.bottom + 50f) {
+                canvas.drawLine(visibleViewport.left - 100f, headerY, visibleViewport.right + 100f, headerY, templateLinePaint);
             }
-            if (marginX >= visibleViewport.left && marginX <= visibleViewport.right) {
-                canvas.drawLine(marginX, Math.max(headerY, visibleViewport.top), marginX, Math.min(totalHeight, visibleViewport.bottom), templateMarginPaint);
+            if (marginX >= visibleViewport.left - 50f && marginX <= visibleViewport.right + 50f) {
+                canvas.drawLine(marginX, Math.max(headerY, visibleViewport.top - 100f), marginX, visibleViewport.bottom + 100f, templateMarginPaint);
             }
             float lineSpacing = 55f;
-            float firstY = Math.max(headerY + lineSpacing, (float) Math.floor(visibleViewport.top / lineSpacing) * lineSpacing);
-            float lastY = Math.min(totalHeight, visibleViewport.bottom + lineSpacing);
-            float minLineX = Math.max(marginX, visibleViewport.left);
-            float maxLineX = Math.min(width * 2f, visibleViewport.right);
+            float firstY = Math.max(headerY + lineSpacing, ((float) Math.floor((visibleViewport.top - lineSpacing) / lineSpacing)) * lineSpacing);
+            float lastY = visibleViewport.bottom + lineSpacing * 2f;
+            float minLineX = Math.max(marginX, visibleViewport.left - 100f);
+            float maxLineX = visibleViewport.right + 100f;
 
             for (float y = firstY; y <= lastY; y += lineSpacing) {
                 canvas.drawLine(minLineX, y, maxLineX, y, templateLinePaint);
@@ -2257,11 +2435,12 @@ public class CanvasView extends View {
         selectedStrokes.clear();
         selectedShapes.clear();
         selectedTexts.clear();
+        selectedImages.clear();
         selectionBounds.setEmpty();
         lassoPath.reset();
         lassoPoints.clear();
         lastAnnouncedSelection = "";
-        setContentDescription("Note page. Use the lasso tool to select ink, shapes, and text. Drag a selection to move it.");
+        setContentDescription("Note page. Use the lasso tool to select ink, shapes, images, and text. Drag a selection to move it.");
         invalidate();
         notifyLassoSelection();
     }
@@ -2272,6 +2451,7 @@ public class CanvasView extends View {
         selectedStrokes.clear();
         selectedShapes.clear();
         selectedTexts.clear();
+        selectedImages.clear();
         if (currentPage.strokes != null) {
             for (Stroke item : currentPage.strokes) {
                 if (item != null && !item.getBounds().isEmpty()) selectedStrokes.add(item);
@@ -2283,12 +2463,15 @@ public class CanvasView extends View {
         if (currentPage.texts != null) {
             for (TextItem item : currentPage.texts) if (item != null) selectedTexts.add(item);
         }
+        if (currentPage.images != null) {
+            for (ImageItem item : currentPage.images) if (item != null) selectedImages.add(item);
+        }
         lassoPath.reset();
         lassoPoints.clear();
         lastAnnouncedSelection = "";
         updateSelectionBounds();
         hasLassoSelection = !selectedStrokes.isEmpty() || !selectedShapes.isEmpty()
-                || !selectedTexts.isEmpty();
+                || !selectedTexts.isEmpty() || !selectedImages.isEmpty();
         announceSelectionCount();
         invalidate();
         notifyLassoSelection();
@@ -2306,6 +2489,7 @@ public class CanvasView extends View {
         }
         selectedShapes.clear();
         selectedTexts.clear();
+        selectedImages.clear();
         lassoPath.reset();
         lassoPoints.clear();
         lastAnnouncedSelection = "";
@@ -2319,7 +2503,7 @@ public class CanvasView extends View {
 
     public boolean hasSelection() {
         return hasLassoSelection && (!selectedStrokes.isEmpty() || !selectedShapes.isEmpty()
-                || !selectedTexts.isEmpty());
+                || !selectedTexts.isEmpty() || !selectedImages.isEmpty());
     }
 
     public boolean hasSelectedText() {
@@ -2330,9 +2514,24 @@ public class CanvasView extends View {
         return !selectedStrokes.isEmpty();
     }
 
+    public boolean hasSystemClipboardText() {
+        try {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager)
+                    getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+            return cb != null && cb.hasPrimaryClip() && cb.getPrimaryClip() != null
+                    && cb.getPrimaryClip().getItemCount() > 0
+                    && cb.getPrimaryClip().getItemAt(0).getText() != null
+                    && cb.getPrimaryClip().getItemAt(0).getText().length() > 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public boolean hasClipboardContents() {
         return !clipboardStrokes.isEmpty() || !clipboardShapes.isEmpty() || !clipboardTexts.isEmpty()
-                || SelectionClipboard.hasContents(getContext());
+                || !clipboardImages.isEmpty()
+                || SelectionClipboard.hasContents(getContext())
+                || hasSystemClipboardText();
     }
 
     public void deleteSelection() {
@@ -2350,6 +2549,7 @@ public class CanvasView extends View {
         clipboardStrokes.clear();
         clipboardShapes.clear();
         clipboardTexts.clear();
+        clipboardImages.clear();
         clipboardCenterX = selectionBounds.centerX();
         clipboardCenterY = selectionBounds.centerY();
         for (Stroke s : selectedStrokes) {
@@ -2359,6 +2559,9 @@ public class CanvasView extends View {
             clipboardShapes.add(cloneShape(sh, 0f, 0f));
         }
         for (TextItem item : selectedTexts) clipboardTexts.add(cloneText(item, 0f, 0f));
+        for (ImageItem img : selectedImages) {
+            clipboardImages.add(new ImageItem(img.imagePath, img.x, img.y, img.width, img.height));
+        }
         SelectionClipboard.set(getContext(), new SelectionClipboard.Payload(
                 clipboardStrokes, clipboardShapes, clipboardTexts,
                 clipboardCenterX, clipboardCenterY));
@@ -2366,18 +2569,42 @@ public class CanvasView extends View {
     }
 
     public void pasteSelection() {
+        float targetX = ((getWidth() * 0.5f) - panOffsetX) / scaleFactor;
+        float targetY = ((getHeight() * 0.5f) - panOffsetY) / scaleFactor + viewportOffsetY;
+        pasteAt(targetX, targetY);
+    }
+
+    public void pasteAt(float targetX, float targetY) {
         if (currentPage == null || !hasClipboardContents()) return;
         final Page targetPage = currentPage;
         SelectionClipboard.load(getContext(), payload -> {
-            if (currentPage != targetPage || payload == null || !payload.hasContents()) return;
-            pasteClipboardPayload(payload);
+            if (currentPage != targetPage) return;
+            if (payload != null && payload.hasContents()) {
+                pasteClipboardPayloadAt(payload, targetX, targetY);
+            } else if (hasSystemClipboardText()) {
+                pasteSystemClipboardTextAt(targetX, targetY);
+            }
         });
     }
 
-    private void pasteClipboardPayload(SelectionClipboard.Payload payload) {
+    private void pasteSystemClipboardTextAt(float targetX, float targetY) {
+        if (currentPage == null) return;
+        try {
+            android.content.ClipboardManager cb = (android.content.ClipboardManager)
+                    getContext().getSystemService(Context.CLIPBOARD_SERVICE);
+            if (cb != null && cb.hasPrimaryClip() && cb.getPrimaryClip() != null
+                    && cb.getPrimaryClip().getItemCount() > 0) {
+                CharSequence cs = cb.getPrimaryClip().getItemAt(0).getText();
+                if (cs != null && cs.length() > 0) {
+                    addTextItem(cs.toString(), targetX * scaleFactor + panOffsetX,
+                            (targetY - viewportOffsetY) * scaleFactor + panOffsetY);
+                }
+            }
+        } catch (Exception ignored) {}
+    }
+
+    private void pasteClipboardPayloadAt(SelectionClipboard.Payload payload, float targetX, float targetY) {
         if (currentPage == null || payload == null || !payload.hasContents()) return;
-        float targetX = ((getWidth() * 0.5f) - panOffsetX) / scaleFactor;
-        float targetY = ((getHeight() * 0.5f) - panOffsetY) / scaleFactor + viewportOffsetY;
         float offsetX = targetX - payload.centerX;
         float offsetY = targetY - payload.centerY;
         List<Stroke> pastedStrokes = new ArrayList<>();
@@ -2404,8 +2631,10 @@ public class CanvasView extends View {
         for (ShapeItem sh : selectedShapes) newShapes.add(cloneShape(sh, offset, offset));
         List<TextItem> newTexts = new ArrayList<>();
         for (TextItem item : selectedTexts) newTexts.add(cloneText(item, offset, offset));
-        addSelectionToPage(newStrokes, newShapes, newTexts);
-        recordAddedSelection(newStrokes, newShapes, newTexts);
+        List<ImageItem> newImages = new ArrayList<>();
+        for (ImageItem img : selectedImages) newImages.add(new ImageItem(img.imagePath, img.x + offset, img.y + offset, img.width, img.height));
+        addSelectionToPage(newStrokes, newShapes, newTexts, newImages);
+        recordAddedSelection(newStrokes, newShapes, newTexts, newImages);
     }
 
     public void setSelectionColor(int color) {
@@ -2446,6 +2675,7 @@ public class CanvasView extends View {
         record.prevStrokes = new ArrayList<>(selectedStrokes);
         record.prevShapes = new ArrayList<>(selectedShapes);
         record.prevTexts = new ArrayList<>(selectedTexts);
+        record.prevImages = new ArrayList<>(selectedImages);
         removeRecordedSelection(record);
         undoStack.push(record);
         redoStack.clear();
@@ -2460,16 +2690,27 @@ public class CanvasView extends View {
 
     private void addSelectionToPage(List<Stroke> strokes, List<ShapeItem> shapes,
                                     List<TextItem> texts) {
+        addSelectionToPage(strokes, shapes, texts, null);
+    }
+
+    private void addSelectionToPage(List<Stroke> strokes, List<ShapeItem> shapes,
+                                    List<TextItem> texts, List<ImageItem> images) {
         if (currentPage == null) return;
         currentPage.strokes.addAll(strokes);
         currentPage.shapes.addAll(shapes);
         currentPage.texts.addAll(texts);
+        if (images != null) {
+            if (currentPage.images == null) currentPage.images = new ArrayList<>();
+            currentPage.images.addAll(images);
+        }
         selectedStrokes.clear();
         selectedStrokes.addAll(strokes);
         selectedShapes.clear();
         selectedShapes.addAll(shapes);
         selectedTexts.clear();
         selectedTexts.addAll(texts);
+        selectedImages.clear();
+        if (images != null) selectedImages.addAll(images);
         updateSelectionBounds();
         hasLassoSelection = hasAnySelectedItems();
         lastAnnouncedSelection = "";
@@ -2482,11 +2723,17 @@ public class CanvasView extends View {
 
     private void recordAddedSelection(List<Stroke> strokes, List<ShapeItem> shapes,
                                       List<TextItem> texts) {
+        recordAddedSelection(strokes, shapes, texts, null);
+    }
+
+    private void recordAddedSelection(List<Stroke> strokes, List<ShapeItem> shapes,
+                                      List<TextItem> texts, List<ImageItem> images) {
         ActionRecord record = new ActionRecord();
         record.type = ActionRecord.Type.ADD_SELECTION;
         record.prevStrokes = new ArrayList<>(strokes);
         record.prevShapes = new ArrayList<>(shapes);
         record.prevTexts = new ArrayList<>(texts);
+        if (images != null) record.prevImages = new ArrayList<>(images);
         undoStack.push(record);
         redoStack.clear();
         syncAccessibilityActions();
@@ -2620,6 +2867,11 @@ public class CanvasView extends View {
 
     private void translateItems(List<Stroke> strokes, List<ShapeItem> shapes,
                                 List<TextItem> texts, float dx, float dy) {
+        translateItems(strokes, shapes, texts, selectedImages, dx, dy);
+    }
+
+    private void translateItems(List<Stroke> strokes, List<ShapeItem> shapes,
+                                List<TextItem> texts, List<ImageItem> images, float dx, float dy) {
         if (strokes != null) {
             for (Stroke s : strokes) {
                 for (DrawingPoint pt : s.points) {
@@ -2651,6 +2903,13 @@ public class CanvasView extends View {
                 item.markDirty();
             }
         }
+        if (images != null) {
+            for (ImageItem img : images) {
+                img.x += dx;
+                img.y += dy;
+                img.markDirty();
+            }
+        }
     }
 
     private void finishSelectionMove() {
@@ -2660,6 +2919,7 @@ public class CanvasView extends View {
             record.movedStrokes = new ArrayList<>(selectedStrokes);
             record.movedShapes = new ArrayList<>(selectedShapes);
             record.movedTexts = new ArrayList<>(selectedTexts);
+            record.movedImages = new ArrayList<>(selectedImages);
             record.moveDx = selectionMoveDx;
             record.moveDy = selectionMoveDy;
             undoStack.push(record);
@@ -2672,7 +2932,8 @@ public class CanvasView extends View {
     }
 
     private boolean hasAnySelectedItems() {
-        return !selectedStrokes.isEmpty() || !selectedShapes.isEmpty() || !selectedTexts.isEmpty();
+        return !selectedStrokes.isEmpty() || !selectedShapes.isEmpty()
+                || !selectedTexts.isEmpty() || !selectedImages.isEmpty();
     }
 
     private void updateSelectionBounds() {
@@ -2680,6 +2941,7 @@ public class CanvasView extends View {
         for (Stroke item : selectedStrokes) unionSelectionBounds(item == null ? null : item.getBounds());
         for (ShapeItem item : selectedShapes) unionSelectionBounds(item == null ? null : item.getBounds());
         for (TextItem item : selectedTexts) unionSelectionBounds(item == null ? null : item.getBounds());
+        for (ImageItem item : selectedImages) unionSelectionBounds(item == null ? null : item.getBounds());
         if (!selectionBounds.isEmpty()) selectionBounds.inset(-16f, -16f);
     }
 
@@ -2692,7 +2954,8 @@ public class CanvasView extends View {
     private void announceSelectionCount() {
         if (!hasSelection()) return;
         String summary = "Selected " + selectedStrokes.size() + " ink strokes, "
-                + selectedShapes.size() + " shapes, and " + selectedTexts.size()
+                + selectedShapes.size() + " shapes, "
+                + selectedImages.size() + " images, and " + selectedTexts.size()
                 + " text items. Drag to move or use the selection actions.";
         if (!summary.equals(lastAnnouncedSelection)) {
             setContentDescription("Note page. " + summary);
@@ -2830,6 +3093,29 @@ public class CanvasView extends View {
         float canvasY = (rawY - panOffsetY) / scaleFactor + viewportOffsetY;
         int primaryToolType = event.getToolType(inputPointerIndex);
         float pressure = normalizeInputPressure(event.getPressure(inputPointerIndex), primaryToolType);
+
+        // Long-press gesture tracking for "Press and hold to paste wherever we want"
+        if (action == MotionEvent.ACTION_DOWN) {
+            touchDownRawX = rawX;
+            touchDownRawY = rawY;
+            touchDownCanvasX = canvasX;
+            touchDownCanvasY = canvasY;
+            longPressTriggered = false;
+            removeCallbacks(longPressPasteRunnable);
+            if (hasClipboardContents() && currentTool != DrawingTool.LASSO) {
+                postDelayed(longPressPasteRunnable, 420);
+            }
+        } else if (action == MotionEvent.ACTION_MOVE) {
+            if (!longPressTriggered && Math.hypot(rawX - touchDownRawX, rawY - touchDownRawY) > touchSlop) {
+                removeCallbacks(longPressPasteRunnable);
+            }
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            removeCallbacks(longPressPasteRunnable);
+            if (longPressTriggered) {
+                longPressTriggered = false;
+                return true;
+            }
+        }
 
         // 2b. Laser Pointer Tool (ephemeral glowing presentation trail)
         if (currentTool == DrawingTool.LASER) {
@@ -2990,6 +3276,24 @@ public class CanvasView extends View {
         // 7. Stroke Drawing (Fountain, Pen, Brush, Highlighter, Pencil)
         switch (action) {
             case MotionEvent.ACTION_DOWN:
+                // Word Completion Detection:
+                // If user was handwriting a word and now starts a new stroke that advances spatially
+                // (next word to right > 25px, or next line below > 15px, or jump elsewhere),
+                // the previous word is completed! Convert it immediately.
+                if (isAutoConvertTextEnabled && !pendingAutoConvertStrokes.isEmpty()) {
+                    RectF lastWordBounds = getStrokesBounds(pendingAutoConvertStrokes);
+                    if (!lastWordBounds.isEmpty()) {
+                        boolean isNewWord = (canvasX > lastWordBounds.right + 25f)
+                                || (canvasY > lastWordBounds.bottom + 15f)
+                                || (canvasY < lastWordBounds.top - 20f)
+                                || (canvasX < lastWordBounds.left - 40f);
+                        if (isNewWord) {
+                            autoConvertHandler.removeCallbacks(autoConvertRunnable);
+                            autoConvertRunnable.run();
+                        }
+                    }
+                }
+
                 smoothedX = canvasX;
                 smoothedY = canvasY;
                 smoothedPressure = pressure;
@@ -3117,7 +3421,7 @@ public class CanvasView extends View {
                         if (isAutoConvertTextEnabled) {
                             pendingAutoConvertStrokes.add(activeStroke);
                             autoConvertHandler.removeCallbacks(autoConvertRunnable);
-                            autoConvertHandler.postDelayed(autoConvertRunnable, 1500);
+                            autoConvertHandler.postDelayed(autoConvertRunnable, 750);
                         }
                     }
                     activeStroke = null;
@@ -3132,6 +3436,17 @@ public class CanvasView extends View {
             return true;
         }
         return super.onTouchEvent(event);
+    }
+
+    private RectF getStrokesBounds(List<Stroke> strokes) {
+        RectF r = new RectF();
+        for (Stroke s : strokes) {
+            if (s != null && s.getBounds() != null && !s.getBounds().isEmpty()) {
+                if (r.isEmpty()) r.set(s.getBounds());
+                else r.union(s.getBounds());
+            }
+        }
+        return r;
     }
 
     private void resetStrokeFilter(float x, float y, long timeMillis) {
@@ -3424,6 +3739,14 @@ public class CanvasView extends View {
                     && boundsIntersectLasso(item.getBounds(), lassoBounds)) selectedTexts.add(item);
         }
 
+        selectedImages.clear();
+        if (currentPage.images != null) {
+            for (ImageItem item : currentPage.images) {
+                if (item != null && RectF.intersects(item.getBounds(), lassoBounds)
+                        && boundsIntersectLasso(item.getBounds(), lassoBounds)) selectedImages.add(item);
+            }
+        }
+
         hasLassoSelection = hasAnySelectedItems();
         if (hasLassoSelection) {
             updateSelectionBounds();
@@ -3690,6 +4013,11 @@ public class CanvasView extends View {
         drawPaperTemplate(canvas, getWidth(), effectiveHeight, isDark, scaleX);
 
         if (currentPage != null) {
+            if (currentPage.images != null) {
+                for (ImageItem img : currentPage.images) {
+                    drawImage(canvas, img);
+                }
+            }
             for (ShapeItem shape : currentPage.shapes) {
                 drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth);
             }

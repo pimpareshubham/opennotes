@@ -48,15 +48,20 @@ import org.opennotes.app.db.NotesDbHelper;
 import org.opennotes.app.export.ImageExporter;
 import org.opennotes.app.export.PdfExporter;
 import org.opennotes.app.model.DrawingTool;
+import org.opennotes.app.model.ImageItem;
 import org.opennotes.app.model.Notebook;
 import org.opennotes.app.model.Page;
 import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
 import org.opennotes.app.util.ErrorDialog;
+import org.opennotes.app.util.HandwritingRecognitionEngine;
 import org.opennotes.app.util.TypefaceManager;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
+import org.opennotes.app.ai.UserHandwritingModel;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -146,9 +151,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private ImageView btnExitFullscreen;
     private boolean isZenFullscreen = false;
 
-    // Image Picker & Voice Recorder & Font Picker
+    // Clipboard Paste shortcuts
+    private ImageView btnToolbarPaste;
+    private View layoutLongPressPastePopup;
+
+    // Image Picker & Voice Recorder & Font Picker & Handwriting Profile
     private ActivityResultLauncher<String> imagePickerLauncher;
     private ActivityResultLauncher<String> fontPickerLauncher;
+    private ActivityResultLauncher<String> exportProfileLauncher;
+    private ActivityResultLauncher<String> importProfileLauncher;
     private MediaRecorder voiceRecorder;
     private MediaPlayer voicePlayer;
     private File currentAudioFile;
@@ -183,6 +194,29 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             }
         });
 
+        exportProfileLauncher = registerForActivityResult(new ActivityResultContracts.CreateDocument("application/octet-stream"), uri -> {
+            if (uri != null) {
+                try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                    UserHandwritingModel.getInstance(this).exportProfile(os);
+                    Toast.makeText(this, "📤 Handwriting profile exported (.onhw) successfully!", Toast.LENGTH_LONG).show();
+                } catch (Exception e) {
+                    Toast.makeText(this, "Failed to export profile: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+
+        importProfileLauncher = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
+            if (uri != null) {
+                try (InputStream is = getContentResolver().openInputStream(uri)) {
+                    UserHandwritingModel.getInstance(this).importProfile(is);
+                    int count = UserHandwritingModel.getInstance(this).getLearnedCount();
+                    Toast.makeText(this, "📥 Handwriting profile imported! (" + count + " personal styles & prototypes loaded)", Toast.LENGTH_LONG).show();
+                } catch (Exception e) {
+                    Toast.makeText(this, "Failed to import profile: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            }
+        });
+
         dbHelper = NotesDbHelper.getInstance(this);
         appSettings = AppSettings.getInstance(this);
         notebookId = getIntent().getLongExtra("notebook_id", -1);
@@ -208,6 +242,21 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         setupToolPropertyCard();
         restoreUserSettings();
         updateFavoriteIcon();
+
+        // Silent background pre-download of handwriting models for seamless offline recognition
+        HandwritingRecognitionEngine.isModelDownloaded("ENGLISH", downloaded -> {
+            if (!downloaded) {
+                HandwritingRecognitionEngine.downloadModel("ENGLISH", null);
+            }
+        });
+        String preferredLang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
+        if (!"ENGLISH".equalsIgnoreCase(preferredLang)) {
+            HandwritingRecognitionEngine.isModelDownloaded(preferredLang, downloaded -> {
+                if (!downloaded) {
+                    HandwritingRecognitionEngine.downloadModel(preferredLang, null);
+                }
+            });
+        }
     }
 
     private void bindViews() {
@@ -306,7 +355,22 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         btnExitFullscreen = findViewById(R.id.btnExitFullscreen);
 
+        btnToolbarPaste = findViewById(R.id.btnToolbarPaste);
+        layoutLongPressPastePopup = findViewById(R.id.layoutLongPressPastePopup);
+        if (btnToolbarPaste != null) {
+            btnToolbarPaste.setOnClickListener(v -> {
+                canvasView.pasteSelection();
+                Toast.makeText(this, "Pasted from clipboard", Toast.LENGTH_SHORT).show();
+                updatePasteButtonVisibility();
+            });
+        }
+
         canvasView.setOnCanvasChangeListener(this);
+        canvasView.setOnCanvasLongPressListener((rawX, rawY, canvasX, canvasY) -> {
+            if (canvasView.hasClipboardContents()) {
+                showLongPressPastePopup(rawX, rawY, canvasX, canvasY);
+            }
+        });
         canvasView.setOnZoomChangeListener(zoomPercent -> {
             textZoomPercent.setText(Math.round(zoomPercent) + "% ▾");
         });
@@ -463,6 +527,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private int dp(float value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private int dpToPx(int dp) {
+        return dp(dp);
     }
 
     private void setViewHeight(View view, int height) {
@@ -766,12 +834,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if (!canvasView.hasSelection()) return;
             canvasView.cutSelection();
             Toast.makeText(this, "Cut to clipboard. Use Paste to place it.", Toast.LENGTH_SHORT).show();
+            updatePasteButtonVisibility();
         });
         btnLassoCopy.setOnClickListener(v -> {
             if (!canvasView.hasSelection()) return;
             canvasView.copySelection();
             Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
-            updateLassoActionAvailability();
+            updatePasteButtonVisibility();
         });
         btnLassoPaste.setOnClickListener(v -> {
             if (!canvasView.hasClipboardContents()) {
@@ -779,6 +848,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 return;
             }
             canvasView.pasteSelection();
+            updatePasteButtonVisibility();
         });
         btnLassoStyle.setOnClickListener(v -> showLassoStyleDialog());
         btnLassoDuplicate.setOnClickListener(v -> canvasView.duplicateSelection());
@@ -1078,8 +1148,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showZoomPickerDialog() {
-        final String[] zoomOptions = {"25%", "50%", "75%", "100% (Fit)", "150%", "200%", "400%", "800%", "1600%"};
-        final float[] zoomValues = {25f, 50f, 75f, 100f, 150f, 200f, 400f, 800f, 1600f};
+        final String[] zoomOptions = {"10%", "20%", "25%", "50%", "75%", "100% (Fit)", "150%", "200%", "400%", "800%", "1600%"};
+        final float[] zoomValues = {10f, 20f, 25f, 50f, 75f, 100f, 150f, 200f, 400f, 800f, 1600f};
 
         new MaterialAlertDialogBuilder(this)
                 .setTitle("Select Zoom Level")
@@ -1120,6 +1190,53 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (btnLassoPaste != null) {
             btnLassoPaste.setEnabled(hasClipboard);
             btnLassoPaste.setAlpha(hasClipboard ? 1f : 0.45f);
+        }
+    }
+
+    public void updatePasteButtonVisibility() {
+        if (canvasView == null) return;
+        boolean hasClipboard = canvasView.hasClipboardContents();
+        if (btnToolbarPaste != null) {
+            btnToolbarPaste.setVisibility(hasClipboard ? View.VISIBLE : View.GONE);
+        }
+        updateLassoActionAvailability();
+    }
+
+    private void showLongPressPastePopup(float rawX, float rawY, float canvasX, float canvasY) {
+        if (layoutLongPressPastePopup == null) return;
+        layoutLongPressPastePopup.animate().cancel();
+        layoutLongPressPastePopup.setVisibility(View.VISIBLE);
+        layoutLongPressPastePopup.setAlpha(0f);
+        layoutLongPressPastePopup.setScaleX(0.85f);
+        layoutLongPressPastePopup.setScaleY(0.85f);
+
+        int popupWidth = layoutLongPressPastePopup.getWidth();
+        int popupHeight = layoutLongPressPastePopup.getHeight();
+        if (popupWidth <= 0) popupWidth = dpToPx(110);
+        if (popupHeight <= 0) popupHeight = dpToPx(44);
+
+        float posX = Math.max(16f, Math.min(rawX - (popupWidth * 0.5f), getWindow().getDecorView().getWidth() - popupWidth - 16f));
+        float posY = Math.max(100f, rawY - popupHeight - 20f);
+
+        layoutLongPressPastePopup.setX(posX);
+        layoutLongPressPastePopup.setY(posY);
+
+        layoutLongPressPastePopup.animate().alpha(1f).scaleX(1.0f).scaleY(1.0f).setDuration(180)
+                .setInterpolator(new android.view.animation.OvershootInterpolator(1.2f)).start();
+
+        layoutLongPressPastePopup.setOnClickListener(v -> {
+            canvasView.pasteAt(canvasX, canvasY);
+            Toast.makeText(this, "Pasted at location", Toast.LENGTH_SHORT).show();
+            hideLongPressPastePopup();
+            updatePasteButtonVisibility();
+        });
+    }
+
+    private void hideLongPressPastePopup() {
+        if (layoutLongPressPastePopup != null && layoutLongPressPastePopup.getVisibility() == View.VISIBLE) {
+            layoutLongPressPastePopup.animate().cancel();
+            layoutLongPressPastePopup.animate().alpha(0f).scaleX(0.85f).scaleY(0.85f).setDuration(140)
+                    .withEndAction(() -> layoutLongPressPastePopup.setVisibility(View.GONE)).start();
         }
     }
 
@@ -1318,6 +1435,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         popup.getMenu().add(0, 7, 6, "Select All Content");
         popup.getMenu().add(0, 8, 7, "Convert Entire Page to Beautiful Font");
         popup.getMenu().add(0, 9, 8, "Paste from Clipboard");
+        popup.getMenu().add(0, 10, 9, "📥 Offline Handwriting Models");
+        popup.getMenu().add(0, 11, 10, "🎓 Train My Handwriting Style");
+        popup.getMenu().add(0, 12, 11, "📤 Export Handwriting Profile (.onhw)");
+        popup.getMenu().add(0, 13, 12, "📥 Import Handwriting Profile (.onhw)");
         popup.getMenu().findItem(9).setEnabled(canvasView.hasClipboardContents());
 
         popup.setOnMenuItemClickListener(item -> {
@@ -1369,10 +1490,130 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         canvasView.pasteSelection();
                     }
                     return true;
+                case 10:
+                    showDownloadModelsDialog();
+                    return true;
+                case 11:
+                    showHandwritingProfileDialog();
+                    return true;
+                case 12:
+                    exportProfileLauncher.launch("my_handwriting_profile.onhw");
+                    return true;
+                case 13:
+                    importProfileLauncher.launch("*/*");
+                    return true;
             }
             return false;
         });
         popup.show();
+    }
+
+    private void showHandwritingProfileDialog() {
+        UserHandwritingModel model = UserHandwritingModel.getInstance(this);
+        int learnedCount = model.getLearnedCount();
+        int vocabCount = model.getCustomVocabulary().size();
+
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(20);
+        layout.setPadding(pad, pad, pad, pad);
+
+        TextView infoText = new TextView(this);
+        infoText.setText("OpenNotes trains itself with your personal handwriting quirks, cursive ligatures, and doctor's handwriting styles offline.\n\n"
+                + "📊 Learned Styles & Prototypes: " + learnedCount + "\n"
+                + "📚 Custom Trained Vocabulary: " + vocabCount + " words");
+        infoText.setTextColor(0xFFE2E8F0);
+        infoText.setTextSize(14f);
+        infoText.setPadding(0, 0, 0, dpToPx(16));
+        layout.addView(infoText);
+
+        Button btnTeach = new Button(this);
+        btnTeach.setText("🎓 Teach Word or Cursive Style");
+        btnTeach.setOnClickListener(v -> showTeachHandwritingDialog("", null));
+        layout.addView(btnTeach);
+
+        Button btnExport = new Button(this);
+        btnExport.setText("📤 Export Profile (.onhw)");
+        btnExport.setOnClickListener(v -> exportProfileLauncher.launch("my_handwriting_profile.onhw"));
+        layout.addView(btnExport);
+
+        Button btnImport = new Button(this);
+        btnImport.setText("📥 Import Profile (.onhw)");
+        btnImport.setOnClickListener(v -> importProfileLauncher.launch("*/*"));
+        layout.addView(btnImport);
+
+        if (learnedCount > 0) {
+            Button btnClear = new Button(this);
+            btnClear.setText("🗑️ Reset Learned Styles");
+            btnClear.setOnClickListener(v -> {
+                new MaterialAlertDialogBuilder(this)
+                        .setTitle("Reset Handwriting Profile")
+                        .setMessage("Clear all learned personal styles and prototypes?")
+                        .setPositiveButton("Reset", (d, w) -> {
+                            model.clearLearnedData();
+                            Toast.makeText(this, "Handwriting profile reset to default", Toast.LENGTH_SHORT).show();
+                        })
+                        .setNegativeButton("Cancel", null)
+                        .show();
+            });
+            layout.addView(btnClear);
+        }
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("🎓 My Handwriting Training Engine")
+                .setView(layout)
+                .setPositiveButton("Done", null)
+                .show();
+    }
+
+    public void showTeachHandwritingDialog(String initialRecognized, List<org.opennotes.app.model.Stroke> strokes) {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int pad = dpToPx(20);
+        layout.setPadding(pad, pad, pad, pad);
+
+        TextView hint = new TextView(this);
+        hint.setText("Teach the engine how you write words, abbreviations, or doctor scripts. It will prioritize your handwriting style on device.");
+        hint.setTextColor(0xFF94A3B8);
+        hint.setTextSize(13f);
+        hint.setPadding(0, 0, 0, dpToPx(12));
+        layout.addView(hint);
+
+        TextView lbl1 = new TextView(this);
+        lbl1.setText("When handwriting is detected as (optional):");
+        lbl1.setTextColor(0xFFE2E8F0);
+        layout.addView(lbl1);
+
+        EditText editRecognized = new EditText(this);
+        editRecognized.setHint("e.g. ave, clate, 12, px, peop1e");
+        editRecognized.setText(initialRecognized != null ? initialRecognized : "");
+        layout.addView(editRecognized);
+
+        TextView lbl2 = new TextView(this);
+        lbl2.setText("The correct intended text is (required):");
+        lbl2.setTextColor(0xFFE2E8F0);
+        lbl2.setPadding(0, dpToPx(10), 0, 0);
+        layout.addView(lbl2);
+
+        EditText editIntended = new EditText(this);
+        editIntended.setHint("e.g. are, date, R, Rx, people");
+        layout.addView(editIntended);
+
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("🎓 Teach Handwriting Style")
+                .setView(layout)
+                .setPositiveButton("Train Style", (dialog, which) -> {
+                    String intended = editIntended.getText().toString().trim();
+                    String recognized = editRecognized.getText().toString().trim();
+                    if (!intended.isEmpty()) {
+                        UserHandwritingModel.getInstance(this).learnCorrection(recognized, intended, strokes);
+                        Toast.makeText(this, "✨ Trained! Style learned for '" + intended + "'", Toast.LENGTH_SHORT).show();
+                    } else {
+                        Toast.makeText(this, "Please enter the intended text", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
     }
 
     private void showPageSettingsMenu() {
@@ -1742,6 +1983,34 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             Toast.makeText(this, "✨ Auto-Beautification " + (enabled ? "ON" : "OFF") + " (" + langDisplay + " • " + font + ")" + convertMsg, Toast.LENGTH_SHORT).show();
         });
 
+        dialog.setButton(AlertDialog.BUTTON_NEUTRAL, "⚙️ AI & Models", (d, w) -> {
+            String[] options = {
+                    "📥 Offline Handwriting Models",
+                    "🎓 Train My Handwriting Style",
+                    "📤 Export Handwriting Profile (.onhw)",
+                    "📥 Import Handwriting Profile (.onhw)"
+            };
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle("AI & Handwriting Options")
+                    .setItems(options, (optDialog, which) -> {
+                        switch (which) {
+                            case 0:
+                                showDownloadModelsDialog();
+                                break;
+                            case 1:
+                                showHandwritingProfileDialog();
+                                break;
+                            case 2:
+                                exportProfileLauncher.launch("my_handwriting_profile.onhw");
+                                break;
+                            case 3:
+                                importProfileLauncher.launch("*/*");
+                                break;
+                        }
+                    })
+                    .show();
+        });
+
         dialog.show();
         if (layoutCustomFontList != null) {
             TextView loadingFonts = new TextView(this);
@@ -1820,8 +2089,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             BitmapFactory.decodeStream(is, null, opts);
 
             int sampleSize = 1;
-            if (opts.outWidth > 1200 || opts.outHeight > 1200) {
-                sampleSize = Math.max(opts.outWidth / 1200, opts.outHeight / 1200);
+            int maxDim = Math.max(opts.outWidth, opts.outHeight);
+            while (maxDim / sampleSize > 1600) {
+                sampleSize *= 2;
             }
 
             try (InputStream is2 = getContentResolver().openInputStream(uri)) {
@@ -1829,22 +2099,180 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 opts2.inSampleSize = sampleSize;
                 Bitmap bitmap = BitmapFactory.decodeStream(is2, null, opts2);
                 if (bitmap != null) {
-                    float startX = 60f;
-                    float startY = 180f;
+                    File imagesDir = new File(getFilesDir(), "note_images");
+                    if (!imagesDir.exists()) imagesDir.mkdirs();
+                    File destFile = new File(imagesDir, "img_" + System.currentTimeMillis() + ".jpg");
+                    try (FileOutputStream fos = new FileOutputStream(destFile)) {
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 92, fos);
+                    }
+
                     float width = Math.min(bitmap.getWidth(), 800f);
                     float height = width * ((float) bitmap.getHeight() / bitmap.getWidth());
-                    ShapeItem imgItem = new ShapeItem(ShapeItem.Type.RECTANGLE, startX, startY, startX + width, startY + height, 0xFF38BDF8, 3.0f);
-                    if (currentPage != null) {
-                        currentPage.shapes.add(imgItem);
-                        canvasView.invalidate();
-                        saveCurrentPage();
-                        Toast.makeText(this, "Image inserted (" + bitmap.getWidth() + "x" + bitmap.getHeight() + ")", Toast.LENGTH_SHORT).show();
-                    }
+                    float centerX = canvasView.getCenterCanvasX();
+                    float centerY = canvasView.getCenterCanvasY();
+                    float startX = centerX - width / 2f;
+                    float startY = centerY - height / 2f;
+
+                    ImageItem imgItem = new ImageItem(destFile.getAbsolutePath(), startX, startY, width, height);
+                    canvasView.addImageItem(imgItem);
+                    saveCurrentPage();
+                    Toast.makeText(this, "Image inserted (" + bitmap.getWidth() + "x" + bitmap.getHeight() + ")", Toast.LENGTH_SHORT).show();
                 }
             }
         } catch (Exception e) {
             ErrorDialog.show(this, "Image could not be loaded", e);
         }
+    }
+
+    private void showDownloadModelsDialog() {
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this);
+        builder.setTitle("📥 Offline Handwriting Recognition Models");
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(20), dp(16), dp(20), dp(16));
+
+        TextView desc = new TextView(this);
+        desc.setText("Google ML Kit Digital Ink models operate 100% on-device for zero-latency, private handwriting-to-text recognition with no internet connection required.");
+        desc.setTextColor(0xFF94A3B8);
+        desc.setTextSize(13);
+        desc.setLineSpacing(dp(2), 1.15f);
+        root.addView(desc);
+
+        LinearLayout listLayout = new LinearLayout(this);
+        listLayout.setOrientation(LinearLayout.VERTICAL);
+        listLayout.setPadding(0, dp(16), 0, dp(16));
+        root.addView(listLayout);
+
+        String[] langs = {"ENGLISH", "MARATHI", "HINDI"};
+        String[] langTitles = {"English (en-US)", "Marathi (मराठी - mr)", "Hindi (हिन्दी - hi)"};
+        String[] langSubtitles = {"Latin script & cursive ligature models", "Devanagari script with Shirorekha priors", "Devanagari script & joint compound glyphs"};
+
+        TextView[] statusViews = new TextView[langs.length];
+        Button[] actionButtons = new Button[langs.length];
+
+        for (int i = 0; i < langs.length; i++) {
+            final int index = i;
+            final String langKey = langs[i];
+
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(14), dp(12), dp(14), dp(12));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.setMargins(0, 0, 0, dp(10));
+            card.setLayoutParams(lp);
+            card.setBackgroundResource(R.drawable.bg_floating_pill);
+
+            LinearLayout textCol = new LinearLayout(this);
+            textCol.setOrientation(LinearLayout.VERTICAL);
+            textCol.setLayoutParams(new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f));
+
+            TextView title = new TextView(this);
+            title.setText(langTitles[i]);
+            title.setTextColor(0xFFF1F5F9);
+            title.setTextSize(14);
+            title.setTypeface(null, android.graphics.Typeface.BOLD);
+            textCol.addView(title);
+
+            TextView subtitle = new TextView(this);
+            subtitle.setText(langSubtitles[i]);
+            subtitle.setTextColor(0xFF64748B);
+            subtitle.setTextSize(11);
+            textCol.addView(subtitle);
+
+            TextView status = new TextView(this);
+            status.setText("Checking status…");
+            status.setTextColor(0xFF94A3B8);
+            status.setTextSize(12);
+            status.setPadding(0, dp(4), 0, 0);
+            textCol.addView(status);
+            statusViews[i] = status;
+
+            card.addView(textCol);
+
+            Button btnDownload = new Button(this, null, com.google.android.material.R.attr.materialButtonStyle);
+            btnDownload.setText("Download");
+            btnDownload.setTextSize(12);
+            btnDownload.setAllCaps(false);
+            btnDownload.setPadding(dp(12), dp(4), dp(12), dp(4));
+            actionButtons[i] = btnDownload;
+            card.addView(btnDownload);
+
+            listLayout.addView(card);
+
+            // Check download status asynchronously
+            HandwritingRecognitionEngine.isModelDownloaded(langKey, downloaded -> {
+                runOnUiThread(() -> {
+                    if (downloaded) {
+                        status.setText("✓ Ready Offline (Downloaded)");
+                        status.setTextColor(0xFF10B981);
+                        btnDownload.setText("Downloaded");
+                        btnDownload.setEnabled(false);
+                        btnDownload.setAlpha(0.6f);
+                    } else {
+                        status.setText("Not downloaded (~15MB)");
+                        status.setTextColor(0xFFF59E0B);
+                        btnDownload.setText("Download");
+                        btnDownload.setEnabled(true);
+                        btnDownload.setAlpha(1.0f);
+                    }
+                });
+            });
+
+            btnDownload.setOnClickListener(v -> {
+                btnDownload.setEnabled(false);
+                btnDownload.setText("Downloading…");
+                status.setText("Downloading model package…");
+                status.setTextColor(0xFF38BDF8);
+
+                HandwritingRecognitionEngine.downloadModel(langKey, error -> {
+                    runOnUiThread(() -> {
+                        if (error == null) {
+                            status.setText("✓ Download Complete • Ready Offline");
+                            status.setTextColor(0xFF10B981);
+                            btnDownload.setText("Downloaded");
+                            btnDownload.setEnabled(false);
+                            btnDownload.setAlpha(0.6f);
+                            Toast.makeText(NoteEditorActivity.this, "✓ " + langTitles[index] + " model ready for offline recognition!", Toast.LENGTH_SHORT).show();
+                        } else {
+                            status.setText("Download failed: " + (error.getMessage() != null ? error.getMessage() : "Network error"));
+                            status.setTextColor(0xFFEF4444);
+                            btnDownload.setEnabled(true);
+                            btnDownload.setText("Retry");
+                        }
+                    });
+                });
+            });
+        }
+
+        builder.setView(root);
+        builder.setPositiveButton("Close", null);
+        builder.setNeutralButton("Download All", (d, w) -> {
+            Toast.makeText(this, "Downloading offline handwriting models in background…", Toast.LENGTH_SHORT).show();
+            for (int i = 0; i < langs.length; i++) {
+                final int idx = i;
+                final String langKey = langs[i];
+                HandwritingRecognitionEngine.downloadModel(langKey, error -> {
+                    if (error == null) {
+                        runOnUiThread(() -> {
+                            if (statusViews[idx] != null) {
+                                statusViews[idx].setText("✓ Ready Offline (Downloaded)");
+                                statusViews[idx].setTextColor(0xFF10B981);
+                            }
+                            if (actionButtons[idx] != null) {
+                                actionButtons[idx].setText("Downloaded");
+                                actionButtons[idx].setEnabled(false);
+                                actionButtons[idx].setAlpha(0.6f);
+                            }
+                        });
+                    }
+                });
+            }
+        });
+
+        builder.show();
     }
 
     private void showVoiceRecorderDialog() {
@@ -2000,6 +2428,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     @Override
     public void onCanvasChanged() {
         updateUndoRedoUi();
+        updatePasteButtonVisibility();
         triggerRealtimeAutoSave();
     }
 
@@ -2051,6 +2480,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     protected void onResume() {
         super.onResume();
         FullscreenMode.apply(this);
+        updatePasteButtonVisibility();
     }
 
     @Override
