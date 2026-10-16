@@ -914,29 +914,41 @@
     </androidx.cardview.widget.CardView>
 
     <!-- Contextual Floating Lasso Action Bar (Frame 110) -->
-    <LinearLayout
+    <HorizontalScrollView
         android:id="@+id/lassoFloatingActionBar"
-        android:layout_width="wrap_content"
-        android:layout_height="40dp"
-        android:background="@drawable/bg_floating_pill"
+        android:layout_width="match_parent"
+        android:layout_height="52dp"
+        android:layout_marginHorizontal="8dp"
         android:elevation="14dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingHorizontal="6dp"
+        android:fillViewport="true"
+        android:scrollbars="none"
         android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="48dp"
+            android:background="@drawable/bg_floating_pill"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="6dp">
 
         <!-- Delete (Red Danger Button) -->
         <TextView
             android:id="@+id/btnLassoDelete"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="Delete"
             android:textColor="#EF4444"
             android:textSize="12sp"
             android:textStyle="bold"
-            android:background="?selectableItemBackgroundBorderless" />
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Delete selected content" />
 
         <View
             android:layout_width="1dp"
@@ -948,12 +960,17 @@
             android:id="@+id/btnLassoCut"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="Cut"
             android:textColor="@color/text_primary"
             android:textSize="12sp"
-            android:background="?selectableItemBackgroundBorderless" />
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Cut selected content" />
 
         <View
             android:layout_width="1dp"
@@ -965,12 +982,17 @@
             android:id="@+id/btnLassoCopy"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="Copy"
             android:textColor="@color/text_primary"
             android:textSize="12sp"
-            android:background="?selectableItemBackgroundBorderless" />
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Copy selected content" />
 
         <View
             android:layout_width="1dp"
@@ -982,12 +1004,17 @@
             android:id="@+id/btnLassoStyle"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="Style"
             android:textColor="@color/text_primary"
             android:textSize="12sp"
-            android:background="?selectableItemBackgroundBorderless" />
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Change selected content style" />
 
         <View
             android:layout_width="1dp"
@@ -999,12 +1026,17 @@
             android:id="@+id/btnLassoDuplicate"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="Duplicate"
             android:textColor="@color/text_primary"
             android:textSize="12sp"
-            android:background="?selectableItemBackgroundBorderless" />
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Duplicate selected content" />
 
         <View
             android:layout_width="1dp"
@@ -1016,12 +1048,17 @@
             android:id="@+id/btnLassoColor"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="Color"
             android:textColor="@color/accent"
             android:textSize="12sp"
-            android:background="?selectableItemBackgroundBorderless" />
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Change selected content color" />
 
         <View
             android:layout_width="1dp"
@@ -1033,13 +1070,18 @@
             android:id="@+id/btnLassoBeautify"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="✨ Beautify"
             android:textColor="#F59E0B"
             android:textSize="12sp"
             android:textStyle="bold"
-            android:background="?selectableItemBackgroundBorderless" />
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Beautify selected handwriting" />
 
         <View
             android:layout_width="1dp"
@@ -1051,14 +1093,41 @@
             android:id="@+id/btnLassoConvertText"
             android:layout_width="wrap_content"
             android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
             android:gravity="center"
             android:paddingHorizontal="10dp"
             android:text="✍️ Convert"
             android:textColor="#38BDF8"
             android:textSize="12sp"
             android:textStyle="bold"
-            android:background="?selectableItemBackgroundBorderless" />
-    </LinearLayout>
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Convert selected handwriting to text" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="18dp"
+            android:background="@color/divider" />
+
+        <TextView
+            android:id="@+id/btnLassoPaste"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
+            android:gravity="center"
+            android:paddingHorizontal="10dp"
+            android:text="Paste"
+            android:textColor="@color/accent"
+            android:textSize="12sp"
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:contentDescription="Paste clipboard content on the page" />
+        </LinearLayout>
+    </HorizontalScrollView>
 
     <!-- Floating Exit Zen Mode Button -->
     <ImageView

@@ -15,6 +15,7 @@ import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.VelocityTracker;
 import android.view.View;
+import android.view.accessibility.AccessibilityEvent;
 import android.widget.OverScroller;
 import android.os.Handler;
 import android.os.Looper;
@@ -24,6 +25,8 @@ import android.view.Display;
 import android.util.LongSparseArray;
 
 import androidx.annotation.Nullable;
+import androidx.core.view.AccessibilityViewCommand;
+import androidx.core.view.ViewCompat;
 import androidx.input.motionprediction.MotionEventPredictor;
 
 import org.opennotes.app.model.DrawingPoint;
@@ -169,20 +172,26 @@ public class CanvasView extends View {
     private boolean hasLassoSelection = false;
     private final List<Stroke> selectedStrokes = new ArrayList<>();
     private final List<ShapeItem> selectedShapes = new ArrayList<>();
+    private final List<TextItem> selectedTexts = new ArrayList<>();
     private final RectF selectionBounds = new RectF();
     private boolean isMovingSelection = false;
     private float lassoMoveStartX, lassoMoveStartY;
+    private float selectionMoveDx, selectionMoveDy;
+    private String lastAnnouncedSelection = "";
 
     // Clipboard for Cut / Copy / Paste
     private final List<Stroke> clipboardStrokes = new ArrayList<>();
     private final List<ShapeItem> clipboardShapes = new ArrayList<>();
+    private final List<TextItem> clipboardTexts = new ArrayList<>();
+    private float clipboardCenterX;
+    private float clipboardCenterY;
 
     // Scrollbar indicator
     private final Paint scrollbarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
     // Undo / Redo history
     private static class ActionRecord {
-        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, MOVE_SELECTION, CLEAR_ALL, STYLE_CHANGE, CONVERT_TO_TEXT }
+        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT }
         Type type;
         Stroke stroke;
         ShapeItem shape;
@@ -190,10 +199,32 @@ public class CanvasView extends View {
         float moveDx, moveDy;
         List<Stroke> movedStrokes;
         List<ShapeItem> movedShapes;
+        List<TextItem> movedTexts;
         List<Stroke> prevStrokes;
         List<ShapeItem> prevShapes;
         List<TextItem> prevTexts;
+        List<Stroke> styleTargetsStrokes;
+        List<ShapeItem> styleTargetsShapes;
+        List<TextItem> styleTargetsTexts;
+        List<Stroke> beforeBeautifyStrokes;
+        List<Stroke> afterBeautifyStrokes;
+        List<ItemStyleSnapshot> previousStrokeStyles;
+        List<ItemStyleSnapshot> previousShapeStyles;
+        List<ItemStyleSnapshot> previousTextStyles;
+        List<ItemStyleSnapshot> nextStrokeStyles;
+        List<ItemStyleSnapshot> nextShapeStyles;
+        List<ItemStyleSnapshot> nextTextStyles;
         List<TextItem> convertedTexts;
+    }
+
+    private static final class ItemStyleSnapshot {
+        final int color;
+        final float size;
+
+        ItemStyleSnapshot(int color, float size) {
+            this.color = color;
+            this.size = size;
+        }
     }
 
     private static final class StrokeLineSample {
@@ -266,6 +297,14 @@ public class CanvasView extends View {
     private OnCanvasChangeListener changeListener;
     private OnZoomChangeListener zoomListener;
     private OnLassoSelectionListener lassoSelectionListener;
+    private int selectAllAccessibilityAction = -1;
+    private int copyAccessibilityAction = -1;
+    private int cutAccessibilityAction = -1;
+    private int deleteAccessibilityAction = -1;
+    private int duplicateAccessibilityAction = -1;
+    private int pasteAccessibilityAction = -1;
+    private int undoAccessibilityAction = -1;
+    private int redoAccessibilityAction = -1;
 
     public CanvasView(Context context) {
         super(context);
@@ -284,6 +323,10 @@ public class CanvasView extends View {
 
     private void init() {
         scroller = new OverScroller(getContext());
+        setFocusable(true);
+        setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_YES);
+        setContentDescription("Note page. Use the lasso tool to select ink, shapes, and text. Drag a selection to move it.");
+        syncAccessibilityActions();
         try {
             motionEventPredictor = MotionEventPredictor.newInstance(this);
         } catch (RuntimeException ignored) {
@@ -434,6 +477,7 @@ public class CanvasView extends View {
         cancelPendingAutoConversion();
         undoStack.clear();
         redoStack.clear();
+        syncAccessibilityActions();
         invalidate();
         notifyZoomChange();
     }
@@ -597,12 +641,22 @@ public class CanvasView extends View {
 
     public void beautifySelection() {
         if (!hasSelection() || currentPage == null) return;
+        if (selectedStrokes.isEmpty()) return;
+        ActionRecord record = new ActionRecord();
+        record.type = ActionRecord.Type.BEAUTIFY_SELECTION;
+        record.styleTargetsStrokes = new ArrayList<>(selectedStrokes);
+        record.beforeBeautifyStrokes = cloneStrokes(selectedStrokes);
         for (Stroke s : selectedStrokes) {
             applyAutoBeautification(s);
         }
+        record.afterBeautifyStrokes = cloneStrokes(selectedStrokes);
+        undoStack.push(record);
+        redoStack.clear();
         strokeSpatialIndexDirty = true;
+        updateSelectionBounds();
         invalidate();
         notifyChange();
+        notifyLassoSelection();
     }
 
     public void applyAutoBeautification(Stroke stroke) {
@@ -1141,7 +1195,20 @@ public class CanvasView extends View {
                 currentPage.texts.remove(rec.text);
                 break;
             case MOVE_SELECTION:
-                translateItems(rec.movedStrokes, rec.movedShapes, -rec.moveDx, -rec.moveDy);
+                translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts,
+                        -rec.moveDx, -rec.moveDy);
+                break;
+            case ADD_SELECTION:
+                removeRecordedSelection(rec);
+                break;
+            case DELETE_SELECTION:
+                addRecordedSelection(rec);
+                break;
+            case STYLE_CHANGE:
+                restoreSelectionStyle(rec, false);
+                break;
+            case BEAUTIFY_SELECTION:
+                restoreBeautifiedSelection(rec, false);
                 break;
             case CLEAR_ALL:
                 currentPage.strokes = new ArrayList<>(rec.prevStrokes);
@@ -1162,6 +1229,7 @@ public class CanvasView extends View {
             default:
                 break;
         }
+        strokeSpatialIndexDirty = true;
         clearSelection();
         redoStack.push(rec);
         invalidate();
@@ -1188,7 +1256,20 @@ public class CanvasView extends View {
                 currentPage.texts.add(rec.text);
                 break;
             case MOVE_SELECTION:
-                translateItems(rec.movedStrokes, rec.movedShapes, rec.moveDx, rec.moveDy);
+                translateItems(rec.movedStrokes, rec.movedShapes, rec.movedTexts,
+                        rec.moveDx, rec.moveDy);
+                break;
+            case ADD_SELECTION:
+                addRecordedSelection(rec);
+                break;
+            case DELETE_SELECTION:
+                removeRecordedSelection(rec);
+                break;
+            case STYLE_CHANGE:
+                restoreSelectionStyle(rec, true);
+                break;
+            case BEAUTIFY_SELECTION:
+                restoreBeautifiedSelection(rec, true);
                 break;
             case CLEAR_ALL:
                 currentPage.strokes.clear();
@@ -1209,6 +1290,7 @@ public class CanvasView extends View {
             default:
                 break;
         }
+        strokeSpatialIndexDirty = true;
         clearSelection();
         undoStack.push(rec);
         invalidate();
@@ -1234,6 +1316,20 @@ public class CanvasView extends View {
         clearSelection();
         invalidate();
         notifyChange();
+    }
+
+    private void addRecordedSelection(ActionRecord record) {
+        if (currentPage == null || record == null) return;
+        if (record.prevStrokes != null) currentPage.strokes.addAll(record.prevStrokes);
+        if (record.prevShapes != null) currentPage.shapes.addAll(record.prevShapes);
+        if (record.prevTexts != null) currentPage.texts.addAll(record.prevTexts);
+    }
+
+    private void removeRecordedSelection(ActionRecord record) {
+        if (currentPage == null || record == null) return;
+        if (record.prevStrokes != null) currentPage.strokes.removeAll(record.prevStrokes);
+        if (record.prevShapes != null) currentPage.shapes.removeAll(record.prevShapes);
+        if (record.prevTexts != null) currentPage.texts.removeAll(record.prevTexts);
     }
 
     public void addTextItem(String text, float x, float y, String fontKey) {
@@ -1584,9 +1680,77 @@ public class CanvasView extends View {
     }
 
     private void notifyLassoSelection() {
+        syncAccessibilityActions();
         if (lassoSelectionListener != null) {
             lassoSelectionListener.onSelectionChanged(hasSelection(), getSelectionScreenBounds());
         }
+    }
+
+    private boolean hasPageContent() {
+        return currentPage != null && ((!currentPage.strokes.isEmpty())
+                || (!currentPage.shapes.isEmpty()) || (!currentPage.texts.isEmpty()));
+    }
+
+    private int updateAccessibilityAction(int actionId, boolean available, CharSequence label,
+                                          AccessibilityViewCommand command, boolean[] changed) {
+        if (available && actionId < 0) {
+            changed[0] = true;
+            return ViewCompat.addAccessibilityAction(this, label, command);
+        }
+        if (!available && actionId >= 0) {
+            ViewCompat.removeAccessibilityAction(this, actionId);
+            changed[0] = true;
+            return -1;
+        }
+        return actionId;
+    }
+
+    private void syncAccessibilityActions() {
+        boolean selection = hasSelection();
+        boolean[] changed = {false};
+        selectAllAccessibilityAction = updateAccessibilityAction(selectAllAccessibilityAction,
+                hasPageContent(), "Select all content",
+                (view, arguments) -> selectAllContent(), changed);
+        copyAccessibilityAction = updateAccessibilityAction(copyAccessibilityAction, selection,
+                "Copy selection", (view, arguments) -> {
+                    copySelection();
+                    announceForAccessibility("Selection copied. Use Paste to place it.");
+                    return true;
+                }, changed);
+        cutAccessibilityAction = updateAccessibilityAction(cutAccessibilityAction, selection,
+                "Cut selection", (view, arguments) -> {
+                    cutSelection();
+                    return true;
+                }, changed);
+        deleteAccessibilityAction = updateAccessibilityAction(deleteAccessibilityAction, selection,
+                "Delete selection", (view, arguments) -> {
+                    deleteSelection();
+                    return true;
+                }, changed);
+        duplicateAccessibilityAction = updateAccessibilityAction(duplicateAccessibilityAction, selection,
+                "Duplicate selection", (view, arguments) -> {
+                    duplicateSelection();
+                    return true;
+                }, changed);
+        pasteAccessibilityAction = updateAccessibilityAction(pasteAccessibilityAction,
+                hasClipboardContents(), "Paste clipboard content",
+                (view, arguments) -> {
+                    pasteSelection();
+                    return true;
+                }, changed);
+        undoAccessibilityAction = updateAccessibilityAction(undoAccessibilityAction, canUndo(),
+                "Undo last canvas change", (view, arguments) -> {
+                    undo();
+                    announceForAccessibility("Last canvas change undone.");
+                    return true;
+                }, changed);
+        redoAccessibilityAction = updateAccessibilityAction(redoAccessibilityAction, canRedo(),
+                "Redo canvas change", (view, arguments) -> {
+                    redo();
+                    announceForAccessibility("Canvas change redone.");
+                    return true;
+                }, changed);
+        if (changed[0]) sendAccessibilityEvent(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
     }
 
     private void notifyZoomChange() {
@@ -1869,13 +2033,49 @@ public class CanvasView extends View {
     }
 
     public void clearSelection() {
+        isMovingSelection = false;
+        selectionMoveDx = 0f;
+        selectionMoveDy = 0f;
         hasLassoSelection = false;
         selectedStrokes.clear();
         selectedShapes.clear();
+        selectedTexts.clear();
         selectionBounds.setEmpty();
         lassoPath.reset();
         lassoPoints.clear();
+        lastAnnouncedSelection = "";
+        setContentDescription("Note page. Use the lasso tool to select ink, shapes, and text. Drag a selection to move it.");
+        invalidate();
         notifyLassoSelection();
+    }
+
+    /** Select every content object on the current page using lasso semantics. */
+    public boolean selectAllContent() {
+        if (currentPage == null) return false;
+        selectedStrokes.clear();
+        selectedShapes.clear();
+        selectedTexts.clear();
+        if (currentPage.strokes != null) {
+            for (Stroke item : currentPage.strokes) {
+                if (item != null && !item.getBounds().isEmpty()) selectedStrokes.add(item);
+            }
+        }
+        if (currentPage.shapes != null) {
+            for (ShapeItem item : currentPage.shapes) if (item != null) selectedShapes.add(item);
+        }
+        if (currentPage.texts != null) {
+            for (TextItem item : currentPage.texts) if (item != null) selectedTexts.add(item);
+        }
+        lassoPath.reset();
+        lassoPoints.clear();
+        lastAnnouncedSelection = "";
+        updateSelectionBounds();
+        hasLassoSelection = !selectedStrokes.isEmpty() || !selectedShapes.isEmpty()
+                || !selectedTexts.isEmpty();
+        announceSelectionCount();
+        invalidate();
+        notifyLassoSelection();
+        return hasLassoSelection;
     }
 
     /** Select every handwritten stroke on the current page using lasso semantics. */
@@ -1884,135 +2084,116 @@ public class CanvasView extends View {
             return false;
         }
         selectedStrokes.clear();
-        selectedStrokes.addAll(currentPage.strokes);
+        for (Stroke item : currentPage.strokes) {
+            if (item != null && !item.getBounds().isEmpty()) selectedStrokes.add(item);
+        }
         selectedShapes.clear();
+        selectedTexts.clear();
         lassoPath.reset();
         lassoPoints.clear();
-        selectionBounds.setEmpty();
-        for (Stroke stroke : selectedStrokes) {
-            if (stroke == null) continue;
-            RectF bounds = stroke.getBounds();
-            if (bounds == null || bounds.isEmpty()) continue;
-            if (selectionBounds.isEmpty()) selectionBounds.set(bounds);
-            else selectionBounds.union(bounds);
-        }
+        lastAnnouncedSelection = "";
+        updateSelectionBounds();
         hasLassoSelection = !selectionBounds.isEmpty();
+        announceSelectionCount();
         invalidate();
         notifyLassoSelection();
         return hasLassoSelection;
     }
 
     public boolean hasSelection() {
-        return hasLassoSelection && (!selectedStrokes.isEmpty() || !selectedShapes.isEmpty());
+        return hasLassoSelection && (!selectedStrokes.isEmpty() || !selectedShapes.isEmpty()
+                || !selectedTexts.isEmpty());
+    }
+
+    public boolean hasSelectedText() {
+        return !selectedTexts.isEmpty();
+    }
+
+    public boolean hasSelectedHandwriting() {
+        return !selectedStrokes.isEmpty();
+    }
+
+    public boolean hasClipboardContents() {
+        return !clipboardStrokes.isEmpty() || !clipboardShapes.isEmpty() || !clipboardTexts.isEmpty();
     }
 
     public void deleteSelection() {
-        if (!hasSelection() || currentPage == null) return;
-        currentPage.strokes.removeAll(selectedStrokes);
-        currentPage.shapes.removeAll(selectedShapes);
-        clearSelection();
-        invalidate();
-        notifyChange();
+        deleteSelectionInternal(false);
     }
 
     public void cutSelection() {
+        if (!hasSelection() || currentPage == null) return;
         copySelection();
-        deleteSelection();
+        deleteSelectionInternal(true);
     }
 
     public void copySelection() {
         if (!hasSelection()) return;
         clipboardStrokes.clear();
         clipboardShapes.clear();
+        clipboardTexts.clear();
+        clipboardCenterX = selectionBounds.centerX();
+        clipboardCenterY = selectionBounds.centerY();
         for (Stroke s : selectedStrokes) {
-            Stroke clone = new Stroke(s.color, s.width, s.tool);
-            for (DrawingPoint pt : s.points) {
-                clone.addPoint(pt.x, pt.y, pt.pressure, pt.timeMillis);
-            }
-            clone.copyRecognitionPointsFrom(s, 0f, 0f);
-            clipboardStrokes.add(clone);
+            clipboardStrokes.add(cloneStroke(s, 0f, 0f));
         }
         for (ShapeItem sh : selectedShapes) {
-            ShapeItem clone = new ShapeItem(sh.type, sh.startX, sh.startY, sh.endX, sh.endY, sh.color, sh.strokeWidth);
-            clipboardShapes.add(clone);
+            clipboardShapes.add(cloneShape(sh, 0f, 0f));
         }
+        for (TextItem item : selectedTexts) clipboardTexts.add(cloneText(item, 0f, 0f));
+        syncAccessibilityActions();
     }
 
     public void pasteSelection() {
-        if (currentPage == null || (clipboardStrokes.isEmpty() && clipboardShapes.isEmpty())) return;
-        float offset = 50f;
+        if (currentPage == null || !hasClipboardContents()) return;
+        float targetX = ((getWidth() * 0.5f) - panOffsetX) / scaleFactor;
+        float targetY = ((getHeight() * 0.5f) - panOffsetY) / scaleFactor + viewportOffsetY;
+        float offsetX = targetX - clipboardCenterX;
+        float offsetY = targetY - clipboardCenterY;
         List<Stroke> pastedStrokes = new ArrayList<>();
         for (Stroke s : clipboardStrokes) {
-            Stroke clone = new Stroke(s.color, s.width, s.tool);
-            for (DrawingPoint pt : s.points) {
-                clone.addPoint(pt.x + offset, pt.y + offset, pt.pressure, pt.timeMillis);
-            }
-            clone.copyRecognitionPointsFrom(s, offset, offset);
+            Stroke clone = cloneStroke(s, offsetX, offsetY);
             pastedStrokes.add(clone);
-            currentPage.strokes.add(clone);
         }
         List<ShapeItem> pastedShapes = new ArrayList<>();
         for (ShapeItem sh : clipboardShapes) {
-            ShapeItem clone = new ShapeItem(sh.type, sh.startX + offset, sh.startY + offset,
-                    sh.endX + offset, sh.endY + offset, sh.color, sh.strokeWidth);
-            pastedShapes.add(clone);
-            currentPage.shapes.add(clone);
+            pastedShapes.add(cloneShape(sh, offsetX, offsetY));
         }
-        selectedStrokes.clear();
-        selectedStrokes.addAll(pastedStrokes);
-        selectedShapes.clear();
-        selectedShapes.addAll(pastedShapes);
-        selectionBounds.offset(offset, offset);
-        hasLassoSelection = true;
-        invalidate();
-        notifyChange();
-        notifyLassoSelection();
+        List<TextItem> pastedTexts = new ArrayList<>();
+        for (TextItem item : clipboardTexts) pastedTexts.add(cloneText(item, offsetX, offsetY));
+        addSelectionToPage(pastedStrokes, pastedShapes, pastedTexts);
+        recordAddedSelection(pastedStrokes, pastedShapes, pastedTexts);
     }
 
     public void duplicateSelection() {
         if (!hasSelection() || currentPage == null) return;
-        float offset = 40f;
+        float offset = 40f / Math.max(0.2f, scaleFactor);
         List<Stroke> newStrokes = new ArrayList<>();
-        for (Stroke s : selectedStrokes) {
-            Stroke clone = new Stroke(s.color, s.width, s.tool);
-            for (DrawingPoint pt : s.points) {
-                clone.addPoint(pt.x + offset, pt.y + offset, pt.pressure, pt.timeMillis);
-            }
-            clone.copyRecognitionPointsFrom(s, offset, offset);
-            newStrokes.add(clone);
-            currentPage.strokes.add(clone);
-        }
+        for (Stroke s : selectedStrokes) newStrokes.add(cloneStroke(s, offset, offset));
         List<ShapeItem> newShapes = new ArrayList<>();
-        for (ShapeItem sh : selectedShapes) {
-            ShapeItem clone = new ShapeItem(sh.type, sh.startX + offset, sh.startY + offset,
-                    sh.endX + offset, sh.endY + offset, sh.color, sh.strokeWidth);
-            newShapes.add(clone);
-            currentPage.shapes.add(clone);
-        }
-        selectedStrokes.clear();
-        selectedStrokes.addAll(newStrokes);
-        selectedShapes.clear();
-        selectedShapes.addAll(newShapes);
-        selectionBounds.offset(offset, offset);
-        invalidate();
-        notifyChange();
-        notifyLassoSelection();
+        for (ShapeItem sh : selectedShapes) newShapes.add(cloneShape(sh, offset, offset));
+        List<TextItem> newTexts = new ArrayList<>();
+        for (TextItem item : selectedTexts) newTexts.add(cloneText(item, offset, offset));
+        addSelectionToPage(newStrokes, newShapes, newTexts);
+        recordAddedSelection(newStrokes, newShapes, newTexts);
     }
 
     public void setSelectionColor(int color) {
         if (!hasSelection()) return;
+        ActionRecord record = beginSelectionStyleChange();
         for (Stroke s : selectedStrokes) {
             s.color = color;
         }
         for (ShapeItem sh : selectedShapes) {
             sh.color = color;
         }
-        invalidate();
-        notifyChange();
+        for (TextItem item : selectedTexts) item.color = color;
+        finishSelectionStyleChange(record);
     }
 
     public void setSelectionStrokeWidth(float width) {
         if (!hasSelection()) return;
+        ActionRecord record = beginSelectionStyleChange();
         for (Stroke s : selectedStrokes) {
             s.width = width;
             s.markDirty();
@@ -2021,22 +2202,205 @@ public class CanvasView extends View {
             sh.strokeWidth = width;
             sh.markDirty();
         }
+        for (TextItem item : selectedTexts) {
+            item.fontSize = Math.max(12f, width * 4f);
+            item.markDirty();
+        }
+        finishSelectionStyleChange(record);
+    }
+
+    private void deleteSelectionInternal(boolean cut) {
+        if (!hasSelection() || currentPage == null) return;
+        ActionRecord record = new ActionRecord();
+        record.type = ActionRecord.Type.DELETE_SELECTION;
+        record.prevStrokes = new ArrayList<>(selectedStrokes);
+        record.prevShapes = new ArrayList<>(selectedShapes);
+        record.prevTexts = new ArrayList<>(selectedTexts);
+        removeRecordedSelection(record);
+        undoStack.push(record);
+        redoStack.clear();
+        strokeSpatialIndexDirty = true;
+        clearSelection();
+        invalidate();
+        notifyChange();
+        announceForAccessibility(cut
+                ? "Selection cut to clipboard. Undo is available."
+                : "Selection deleted. Undo is available.");
+    }
+
+    private void addSelectionToPage(List<Stroke> strokes, List<ShapeItem> shapes,
+                                    List<TextItem> texts) {
+        if (currentPage == null) return;
+        currentPage.strokes.addAll(strokes);
+        currentPage.shapes.addAll(shapes);
+        currentPage.texts.addAll(texts);
+        selectedStrokes.clear();
+        selectedStrokes.addAll(strokes);
+        selectedShapes.clear();
+        selectedShapes.addAll(shapes);
+        selectedTexts.clear();
+        selectedTexts.addAll(texts);
+        updateSelectionBounds();
+        hasLassoSelection = hasAnySelectedItems();
+        lastAnnouncedSelection = "";
         strokeSpatialIndexDirty = true;
         invalidate();
         notifyChange();
+        notifyLassoSelection();
+        announceSelectionCount();
     }
 
-    private void translateItems(List<Stroke> strokes, List<ShapeItem> shapes, float dx, float dy) {
-        translateItems(strokes, shapes, dx, dy, true);
+    private void recordAddedSelection(List<Stroke> strokes, List<ShapeItem> shapes,
+                                      List<TextItem> texts) {
+        ActionRecord record = new ActionRecord();
+        record.type = ActionRecord.Type.ADD_SELECTION;
+        record.prevStrokes = new ArrayList<>(strokes);
+        record.prevShapes = new ArrayList<>(shapes);
+        record.prevTexts = new ArrayList<>(texts);
+        undoStack.push(record);
+        redoStack.clear();
+        syncAccessibilityActions();
+    }
+
+    private Stroke cloneStroke(Stroke source, float dx, float dy) {
+        Stroke clone = new Stroke(source.color, source.width, source.tool);
+        if (source.points != null) {
+            for (DrawingPoint point : source.points) {
+                clone.addPoint(point.x + dx, point.y + dy, point.pressure, point.timeMillis);
+            }
+        }
+        clone.copyRecognitionPointsFrom(source, dx, dy);
+        return clone;
+    }
+
+    private ShapeItem cloneShape(ShapeItem source, float dx, float dy) {
+        return new ShapeItem(source.type, source.startX + dx, source.startY + dy,
+                source.endX + dx, source.endY + dy, source.color, source.strokeWidth);
+    }
+
+    private TextItem cloneText(TextItem source, float dx, float dy) {
+        return new TextItem(source.text, source.x + dx, source.y + dy,
+                source.color, source.fontSize, source.fontKey);
+    }
+
+    private ActionRecord beginSelectionStyleChange() {
+        ActionRecord record = new ActionRecord();
+        record.type = ActionRecord.Type.STYLE_CHANGE;
+        record.styleTargetsStrokes = new ArrayList<>(selectedStrokes);
+        record.styleTargetsShapes = new ArrayList<>(selectedShapes);
+        record.styleTargetsTexts = new ArrayList<>(selectedTexts);
+        record.previousStrokeStyles = snapshotStrokeStyles(selectedStrokes);
+        record.previousShapeStyles = snapshotShapeStyles(selectedShapes);
+        record.previousTextStyles = snapshotTextStyles(selectedTexts);
+        return record;
+    }
+
+    private void finishSelectionStyleChange(ActionRecord record) {
+        record.nextStrokeStyles = snapshotStrokeStyles(selectedStrokes);
+        record.nextShapeStyles = snapshotShapeStyles(selectedShapes);
+        record.nextTextStyles = snapshotTextStyles(selectedTexts);
+        undoStack.push(record);
+        redoStack.clear();
+        strokeSpatialIndexDirty = true;
+        updateSelectionBounds();
+        invalidate();
+        notifyChange();
+        notifyLassoSelection();
+    }
+
+    private List<ItemStyleSnapshot> snapshotStrokeStyles(List<Stroke> items) {
+        List<ItemStyleSnapshot> snapshots = new ArrayList<>(items.size());
+        for (Stroke item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.width));
+        return snapshots;
+    }
+
+    private List<ItemStyleSnapshot> snapshotShapeStyles(List<ShapeItem> items) {
+        List<ItemStyleSnapshot> snapshots = new ArrayList<>(items.size());
+        for (ShapeItem item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.strokeWidth));
+        return snapshots;
+    }
+
+    private List<ItemStyleSnapshot> snapshotTextStyles(List<TextItem> items) {
+        List<ItemStyleSnapshot> snapshots = new ArrayList<>(items.size());
+        for (TextItem item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.fontSize));
+        return snapshots;
+    }
+
+    private List<Stroke> cloneStrokes(List<Stroke> items) {
+        List<Stroke> copies = new ArrayList<>(items.size());
+        for (Stroke item : items) copies.add(cloneStroke(item, 0f, 0f));
+        return copies;
+    }
+
+    private void restoreSelectionStyle(ActionRecord record, boolean restoreAfter) {
+        if (record == null) return;
+        List<ItemStyleSnapshot> strokeSnapshots = restoreAfter
+                ? record.nextStrokeStyles : record.previousStrokeStyles;
+        List<ItemStyleSnapshot> shapeSnapshots = restoreAfter
+                ? record.nextShapeStyles : record.previousShapeStyles;
+        List<ItemStyleSnapshot> textSnapshots = restoreAfter
+                ? record.nextTextStyles : record.previousTextStyles;
+        if (record.styleTargetsStrokes != null && strokeSnapshots != null) {
+            for (int i = 0; i < Math.min(record.styleTargetsStrokes.size(), strokeSnapshots.size()); i++) {
+                Stroke target = record.styleTargetsStrokes.get(i);
+                ItemStyleSnapshot snapshot = strokeSnapshots.get(i);
+                target.color = snapshot.color;
+                target.width = snapshot.size;
+                target.markDirty();
+            }
+        }
+        if (record.styleTargetsShapes != null && shapeSnapshots != null) {
+            for (int i = 0; i < Math.min(record.styleTargetsShapes.size(), shapeSnapshots.size()); i++) {
+                ShapeItem target = record.styleTargetsShapes.get(i);
+                ItemStyleSnapshot snapshot = shapeSnapshots.get(i);
+                target.color = snapshot.color;
+                target.strokeWidth = snapshot.size;
+                target.markDirty();
+            }
+        }
+        if (record.styleTargetsTexts != null && textSnapshots != null) {
+            for (int i = 0; i < Math.min(record.styleTargetsTexts.size(), textSnapshots.size()); i++) {
+                TextItem target = record.styleTargetsTexts.get(i);
+                ItemStyleSnapshot snapshot = textSnapshots.get(i);
+                target.color = snapshot.color;
+                target.fontSize = snapshot.size;
+                target.markDirty();
+            }
+        }
+        strokeSpatialIndexDirty = true;
+    }
+
+    private void restoreBeautifiedSelection(ActionRecord record, boolean restoreAfter) {
+        if (record == null || record.styleTargetsStrokes == null) return;
+        List<Stroke> snapshots = restoreAfter
+                ? record.afterBeautifyStrokes : record.beforeBeautifyStrokes;
+        if (snapshots == null) return;
+        for (int i = 0; i < Math.min(record.styleTargetsStrokes.size(), snapshots.size()); i++) {
+            Stroke target = record.styleTargetsStrokes.get(i);
+            Stroke snapshot = snapshots.get(i);
+            target.color = snapshot.color;
+            target.width = snapshot.width;
+            target.tool = snapshot.tool;
+            target.points = cloneStroke(snapshot, 0f, 0f).points;
+            target.copyRecognitionPointsFrom(snapshot, 0f, 0f);
+            target.markDirty();
+        }
+        strokeSpatialIndexDirty = true;
     }
 
     private void translateItems(List<Stroke> strokes, List<ShapeItem> shapes,
-                                float dx, float dy, boolean invalidateStrokeSpatialIndex) {
+                                List<TextItem> texts, float dx, float dy) {
         if (strokes != null) {
             for (Stroke s : strokes) {
                 for (DrawingPoint pt : s.points) {
                     pt.x += dx;
                     pt.y += dy;
+                }
+                if (s.recognitionPoints != null) {
+                    for (DrawingPoint point : s.recognitionPoints) {
+                        point.x += dx;
+                        point.y += dy;
+                    }
                 }
                 s.markDirty();
             }
@@ -2050,8 +2414,60 @@ public class CanvasView extends View {
                 sh.markDirty();
             }
         }
-        if (invalidateStrokeSpatialIndex && strokes != null && !strokes.isEmpty()) {
+        if (texts != null) {
+            for (TextItem item : texts) {
+                item.x += dx;
+                item.y += dy;
+                item.markDirty();
+            }
+        }
+    }
+
+    private void finishSelectionMove() {
+        if (Math.abs(selectionMoveDx) > 0.001f || Math.abs(selectionMoveDy) > 0.001f) {
+            ActionRecord record = new ActionRecord();
+            record.type = ActionRecord.Type.MOVE_SELECTION;
+            record.movedStrokes = new ArrayList<>(selectedStrokes);
+            record.movedShapes = new ArrayList<>(selectedShapes);
+            record.movedTexts = new ArrayList<>(selectedTexts);
+            record.moveDx = selectionMoveDx;
+            record.moveDy = selectionMoveDy;
+            undoStack.push(record);
+            redoStack.clear();
             strokeSpatialIndexDirty = true;
+            announceForAccessibility("Selected content moved.");
+        }
+        selectionMoveDx = 0f;
+        selectionMoveDy = 0f;
+    }
+
+    private boolean hasAnySelectedItems() {
+        return !selectedStrokes.isEmpty() || !selectedShapes.isEmpty() || !selectedTexts.isEmpty();
+    }
+
+    private void updateSelectionBounds() {
+        selectionBounds.setEmpty();
+        for (Stroke item : selectedStrokes) unionSelectionBounds(item == null ? null : item.getBounds());
+        for (ShapeItem item : selectedShapes) unionSelectionBounds(item == null ? null : item.getBounds());
+        for (TextItem item : selectedTexts) unionSelectionBounds(item == null ? null : item.getBounds());
+        if (!selectionBounds.isEmpty()) selectionBounds.inset(-16f, -16f);
+    }
+
+    private void unionSelectionBounds(RectF itemBounds) {
+        if (itemBounds == null || itemBounds.isEmpty()) return;
+        if (selectionBounds.isEmpty()) selectionBounds.set(itemBounds);
+        else selectionBounds.union(itemBounds);
+    }
+
+    private void announceSelectionCount() {
+        if (!hasSelection()) return;
+        String summary = "Selected " + selectedStrokes.size() + " ink strokes, "
+                + selectedShapes.size() + " shapes, and " + selectedTexts.size()
+                + " text items. Drag to move or use the selection actions.";
+        if (!summary.equals(lastAnnouncedSelection)) {
+            setContentDescription("Note page. " + summary);
+            announceForAccessibility(summary);
+            lastAnnouncedSelection = summary;
         }
     }
 
@@ -2198,6 +2614,8 @@ public class CanvasView extends View {
                         isMovingSelection = true;
                         lassoMoveStartX = canvasX;
                         lassoMoveStartY = canvasY;
+                        selectionMoveDx = 0f;
+                        selectionMoveDy = 0f;
                     } else {
                         clearSelection();
                         isDrawingLasso = true;
@@ -2213,27 +2631,41 @@ public class CanvasView extends View {
                     if (isMovingSelection) {
                         float dx = canvasX - lassoMoveStartX;
                         float dy = canvasY - lassoMoveStartY;
-                        translateItems(selectedStrokes, selectedShapes, dx, dy, false);
+                        translateItems(selectedStrokes, selectedShapes, selectedTexts, dx, dy);
+                        selectionMoveDx += dx;
+                        selectionMoveDy += dy;
                         selectionBounds.offset(dx, dy);
                         lassoMoveStartX = canvasX;
                         lassoMoveStartY = canvasY;
-                        invalidate();
-                        notifyLassoSelection();
+                        postInvalidateOnAnimation();
                     } else if (isDrawingLasso) {
-                        lassoPath.lineTo(canvasX, canvasY);
-                        lassoPoints.add(new DrawingPoint(canvasX, canvasY, 1f));
-                        invalidate();
+                        for (int i = 0; i < event.getHistorySize(); i++) {
+                            appendLassoPoint(
+                                    (event.getHistoricalX(i) - panOffsetX) / scaleFactor,
+                                    (event.getHistoricalY(i) - panOffsetY) / scaleFactor + viewportOffsetY);
+                        }
+                        appendLassoPoint(canvasX, canvasY);
+                        postInvalidateOnAnimation();
                     }
                     return true;
 
                 case MotionEvent.ACTION_UP:
                     if (isMovingSelection) {
+                        float finalDx = canvasX - lassoMoveStartX;
+                        float finalDy = canvasY - lassoMoveStartY;
+                        if (Math.abs(finalDx) > 0.001f || Math.abs(finalDy) > 0.001f) {
+                            translateItems(selectedStrokes, selectedShapes, selectedTexts, finalDx, finalDy);
+                            selectionMoveDx += finalDx;
+                            selectionMoveDy += finalDy;
+                            selectionBounds.offset(finalDx, finalDy);
+                        }
                         isMovingSelection = false;
-                        if (!selectedStrokes.isEmpty()) strokeSpatialIndexDirty = true;
+                        finishSelectionMove();
                         notifyChange();
                         notifyLassoSelection();
                     } else if (isDrawingLasso) {
                         isDrawingLasso = false;
+                        appendLassoPoint(canvasX, canvasY);
                         lassoPath.close();
                         processLassoSelection();
                         invalidate();
@@ -2581,7 +3013,7 @@ public class CanvasView extends View {
         laserTrail.clear();
         hasPredictedInkPoint = false;
         if (movedSelection) {
-            if (!selectedStrokes.isEmpty()) strokeSpatialIndexDirty = true;
+            finishSelectionMove();
             notifyChange();
             notifyLassoSelection();
         }
@@ -2659,30 +3091,231 @@ public class CanvasView extends View {
         RectF lassoBounds = new RectF(minX, minY, maxX, maxY);
         selectedStrokes.clear();
         selectedShapes.clear();
+        selectedTexts.clear();
 
-        for (Stroke s : currentPage.strokes) {
-            if (!RectF.intersects(s.getBounds(), lassoBounds)) continue;
-            for (DrawingPoint pt : s.points) {
-                if (lassoBounds.contains(pt.x, pt.y)) {
-                    selectedStrokes.add(s);
-                    break;
-                }
-            }
+        prepareVisibleStrokeIndices(lassoBounds);
+        for (int index = visibleStrokeIndices.nextSetBit(0); index >= 0;
+             index = visibleStrokeIndices.nextSetBit(index + 1)) {
+            if (index >= currentPage.strokes.size()) break;
+            Stroke s = currentPage.strokes.get(index);
+            if (s != null && RectF.intersects(s.getBounds(), lassoBounds)
+                    && strokeIntersectsLasso(s, lassoBounds)) selectedStrokes.add(s);
         }
 
         for (ShapeItem sh : currentPage.shapes) {
-            if (lassoBounds.contains(sh.startX, sh.startY) || lassoBounds.contains(sh.endX, sh.endY)) {
-                selectedShapes.add(sh);
-            }
+            if (sh != null && RectF.intersects(sh.getBounds(), lassoBounds)
+                    && shapeIntersectsLasso(sh)) selectedShapes.add(sh);
         }
 
-        if (!selectedStrokes.isEmpty() || !selectedShapes.isEmpty()) {
-            hasLassoSelection = true;
-            selectionBounds.set(lassoBounds);
-            selectionBounds.inset(-16f, -16f);
+        for (TextItem item : currentPage.texts) {
+            if (item != null && RectF.intersects(item.getBounds(), lassoBounds)
+                    && boundsIntersectLasso(item.getBounds(), lassoBounds)) selectedTexts.add(item);
+        }
+
+        hasLassoSelection = hasAnySelectedItems();
+        if (hasLassoSelection) {
+            updateSelectionBounds();
+            announceSelectionCount();
         } else {
             clearSelection();
+            announceForAccessibility("No content selected.");
         }
+    }
+
+    private void appendLassoPoint(float x, float y) {
+        if (!lassoPoints.isEmpty()) {
+            DrawingPoint last = lassoPoints.get(lassoPoints.size() - 1);
+            float dx = x - last.x;
+            float dy = y - last.y;
+            if (dx * dx + dy * dy < 1.44f) return;
+        }
+        lassoPath.lineTo(x, y);
+        lassoPoints.add(new DrawingPoint(x, y, 1f));
+    }
+
+    private boolean strokeIntersectsLasso(Stroke stroke, RectF lassoBounds) {
+        List<DrawingPoint> points = stroke.points;
+        if (points == null || points.isEmpty()) return false;
+        DrawingPoint previous = points.get(0);
+        if (lassoBounds.contains(previous.x, previous.y)
+                && isPointInsideLasso(previous.x, previous.y)) return true;
+        for (int i = 1; i < points.size(); i++) {
+            DrawingPoint current = points.get(i);
+            if (lassoBounds.contains(current.x, current.y)
+                    && isPointInsideLasso(current.x, current.y)) return true;
+            if (segmentIntersectsLasso(previous.x, previous.y, current.x, current.y)) return true;
+            previous = current;
+        }
+        return false;
+    }
+
+    private boolean shapeIntersectsLasso(ShapeItem shape) {
+        float left = Math.min(shape.startX, shape.endX);
+        float right = Math.max(shape.startX, shape.endX);
+        float top = Math.min(shape.startY, shape.endY);
+        float bottom = Math.max(shape.startY, shape.endY);
+        switch (shape.type) {
+            case LINE:
+                return segmentIntersectsLasso(shape.startX, shape.startY, shape.endX, shape.endY);
+            case ARROW:
+                return segmentIntersectsLasso(shape.startX, shape.startY, shape.endX, shape.endY)
+                        || arrowHeadIntersectsLasso(shape.startX, shape.startY, shape.endX, shape.endY);
+            case RECTANGLE:
+                return polylineIntersectsLasso(Arrays.asList(
+                        new DrawingPoint(left, top, 1f), new DrawingPoint(right, top, 1f),
+                        new DrawingPoint(right, bottom, 1f), new DrawingPoint(left, bottom, 1f)), true);
+            case CIRCLE:
+                List<DrawingPoint> ovalPoints = new ArrayList<>(48);
+                float centerX = (left + right) * 0.5f;
+                float centerY = (top + bottom) * 0.5f;
+                float radiusX = (right - left) * 0.5f;
+                float radiusY = (bottom - top) * 0.5f;
+                for (int i = 0; i < 48; i++) {
+                    double angle = i * Math.PI * 2.0 / 48.0;
+                    ovalPoints.add(new DrawingPoint(centerX + radiusX * (float) Math.cos(angle),
+                            centerY + radiusY * (float) Math.sin(angle), 1f));
+                }
+                return polylineIntersectsLasso(ovalPoints, true);
+            case TRIANGLE:
+                return polylineIntersectsLasso(Arrays.asList(
+                        new DrawingPoint((shape.startX + shape.endX) * 0.5f, top, 1f),
+                        new DrawingPoint(right, bottom, 1f), new DrawingPoint(left, bottom, 1f)), true);
+            case STAR:
+                List<DrawingPoint> starPoints = new ArrayList<>(10);
+                float starCenterX = (shape.startX + shape.endX) * 0.5f;
+                float starCenterY = (shape.startY + shape.endY) * 0.5f;
+                float outerRadius = Math.min(right - left, bottom - top) * 0.5f;
+                for (int i = 0; i < 10; i++) {
+                    double angle = i * Math.PI / 5.0 - Math.PI / 2.0;
+                    float radius = i % 2 == 0 ? outerRadius : outerRadius * 0.4f;
+                    starPoints.add(new DrawingPoint(starCenterX + radius * (float) Math.cos(angle),
+                            starCenterY + radius * (float) Math.sin(angle), 1f));
+                }
+                return polylineIntersectsLasso(starPoints, true);
+            case COORDINATE_AXIS:
+                float midX = (left + right) * 0.5f;
+                float midY = (top + bottom) * 0.5f;
+                return segmentIntersectsLasso(left, midY, right, midY)
+                        || arrowHeadIntersectsLasso(left, midY, right, midY)
+                        || segmentIntersectsLasso(midX, bottom, midX, top)
+                        || arrowHeadIntersectsLasso(midX, bottom, midX, top);
+            case TABLE:
+                if (polylineIntersectsLasso(Arrays.asList(
+                        new DrawingPoint(left, top, 1f), new DrawingPoint(right, top, 1f),
+                        new DrawingPoint(right, bottom, 1f), new DrawingPoint(left, bottom, 1f)), true)) {
+                    return true;
+                }
+                float rowHeight = (bottom - top) / 3f;
+                float colWidth = (right - left) / 3f;
+                for (int i = 1; i < 3; i++) {
+                    if (segmentIntersectsLasso(left, top + i * rowHeight, right, top + i * rowHeight)
+                            || segmentIntersectsLasso(left + i * colWidth, top,
+                            left + i * colWidth, bottom)) return true;
+                }
+                return false;
+            default:
+                return false;
+        }
+    }
+
+    private boolean polylineIntersectsLasso(List<DrawingPoint> points, boolean close) {
+        if (points.isEmpty()) return false;
+        for (DrawingPoint point : points) {
+            if (isPointInsideLasso(point.x, point.y)) return true;
+        }
+        for (int i = 1; i < points.size(); i++) {
+            DrawingPoint from = points.get(i - 1), to = points.get(i);
+            if (segmentIntersectsLasso(from.x, from.y, to.x, to.y)) return true;
+        }
+        if (close && points.size() > 2) {
+            DrawingPoint from = points.get(points.size() - 1), to = points.get(0);
+            return segmentIntersectsLasso(from.x, from.y, to.x, to.y);
+        }
+        return false;
+    }
+
+    private boolean arrowHeadIntersectsLasso(float x1, float y1, float x2, float y2) {
+        double angle = Math.atan2(y2 - y1, x2 - x1);
+        float arrowSize = 36f;
+        float ax = (float) (x2 - arrowSize * Math.cos(angle - Math.PI / 6));
+        float ay = (float) (y2 - arrowSize * Math.sin(angle - Math.PI / 6));
+        float bx = (float) (x2 - arrowSize * Math.cos(angle + Math.PI / 6));
+        float by = (float) (y2 - arrowSize * Math.sin(angle + Math.PI / 6));
+        return segmentIntersectsLasso(x2, y2, ax, ay) || segmentIntersectsLasso(x2, y2, bx, by);
+    }
+
+    private boolean boundsIntersectLasso(RectF bounds, RectF lassoBounds) {
+        if (bounds == null || bounds.isEmpty() || !RectF.intersects(bounds, lassoBounds)) return false;
+        if (isPointInsideLasso(bounds.left, bounds.top)
+                || isPointInsideLasso(bounds.right, bounds.top)
+                || isPointInsideLasso(bounds.right, bounds.bottom)
+                || isPointInsideLasso(bounds.left, bounds.bottom)) return true;
+        for (DrawingPoint point : lassoPoints) {
+            if (bounds.contains(point.x, point.y)) return true;
+        }
+        return polygonEdgeIntersectsRect(bounds);
+    }
+
+    private boolean polygonEdgeIntersectsRect(RectF bounds) {
+        for (int i = 0; i < lassoPoints.size(); i++) {
+            DrawingPoint start = lassoPoints.get(i);
+            DrawingPoint end = lassoPoints.get((i + 1) % lassoPoints.size());
+            if (segmentIntersectsRect(start.x, start.y, end.x, end.y, bounds)) return true;
+        }
+        return false;
+    }
+
+    private boolean segmentIntersectsRect(float x1, float y1, float x2, float y2, RectF rect) {
+        if (rect.contains(x1, y1) || rect.contains(x2, y2)) return true;
+        return segmentsIntersect(x1, y1, x2, y2, rect.left, rect.top, rect.right, rect.top)
+                || segmentsIntersect(x1, y1, x2, y2, rect.right, rect.top, rect.right, rect.bottom)
+                || segmentsIntersect(x1, y1, x2, y2, rect.right, rect.bottom, rect.left, rect.bottom)
+                || segmentsIntersect(x1, y1, x2, y2, rect.left, rect.bottom, rect.left, rect.top);
+    }
+
+    private boolean segmentIntersectsLasso(float x1, float y1, float x2, float y2) {
+        if (isPointInsideLasso(x1, y1) || isPointInsideLasso(x2, y2)) return true;
+        for (int i = 0; i < lassoPoints.size(); i++) {
+            DrawingPoint start = lassoPoints.get(i);
+            DrawingPoint end = lassoPoints.get((i + 1) % lassoPoints.size());
+            if (segmentsIntersect(x1, y1, x2, y2, start.x, start.y, end.x, end.y)) return true;
+        }
+        return false;
+    }
+
+    private boolean isPointInsideLasso(float x, float y) {
+        boolean inside = false;
+        for (int i = 0, j = lassoPoints.size() - 1; i < lassoPoints.size(); j = i++) {
+            DrawingPoint a = lassoPoints.get(i);
+            DrawingPoint b = lassoPoints.get(j);
+            boolean crosses = (a.y > y) != (b.y > y)
+                    && x < (b.x - a.x) * (y - a.y) / (b.y - a.y) + a.x;
+            if (crosses) inside = !inside;
+        }
+        return inside;
+    }
+
+    private boolean segmentsIntersect(float ax, float ay, float bx, float by,
+                                      float cx, float cy, float dx, float dy) {
+        float abC = orientation(ax, ay, bx, by, cx, cy);
+        float abD = orientation(ax, ay, bx, by, dx, dy);
+        float cdA = orientation(cx, cy, dx, dy, ax, ay);
+        float cdB = orientation(cx, cy, dx, dy, bx, by);
+        if (((abC > 0f && abD < 0f) || (abC < 0f && abD > 0f))
+                && ((cdA > 0f && cdB < 0f) || (cdA < 0f && cdB > 0f))) return true;
+        return Math.abs(abC) < 0.001f && pointOnSegment(cx, cy, ax, ay, bx, by)
+                || Math.abs(abD) < 0.001f && pointOnSegment(dx, dy, ax, ay, bx, by)
+                || Math.abs(cdA) < 0.001f && pointOnSegment(ax, ay, cx, cy, dx, dy)
+                || Math.abs(cdB) < 0.001f && pointOnSegment(bx, by, cx, cy, dx, dy);
+    }
+
+    private float orientation(float ax, float ay, float bx, float by, float cx, float cy) {
+        return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    }
+
+    private boolean pointOnSegment(float px, float py, float ax, float ay, float bx, float by) {
+        return px >= Math.min(ax, bx) - 0.001f && px <= Math.max(ax, bx) + 0.001f
+                && py >= Math.min(ay, by) - 0.001f && py <= Math.max(ay, by) + 0.001f;
     }
 
     private void checkStrokeErasure(float touchX, float touchY) {
@@ -2724,6 +3357,7 @@ public class CanvasView extends View {
     }
 
     private void notifyChange() {
+        syncAccessibilityActions();
         if (changeListener != null) {
             changeListener.onCanvasChanged();
         }

@@ -19,6 +19,7 @@ import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.SeekBar;
@@ -136,8 +137,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private Button btnAddToPenBox;
 
     // Floating Contextual Lasso Action Bar
-    private LinearLayout lassoFloatingActionBar;
-    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoBeautify, btnLassoConvertText;
+    private HorizontalScrollView lassoFloatingActionBar;
+    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoBeautify, btnLassoConvertText;
 
     // Fullscreen Zen mode
     private ImageView btnExitFullscreen;
@@ -293,6 +294,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnLassoDelete = findViewById(R.id.btnLassoDelete);
         btnLassoCut = findViewById(R.id.btnLassoCut);
         btnLassoCopy = findViewById(R.id.btnLassoCopy);
+        btnLassoPaste = findViewById(R.id.btnLassoPaste);
         btnLassoStyle = findViewById(R.id.btnLassoStyle);
         btnLassoDuplicate = findViewById(R.id.btnLassoDuplicate);
         btnLassoColor = findViewById(R.id.btnLassoColor);
@@ -307,6 +309,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
         canvasView.setOnLassoSelectionListener((hasSelection, screenBounds) -> {
             if (hasSelection && screenBounds != null) {
+                lassoFloatingActionBar.animate().cancel();
                 if (lassoFloatingActionBar.getVisibility() != View.VISIBLE) {
                     lassoFloatingActionBar.setVisibility(View.VISIBLE);
                     lassoFloatingActionBar.setAlpha(0f);
@@ -315,16 +318,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     lassoFloatingActionBar.animate().alpha(1f).scaleX(1.0f).scaleY(1.0f).setDuration(200)
                             .setInterpolator(new android.view.animation.OvershootInterpolator(1.2f)).start();
                 }
+                updateLassoActionAvailability();
                 lassoFloatingActionBar.post(() -> {
-                    int barWidth = lassoFloatingActionBar.getWidth();
-                    float posX = screenBounds.centerX() - barWidth / 2f;
-                    posX = Math.max(20f, Math.min(canvasView.getWidth() - barWidth - 20f, posX));
+                    lassoFloatingActionBar.setX(0f);
                     float posY = Math.max(120f, screenBounds.top - 60f);
-                    lassoFloatingActionBar.setX(posX);
                     lassoFloatingActionBar.setY(posY);
                 });
             } else {
                 if (lassoFloatingActionBar.getVisibility() == View.VISIBLE) {
+                    lassoFloatingActionBar.animate().cancel();
                     lassoFloatingActionBar.animate().alpha(0f).scaleX(0.85f).scaleY(0.85f).setDuration(160)
                             .withEndAction(() -> lassoFloatingActionBar.setVisibility(View.GONE)).start();
                 }
@@ -613,12 +615,22 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         // Contextual Lasso Action Bar
         btnLassoDelete.setOnClickListener(v -> canvasView.deleteSelection());
         btnLassoCut.setOnClickListener(v -> {
+            if (!canvasView.hasSelection()) return;
             canvasView.cutSelection();
-            Toast.makeText(this, "Cut to clipboard", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Cut to clipboard. Use Paste to place it.", Toast.LENGTH_SHORT).show();
         });
         btnLassoCopy.setOnClickListener(v -> {
+            if (!canvasView.hasSelection()) return;
             canvasView.copySelection();
             Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
+            updateLassoActionAvailability();
+        });
+        btnLassoPaste.setOnClickListener(v -> {
+            if (!canvasView.hasClipboardContents()) {
+                Toast.makeText(this, "Copy or cut content before pasting", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            canvasView.pasteSelection();
         });
         btnLassoStyle.setOnClickListener(v -> showLassoStyleDialog());
         btnLassoDuplicate.setOnClickListener(v -> canvasView.duplicateSelection());
@@ -931,16 +943,36 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showLassoStyleDialog() {
-        final String[] widths = {"1 mm (Fine)", "2 mm (Normal)", "3 mm (Medium)", "5 mm (Thick)", "8 mm (Bold)"};
+        final String[] widths = canvasView.hasSelectedText()
+                ? new String[]{"Small (12)", "Normal (24)", "Medium (40)", "Large (64)", "Extra large (96)"}
+                : new String[]{"1 mm (Fine)", "2 mm (Normal)", "3 mm (Medium)", "5 mm (Thick)", "8 mm (Bold)"};
         final float[] vals = {3f, 6f, 10f, 16f, 24f};
 
         new MaterialAlertDialogBuilder(this)
-                .setTitle("Change Stroke Width")
+                .setTitle(canvasView.hasSelectedText() ? "Change Ink Width / Text Size" : "Change Stroke Width")
                 .setItems(widths, (dialog, which) -> {
                     canvasView.setSelectionStrokeWidth(vals[which]);
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
+    }
+
+    private void updateLassoActionAvailability() {
+        if (canvasView == null) return;
+        boolean hasInk = canvasView.hasSelectedHandwriting();
+        boolean hasClipboard = canvasView.hasClipboardContents();
+        if (btnLassoBeautify != null) {
+            btnLassoBeautify.setEnabled(hasInk);
+            btnLassoBeautify.setAlpha(hasInk ? 1f : 0.45f);
+        }
+        if (btnLassoConvertText != null) {
+            btnLassoConvertText.setEnabled(hasInk);
+            btnLassoConvertText.setAlpha(hasInk ? 1f : 0.45f);
+        }
+        if (btnLassoPaste != null) {
+            btnLassoPaste.setEnabled(hasClipboard);
+            btnLassoPaste.setAlpha(hasClipboard ? 1f : 0.45f);
+        }
     }
 
     private void showShapeSelectorDialog() {
@@ -1135,8 +1167,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         popup.getMenu().add(0, 4, 3, "Palm Rejection (Stylus Only)");
         popup.getMenu().add(0, 5, 4, "✨ Auto-Beautification Settings");
         popup.getMenu().add(0, 6, 5, "Clear Canvas");
-        popup.getMenu().add(0, 7, 6, "Select All Handwriting");
+        popup.getMenu().add(0, 7, 6, "Select All Content");
         popup.getMenu().add(0, 8, 7, "Convert Entire Page to Beautiful Font");
+        popup.getMenu().add(0, 9, 8, "Paste from Clipboard");
+        popup.getMenu().findItem(9).setEnabled(canvasView.hasClipboardContents());
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -1167,13 +1201,24 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             .show();
                     return true;
                 case 7:
-                    if (!canvasView.selectAllHandwriting()) {
-                        Toast.makeText(this, "There is no handwriting on this page to select", Toast.LENGTH_SHORT).show();
+                    if (!canvasView.selectAllContent()) {
+                        Toast.makeText(this, "There is no content on this page to select", Toast.LENGTH_SHORT).show();
+                    } else if (canvasView.getTool() != DrawingTool.LASSO) {
+                        canvasView.setTool(DrawingTool.LASSO);
+                        updateToolUi(DrawingTool.LASSO);
+                        if (appSettings != null) appSettings.setLastTool(DrawingTool.LASSO);
                     }
                     return true;
                 case 8:
                     if (!canvasView.convertPageToBeautifulText()) {
                         Toast.makeText(this, "There is no handwriting on this page to convert", Toast.LENGTH_SHORT).show();
+                    }
+                    return true;
+                case 9:
+                    if (!canvasView.hasClipboardContents()) {
+                        Toast.makeText(this, "Copy or cut content before pasting", Toast.LENGTH_SHORT).show();
+                    } else {
+                        canvasView.pasteSelection();
                     }
                     return true;
             }
