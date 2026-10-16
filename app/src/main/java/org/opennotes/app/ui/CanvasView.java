@@ -343,15 +343,10 @@ public class CanvasView extends View {
             public boolean onScale(ScaleGestureDetector detector) {
                 if (isViewportLocked) return true;
                 float factor = detector.getScaleFactor();
-                float prevScale = scaleFactor;
-                scaleFactor *= factor;
+                float targetScale = scaleFactor * factor;
                 // Clamp between 20% and 1600% (matching StarNote tablet app in vdo.mp4)
-                scaleFactor = Math.max(0.20f, Math.min(16.0f, scaleFactor));
-
-                float focusX = detector.getFocusX();
-                float focusY = detector.getFocusY();
-                panOffsetX += (focusX - panOffsetX) * (1f - scaleFactor / prevScale);
-                panOffsetY += (focusY - panOffsetY) * (1f - scaleFactor / prevScale);
+                zoomAround(Math.max(0.20f, Math.min(16.0f, targetScale)),
+                        detector.getFocusX(), detector.getFocusY());
 
                 invalidate();
                 notifyZoomChange();
@@ -558,7 +553,8 @@ public class CanvasView extends View {
     }
 
     public void setZoom(float zoomPercent) {
-        this.scaleFactor = Math.max(0.20f, Math.min(16.0f, zoomPercent / 100f));
+        float targetScale = Math.max(0.20f, Math.min(16.0f, zoomPercent / 100f));
+        zoomAround(targetScale, getWidth() * 0.5f, getHeight() * 0.5f);
         invalidate();
         notifyZoomChange();
         notifyLassoSelection();
@@ -566,21 +562,34 @@ public class CanvasView extends View {
 
     public void resetZoom() {
         float startScale = scaleFactor;
-        float startPanX = panOffsetX;
-        float startPanY = panOffsetY;
+        float focusX = getWidth() * 0.5f;
+        float focusY = getHeight() * 0.5f;
+        float anchoredCanvasX = (focusX - panOffsetX) / Math.max(0.01f, startScale);
+        float anchoredCanvasY = (focusY - panOffsetY) / Math.max(0.01f, startScale)
+                + viewportOffsetY;
         android.animation.ValueAnimator anim = android.animation.ValueAnimator.ofFloat(0f, 1f);
         anim.setDuration(280);
         anim.setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f));
         anim.addUpdateListener(animation -> {
             float fraction = animation.getAnimatedFraction();
             scaleFactor = startScale + (1.0f - startScale) * fraction;
-            panOffsetX = startPanX + (0f - startPanX) * fraction;
-            panOffsetY = startPanY + (0f - startPanY) * fraction;
+            panOffsetX = focusX - anchoredCanvasX * scaleFactor;
+            panOffsetY = focusY - (anchoredCanvasY - viewportOffsetY) * scaleFactor;
             invalidate();
             notifyZoomChange();
             notifyLassoSelection();
         });
         anim.start();
+    }
+
+    /** Keep the canvas point under the requested screen focus fixed while changing zoom. */
+    private void zoomAround(float targetScale, float focusX, float focusY) {
+        float oldScale = Math.max(0.01f, scaleFactor);
+        float canvasFocusX = (focusX - panOffsetX) / oldScale;
+        float canvasFocusY = (focusY - panOffsetY) / oldScale + viewportOffsetY;
+        scaleFactor = Math.max(0.20f, Math.min(16.0f, targetScale));
+        panOffsetX = focusX - canvasFocusX * scaleFactor;
+        panOffsetY = focusY - (canvasFocusY - viewportOffsetY) * scaleFactor;
     }
 
     public void setStrokeStabilization(float val) {

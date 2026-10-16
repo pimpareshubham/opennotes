@@ -117,10 +117,12 @@ public class Stroke {
 
         float normalX = -dy / distance;
         float normalY = dx / distance;
+        // Match the clockwise pressure disks above. Opposite winding makes
+        // overlapping segments cancel under WINDING fill, leaving dotted holes.
         path.moveTo(from.x + normalX * fromRadius, from.y + normalY * fromRadius);
-        path.lineTo(to.x + normalX * toRadius, to.y + normalY * toRadius);
-        path.lineTo(to.x - normalX * toRadius, to.y - normalY * toRadius);
         path.lineTo(from.x - normalX * fromRadius, from.y - normalY * fromRadius);
+        path.lineTo(to.x - normalX * toRadius, to.y - normalY * toRadius);
+        path.lineTo(to.x + normalX * toRadius, to.y + normalY * toRadius);
         path.close();
     }
 
