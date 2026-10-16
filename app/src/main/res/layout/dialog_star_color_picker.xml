@@ -1,0 +1,184 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="@color/surface">
+
+    <!-- Header: Title and Live Color Preview -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_marginBottom="12dp">
+
+        <TextView
+            android:id="@+id/textColorPickerTitle"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Color Palette"
+            android:textColor="@color/text_primary"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+
+        <View
+            android:id="@+id/viewSelectedColorPreview"
+            android:layout_width="38dp"
+            android:layout_height="38dp"
+            android:background="@drawable/bg_tool_button_active" />
+    </LinearLayout>
+
+    <!-- Two Tabs: Color palette | Color Set -->
+    <com.google.android.material.tabs.TabLayout
+        android:id="@+id/colorPickerTabLayout"
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        app:tabIndicatorColor="@color/accent"
+        app:tabSelectedTextColor="@color/accent"
+        app:tabTextColor="@color/text_secondary"
+        app:tabMode="fixed"
+        app:tabGravity="fill"
+        android:layout_marginBottom="12dp">
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Color palette" />
+
+        <com.google.android.material.tabs.TabItem
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Color Set" />
+    </com.google.android.material.tabs.TabLayout>
+
+    <!-- Content Area -->
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <!-- Tab 1: 2D Saturation-Brightness Spectrum + Hue Slider + Hex + Opacity -->
+        <LinearLayout
+            android:id="@+id/containerPaletteTab"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:visibility="visible">
+
+            <!-- 2D Saturation-Brightness Box -->
+            <org.opennotes.app.ui.SatValPickerView
+                android:id="@+id/satValPickerView"
+                android:layout_width="match_parent"
+                android:layout_height="170dp"
+                android:layout_marginBottom="10dp" />
+
+            <!-- Rainbow Hue Slider -->
+            <org.opennotes.app.ui.HueSliderView
+                android:id="@+id/hueSliderView"
+                android:layout_width="match_parent"
+                android:layout_height="34dp"
+                android:layout_marginBottom="10dp" />
+
+            <!-- Controls Row: Eyedropper, Hex Code, Opacity -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="10dp">
+
+                <ImageView
+                    android:id="@+id/btnEyedropper"
+                    android:layout_width="38dp"
+                    android:layout_height="38dp"
+                    android:padding="8dp"
+                    android:src="@drawable/ic_eyedropper"
+                    app:tint="@color/text_primary"
+                    android:background="@drawable/bg_floating_pill" />
+
+                <EditText
+                    android:id="@+id/editHexColor"
+                    android:layout_width="100dp"
+                    android:layout_height="38dp"
+                    android:layout_marginStart="8dp"
+                    android:background="@drawable/bg_search_bar"
+                    android:paddingHorizontal="10dp"
+                    android:gravity="center"
+                    android:text="#38BDF8"
+                    android:textColor="@color/text_primary"
+                    android:textSize="13sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:inputType="textCapCharacters" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp"
+                    android:text="Opacity"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp" />
+
+                <SeekBar
+                    android:id="@+id/seekOpacity"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="100"
+                    android:progress="100" />
+
+                <TextView
+                    android:id="@+id/textOpacityPercent"
+                    android:layout_width="40dp"
+                    android:layout_height="wrap_content"
+                    android:gravity="end"
+                    android:text="100%"
+                    android:textColor="@color/text_primary"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <!-- Quick Preset Color Dots Row -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Custom Colors"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp"
+                android:layout_marginBottom="6dp" />
+
+            <HorizontalScrollView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:scrollbars="none">
+
+                <LinearLayout
+                    android:id="@+id/layoutQuickSpectrumSwatches"
+                    android:layout_width="wrap_content"
+                    android:layout_height="44dp"
+                    android:orientation="horizontal"
+                    android:gravity="center_vertical" />
+            </HorizontalScrollView>
+        </LinearLayout>
+
+        <!-- Tab 2: Color Set (Predefined Categorized Palettes) -->
+        <ScrollView
+            android:id="@+id/containerColorSetTab"
+            android:layout_width="match_parent"
+            android:layout_height="290dp"
+            android:fadeScrollbars="false"
+            android:visibility="gone">
+
+            <LinearLayout
+                android:id="@+id/paletteGroupsLayout"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:paddingBottom="8dp" />
+        </ScrollView>
+    </FrameLayout>
+
+</LinearLayout>

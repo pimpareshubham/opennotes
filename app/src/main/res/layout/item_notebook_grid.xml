@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_margin="8dp"
+    app:cardCornerRadius="16dp"
+    app:cardElevation="3dp"
+    app:strokeWidth="1dp"
+    app:strokeColor="@color/divider"
+    android:clickable="true"
+    android:focusable="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Notebook Cover Aspect Box -->
+        <FrameLayout
+            android:id="@+id/coverContainer"
+            android:layout_width="match_parent"
+            android:layout_height="180dp"
+            android:background="@drawable/bg_notebook_cover">
+
+            <!-- Spine visual accent -->
+            <View
+                android:layout_width="16dp"
+                android:layout_height="match_parent"
+                android:background="#22000000" />
+
+            <!-- Page count badge -->
+            <TextView
+                android:id="@+id/textPagesBadge"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|end"
+                android:layout_margin="10dp"
+                android:background="@drawable/bg_search_bar"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="4dp"
+                android:text="1 page"
+                android:textColor="@color/text_primary"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <!-- Favorite star button -->
+            <ImageView
+                android:id="@+id/btnFavorite"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:layout_gravity="top|end"
+                android:layout_margin="8dp"
+                android:padding="6dp"
+                android:src="@drawable/ic_star_outline"
+                android:background="?selectableItemBackgroundBorderless" />
+        </FrameLayout>
+
+        <!-- Notebook Info Bar -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:paddingHorizontal="14dp"
+            android:paddingVertical="10dp"
+            android:gravity="center_vertical"
+            android:background="@color/surface">
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:id="@+id/textNotebookTitle"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Untitled Notebook"
+                    android:textColor="@color/text_primary"
+                    android:textSize="16sp"
+                    android:textStyle="bold"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/textNotebookDate"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="Oct 15, 2026"
+                    android:textColor="@color/text_secondary"
+                    android:textSize="12sp"
+                    android:layout_marginTop="2dp" />
+            </LinearLayout>
+
+            <ImageView
+                android:id="@+id/btnMore"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
+                android:padding="6dp"
+                android:src="@drawable/ic_more_vert"
+                android:background="?selectableItemBackgroundBorderless" />
+        </LinearLayout>
+
+    </LinearLayout>
+
+</com.google.android.material.card.MaterialCardView>

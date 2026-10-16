@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Star sparkle 1 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7.5,5.6L5,7L6.4,4.5L5,2L7.5,3.4L10,2L8.6,4.5L10,7L7.5,5.6z" />
+    <!-- Star sparkle 2 -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M19.5,15.6L17,17L18.4,14.5L17,12L19.5,13.4L22,12L20.6,14.5L22,17L19.5,15.6z" />
+    <!-- Magic Wand / Beautify Pen -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M2.81,21.19a1,1 0,0 1,0 -1.41L15.34,7.25l1.41,1.41L4.22,21.19a1,1 0,0 1,-1.41 0zM17.46,5.13l1.41,1.41 1.41,-1.41a1,1 0,0 0,0 -1.41l-1.41,-1.41a1,1 0,0 0,-1.41 0l-1.41,1.41 1.41,1.41z" />
+    <!-- Tip Sparkle / Glow -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M14.5,2.5L13.8,3.8L12.5,4.5L13.8,5.2L14.5,6.5L15.2,5.2L16.5,4.5L15.2,3.8z" />
+</vector>

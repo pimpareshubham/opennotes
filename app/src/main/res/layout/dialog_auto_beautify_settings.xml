@@ -1,0 +1,364 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:background="@color/surface"
+    android:orientation="vertical"
+    android:padding="20dp">
+
+    <!-- Header with Sparkles -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:layout_marginBottom="16dp">
+
+        <ImageView
+            android:layout_width="32dp"
+            android:layout_height="32dp"
+            android:src="@drawable/ic_auto_beautify"
+            app:tint="#F59E0B"
+            android:layout_marginEnd="10dp" />
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Handwriting Auto-Beautification"
+                android:textColor="@color/text_primary"
+                android:textSize="17sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="English • मराठी • हिन्दी Calligraphy &amp; Polish"
+                android:textColor="@color/text_secondary"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Master Enable Switch Card -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="12dp"
+        android:background="@drawable/bg_floating_pill"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="Real-Time Stroke Beautification"
+            android:textColor="@color/text_primary"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <androidx.appcompat.widget.SwitchCompat
+            android:id="@+id/switchEnableBeautify"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:checked="true" />
+    </LinearLayout>
+
+    <!-- Language Selector -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Note Language"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="38dp"
+        android:orientation="horizontal"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:id="@+id/btnLangEnglish"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="English"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp"
+            android:background="@drawable/bg_floating_pill"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/btnLangMarathi"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:gravity="center"
+            android:text="मराठी (Marathi)"
+            android:textColor="#FFFFFF"
+            android:textSize="12sp"
+            android:background="@drawable/bg_tool_button_active"
+            android:clickable="true"
+            android:focusable="true" />
+
+        <TextView
+            android:id="@+id/btnLangHindi"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:layout_marginStart="6dp"
+            android:gravity="center"
+            android:text="हिन्दी (Hindi)"
+            android:textColor="@color/text_secondary"
+            android:textSize="12sp"
+            android:background="@drawable/bg_floating_pill"
+            android:clickable="true"
+            android:focusable="true" />
+    </LinearLayout>
+
+    <!-- Font Style Selector -->
+    <TextView
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="Handwriting &amp; Note Typography Font"
+        android:textColor="@color/text_secondary"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:layout_marginBottom="8dp" />
+
+    <LinearLayout
+        android:id="@+id/layoutFontChoices"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:layout_marginBottom="16dp">
+
+        <LinearLayout
+            android:id="@+id/btnFontKalam"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="12dp"
+            android:background="@drawable/bg_tool_button_active"
+            android:layout_marginBottom="6dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="सुलेखन (Kalam Handwriting)"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="★ Recommended"
+                android:textColor="#F59E0B"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btnFontCaveat"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="12dp"
+            android:background="@drawable/bg_floating_pill"
+            android:layout_marginBottom="6dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Caveat Calligraphy Script"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="English Cursive"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btnFontYatra"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="12dp"
+            android:background="@drawable/bg_floating_pill"
+            android:layout_marginBottom="6dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="पारंपरिक (Yatra Devanagari)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Classic Indian"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:id="@+id/btnFontPoppins"
+            android:layout_width="match_parent"
+            android:layout_height="44dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingHorizontal="12dp"
+            android:background="@drawable/bg_floating_pill"
+            android:clickable="true"
+            android:focusable="true">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="स्वच्छ (Poppins Clean Student Print)"
+                android:textColor="@color/text_primary"
+                android:textSize="13sp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Modern Sans"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp" />
+        </LinearLayout>
+
+        <!-- Dynamic Container for User-Imported Custom TTF/OTF Fonts -->
+        <LinearLayout
+            android:id="@+id/layoutCustomFontList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <!-- Import External Font Button -->
+        <LinearLayout
+            android:id="@+id/btnImportExternalFont"
+            android:layout_width="match_parent"
+            android:layout_height="40dp"
+            android:orientation="horizontal"
+            android:gravity="center"
+            android:background="@drawable/bg_floating_pill"
+            android:layout_marginTop="4dp"
+            android:layout_marginBottom="12dp"
+            android:clickable="true"
+            android:focusable="true">
+
+            <ImageView
+                android:layout_width="18dp"
+                android:layout_height="18dp"
+                android:src="@drawable/ic_add"
+                app:tint="@color/accent"
+                android:layout_marginEnd="6dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Import External Font (.ttf / .otf)"
+                android:textColor="@color/accent"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </LinearLayout>
+
+    <!-- Auto-Convert Handwriting to TTF Font Checkbox -->
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkAutoConvertText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Real-Time Handwriting to TTF Font Auto-Convert"
+        android:textColor="@color/text_primary"
+        android:textSize="13sp"
+        android:checked="false"
+        android:layout_marginBottom="4dp" />
+
+    <!-- Devanagari Shirorekha Snapping Checkbox -->
+    <com.google.android.material.checkbox.MaterialCheckBox
+        android:id="@+id/checkShirorekhaSnap"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Devanagari Top-Line (शिरोरेखा) Level Snapping"
+        android:textColor="@color/text_primary"
+        android:textSize="13sp"
+        android:checked="true"
+        android:layout_marginBottom="12dp" />
+
+    <!-- Live Preview Box -->
+    <androidx.cardview.widget.CardView
+        android:layout_width="match_parent"
+        android:layout_height="64dp"
+        app:cardCornerRadius="12dp"
+        app:cardBackgroundColor="@color/editor_bg"
+        app:cardElevation="2dp"
+        android:layout_marginBottom="16dp">
+
+        <TextView
+            android:id="@+id/textBeautifyPreview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:gravity="center"
+            android:text="माझे सुंदर सुलेखन • OpenNotes"
+            android:textColor="#38BDF8"
+            android:textSize="18sp"
+            android:textStyle="bold" />
+    </androidx.cardview.widget.CardView>
+
+    <!-- Dialog Actions -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="end"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/btnCancelBeautifyDialog"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Close"
+            android:textColor="@color/text_secondary" />
+
+        <Button
+            android:id="@+id/btnApplyBeautifyDialog"
+            style="@style/Widget.Material3.Button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="8dp"
+            android:text="Save &amp; Apply" />
+    </LinearLayout>
+
+</LinearLayout>

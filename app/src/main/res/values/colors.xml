@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Modern StarNote Dark UI Theme Palette -->
+    <color name="primary">#1E1E24</color>
+    <color name="primary_dark">#121214</color>
+    <color name="accent">#38BDF8</color>
+    <color name="accent_blue">#3B82F6</color>
+    <color name="accent_light">#1E293B</color>
+    <color name="window_background">#121214</color>
+    <color name="editor_bg">#121214</color>
+    <color name="surface">#1E1E24</color>
+    <color name="surface_card">#24242B</color>
+    <color name="surface_elevated">#24242B</color>
+    <color name="surface_variant">#2A2A32</color>
+    <color name="surface_floating">#2E2E38</color>
+    <color name="text_primary">#F8FAFC</color>
+    <color name="text_secondary">#94A3B8</color>
+    <color name="text_hint">#64748B</color>
+    <color name="divider">#33333E</color>
+    <color name="divider_subtle">#22222A</color>
+
+    <!-- Canvas Paper Colors -->
+    <color name="paper_black">#000000</color>
+    <color name="paper_white">#FFFFFF</color>
+    <color name="paper_cream">#FDFBF7</color>
+    <color name="paper_grid_line">#22222A</color>
+    <color name="paper_ruled_line">#22222A</color>
+    <color name="paper_cornell_margin">#EF4444</color>
+
+    <!-- Notebook Cover Colors -->
+    <color name="cover_slate">#1E1E24</color>
+    <color name="cover_navy">#172554</color>
+    <color name="cover_emerald">#064E3B</color>
+    <color name="cover_plum">#581C87</color>
+    <color name="cover_coral">#881337</color>
+    <color name="cover_amber">#78350F</color>
+    <color name="cover_teal">#134E4A</color>
+    <color name="cover_charcoal">#0F172A</color>
+
+    <!-- Drawing Ink Presets -->
+    <color name="ink_white">#FFFFFF</color>
+    <color name="ink_black">#111827</color>
+    <color name="ink_slate">#94A3B8</color>
+    <color name="ink_blue">#38BDF8</color>
+    <color name="ink_navy">#3B82F6</color>
+    <color name="ink_red">#EF4444</color>
+    <color name="ink_green">#10B981</color>
+    <color name="ink_purple">#A855F7</color>
+    <color name="ink_orange">#F97316</color>
+    <color name="ink_yellow_highlighter">#80FDE047</color>
+    <color name="ink_green_highlighter">#8086EFAC</color>
+    <color name="ink_blue_highlighter">#8093C5FD</color>
+    <color name="ink_pink_highlighter">#80F472B6</color>
+</resources>
