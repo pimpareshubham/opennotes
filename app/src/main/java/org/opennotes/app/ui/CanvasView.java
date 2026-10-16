@@ -325,6 +325,21 @@ public class CanvasView extends View {
         notifyZoomChange();
     }
 
+    /** Restores the user's viewing position after the editor is recreated. */
+    public void restoreViewport(float zoomPercent, float panX, float panY, float scrollY) {
+        scaleFactor = Math.max(0.20f, Math.min(16.0f, zoomPercent / 100f));
+        panOffsetX = panX;
+        panOffsetY = panY;
+        viewportOffsetY = isInfinite ? Math.max(0f, Math.min(scrollY, getMaxScrollY())) : 0f;
+        invalidate();
+        notifyZoomChange();
+        notifyLassoSelection();
+    }
+
+    public float getPanOffsetX() { return panOffsetX; }
+    public float getPanOffsetY() { return panOffsetY; }
+    public float getViewportOffsetY() { return viewportOffsetY; }
+
     public Page getPage() {
         return currentPage;
     }
@@ -1572,18 +1587,46 @@ public class CanvasView extends View {
         int action = event.getActionMasked();
         int pointerCount = event.getPointerCount();
 
+        // Feed the complete stream so ScaleGestureDetector can always reset on
+        // ACTION_DOWN/CANCEL, including after an activity was backgrounded.
+        scaleDetector.onTouchEvent(event);
+
         if (pointerCount >= 2) {
-            scaleDetector.onTouchEvent(event);
+            if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(true);
+        } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+            if (getParent() != null) getParent().requestDisallowInterceptTouchEvent(false);
         }
 
-        int toolType = event.getToolType(0);
-        boolean isStylus = (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER);
+        boolean hasStylusPointer = false;
+        for (int i = 0; i < pointerCount; i++) {
+            int toolType = event.getToolType(i);
+            if (toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER) {
+                hasStylusPointer = true;
+                break;
+            }
+        }
 
         // Stylus-Only Mode check: palm rejection
-        if (isStylusOnly && !isStylus) {
+        if (isStylusOnly && !hasStylusPointer) {
             if (pointerCount >= 2 && !isViewportLocked) {
+                if (activeStroke != null) {
+                    activeStroke = null;
+                    invalidate();
+                }
                 handleTwoFingerPanZoom(event, action);
             }
+            return true;
+        }
+
+        // Never interpret a finger as ink when it joins a stylus contact.
+        // Keep the multi-touch stream available for navigation, then resume
+        // stylus input when only the pen remains on the screen.
+        if (isStylusOnly && pointerCount >= 2) {
+            if (activeStroke != null) {
+                activeStroke = null;
+                invalidate();
+            }
+            if (!isViewportLocked) handleTwoFingerPanZoom(event, action);
             return true;
         }
 

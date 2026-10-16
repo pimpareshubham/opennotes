@@ -71,6 +71,19 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private List<Page> pages;
     private int currentPageIndex = 0;
     private Page currentPage;
+    private boolean hasRestoredEditorState;
+    private int restoredPageIndex;
+    private float restoredZoom = 100f;
+    private float restoredPanX;
+    private float restoredPanY;
+    private float restoredScrollY;
+
+    private static final String STATE_NOTEBOOK_ID = "editor.notebook_id";
+    private static final String STATE_PAGE_INDEX = "editor.page_index";
+    private static final String STATE_ZOOM = "editor.zoom";
+    private static final String STATE_PAN_X = "editor.pan_x";
+    private static final String STATE_PAN_Y = "editor.pan_y";
+    private static final String STATE_SCROLL_Y = "editor.scroll_y";
 
     private CanvasView canvasView;
     private LinearLayout topBar;
@@ -167,6 +180,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         dbHelper = NotesDbHelper.getInstance(this);
         appSettings = AppSettings.getInstance(this);
         notebookId = getIntent().getLongExtra("notebook_id", -1);
+
+        if (savedInstanceState != null && savedInstanceState.getLong(STATE_NOTEBOOK_ID, -1L) == notebookId) {
+            hasRestoredEditorState = true;
+            restoredPageIndex = savedInstanceState.getInt(STATE_PAGE_INDEX, 0);
+            restoredZoom = savedInstanceState.getFloat(STATE_ZOOM, 100f);
+            restoredPanX = savedInstanceState.getFloat(STATE_PAN_X, 0f);
+            restoredPanY = savedInstanceState.getFloat(STATE_PAN_Y, 0f);
+            restoredScrollY = savedInstanceState.getFloat(STATE_SCROLL_Y, 0f);
+        }
 
         if (notebookId == -1) {
             finish();
@@ -329,8 +351,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 pages = resultPages;
                 textNotebookTitle.setText(currentNotebook.title);
                 updateFavoriteIcon();
-                currentPageIndex = 0;
+                currentPageIndex = hasRestoredEditorState
+                        ? Math.max(0, Math.min(restoredPageIndex, resultPages.size() - 1)) : 0;
                 loadCurrentPage();
+                if (hasRestoredEditorState) {
+                    // Wait for the canvas to be measured so infinite-page scroll bounds are valid.
+                    canvasView.post(() -> canvasView.restoreViewport(
+                            restoredZoom, restoredPanX, restoredPanY, restoredScrollY));
+                    hasRestoredEditorState = false;
+                }
                 canvasView.setEnabled(true);
             });
         });
@@ -1747,6 +1776,20 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     @Override
     public void onScrollChanged(float scrollY, float maxScrollY) {}
+
+    @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        outState.putLong(STATE_NOTEBOOK_ID, notebookId);
+        outState.putInt(STATE_PAGE_INDEX, currentPageIndex);
+        if (canvasView != null) {
+            outState.putFloat(STATE_ZOOM, canvasView.getZoomPercent());
+            outState.putFloat(STATE_PAN_X, canvasView.getPanOffsetX());
+            outState.putFloat(STATE_PAN_Y, canvasView.getPanOffsetY());
+            outState.putFloat(STATE_SCROLL_Y, canvasView.getViewportOffsetY());
+        }
+        saveCurrentPage();
+        super.onSaveInstanceState(outState);
+    }
 
     @Override
     protected void onPause() {
