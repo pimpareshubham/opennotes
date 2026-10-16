@@ -881,7 +881,7 @@ public class CanvasView extends View {
         StrokeLineGroup line = lines.get(index);
         org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
                 getContext(), line.strokes, beautifyLanguage,
-                recognitionPreContext(requestedPage, line.strokes),
+                recognitionPreContext(requestedPage, line.strokes, recognized),
                 new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
                     @Override
                     public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result) {
@@ -1031,7 +1031,8 @@ public class CanvasView extends View {
         return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
-    private String recognitionPreContext(Page page, List<Stroke> strokes) {
+    private String recognitionPreContext(Page page, List<Stroke> strokes,
+                                         List<RecognizedStrokeLine> precedingRecognizedLines) {
         RectF inkBounds = new RectF();
         boolean found = false;
         for (Stroke stroke : strokes) {
@@ -1039,6 +1040,8 @@ public class CanvasView extends View {
             List<DrawingPoint> points = stroke.getRecognitionPoints();
             if (points == null) continue;
             for (DrawingPoint point : points) {
+                if (point == null || Float.isNaN(point.x) || Float.isNaN(point.y)
+                        || Float.isInfinite(point.x) || Float.isInfinite(point.y)) continue;
                 if (!found) {
                     inkBounds.set(point.x, point.y, point.x, point.y);
                     found = true;
@@ -1047,30 +1050,78 @@ public class CanvasView extends View {
                 }
             }
         }
-        if (!found || page.texts == null || page.texts.isEmpty()) return "";
+        if (!found) return "";
 
         List<TextItem> preceding = new ArrayList<>();
         float baseline = inkBounds.bottom - 4f;
         float lineTolerance = Math.max(24f, inkBounds.height() * 0.65f);
-        for (TextItem item : page.texts) {
-            if (item == null || item.text == null || item.text.isEmpty()) continue;
-            if (item.x >= inkBounds.left || Math.abs(item.y - baseline) > lineTolerance) continue;
-            if (item.getBounds().right > inkBounds.left + Math.max(8f, item.fontSize * 0.15f)) continue;
-            preceding.add(item);
+        if (page.texts != null) {
+            for (TextItem item : page.texts) {
+                if (item == null || item.text == null || item.text.isEmpty()) continue;
+                if (item.x >= inkBounds.left || Math.abs(item.y - baseline) > lineTolerance) continue;
+                if (item.getBounds().right > inkBounds.left + Math.max(8f, item.fontSize * 0.15f)) continue;
+                preceding.add(item);
+            }
         }
-        if (preceding.isEmpty()) return "";
+        // Real-time conversion turns earlier lines into TextItems. When the
+        // current handwriting starts on the next ruled line, that prior line
+        // is still useful language context even though it is not on the same
+        // baseline. Restrict the fallback to the nearest line in the same
+        // writing column so a distant heading or neighboring column is not
+        // fed to the recognizer.
+        if (preceding.isEmpty() && page.texts != null) {
+            float maxPreviousLineGap = Math.max(48f, inkBounds.height() * 1.8f);
+            float columnTolerance = Math.max(32f, inkBounds.height() * 1.25f);
+            float nearestBaseline = Float.NEGATIVE_INFINITY;
+            for (TextItem item : page.texts) {
+                if (item == null || item.text == null || item.text.isEmpty()) continue;
+                float verticalGap = baseline - item.y;
+                if (verticalGap <= lineTolerance || verticalGap > maxPreviousLineGap
+                        || Math.abs(item.x - inkBounds.left) > columnTolerance) continue;
+                nearestBaseline = Math.max(nearestBaseline, item.y);
+            }
+            if (nearestBaseline != Float.NEGATIVE_INFINITY) {
+                for (TextItem item : page.texts) {
+                    if (item == null || item.text == null || item.text.isEmpty()) continue;
+                    float verticalGap = baseline - item.y;
+                    if (verticalGap > lineTolerance && verticalGap <= maxPreviousLineGap
+                            && Math.abs(item.y - nearestBaseline) <= Math.max(8f, item.fontSize * 0.35f)
+                            && Math.abs(item.x - inkBounds.left) <= columnTolerance) {
+                        preceding.add(item);
+                    }
+                }
+            }
+        }
         Collections.sort(preceding, (left, right) -> Float.compare(left.x, right.x));
         StringBuilder context = new StringBuilder();
+        if (precedingRecognizedLines != null) {
+            for (RecognizedStrokeLine line : precedingRecognizedLines) {
+                if (line == null || line.result == null || line.result.text == null) continue;
+                appendContextPart(context, line.result.text);
+            }
+        }
         for (TextItem item : preceding) {
-            if (context.length() > 0) context.append(' ');
-            context.append(item.text);
+            appendContextPart(context, item.text);
         }
-        int codePointCount = context.codePointCount(0, context.length());
-        if (codePointCount > 20) {
-            int start = context.offsetByCodePoints(0, codePointCount - 20);
-            return context.substring(start);
+        return lastCodePoints(context.toString(), 20);
+    }
+
+    private static void appendContextPart(StringBuilder context, String part) {
+        if (part == null) return;
+        String trimmed = part.trim();
+        if (trimmed.isEmpty()) return;
+        if (context.length() > 0) context.append(' ');
+        context.append(trimmed);
+    }
+
+    private static String lastCodePoints(String text, int maxCodePoints) {
+        if (text == null || text.isEmpty()) return "";
+        int codePointCount = text.codePointCount(0, text.length());
+        if (codePointCount > maxCodePoints) {
+            int start = text.offsetByCodePoints(0, codePointCount - maxCodePoints);
+            return text.substring(start);
         }
-        return context.toString();
+        return text;
     }
 
     private void applyRecognizedText(Page requestedPage, List<RecognizedStrokeLine> lines,
