@@ -36,6 +36,7 @@ import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
+import org.opennotes.app.util.SelectionClipboard;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -2194,7 +2195,8 @@ public class CanvasView extends View {
     }
 
     public boolean hasClipboardContents() {
-        return !clipboardStrokes.isEmpty() || !clipboardShapes.isEmpty() || !clipboardTexts.isEmpty();
+        return !clipboardStrokes.isEmpty() || !clipboardShapes.isEmpty() || !clipboardTexts.isEmpty()
+                || SelectionClipboard.hasContents(getContext());
     }
 
     public void deleteSelection() {
@@ -2221,26 +2223,38 @@ public class CanvasView extends View {
             clipboardShapes.add(cloneShape(sh, 0f, 0f));
         }
         for (TextItem item : selectedTexts) clipboardTexts.add(cloneText(item, 0f, 0f));
+        SelectionClipboard.set(getContext(), new SelectionClipboard.Payload(
+                clipboardStrokes, clipboardShapes, clipboardTexts,
+                clipboardCenterX, clipboardCenterY));
         syncAccessibilityActions();
     }
 
     public void pasteSelection() {
         if (currentPage == null || !hasClipboardContents()) return;
+        final Page targetPage = currentPage;
+        SelectionClipboard.load(getContext(), payload -> {
+            if (currentPage != targetPage || payload == null || !payload.hasContents()) return;
+            pasteClipboardPayload(payload);
+        });
+    }
+
+    private void pasteClipboardPayload(SelectionClipboard.Payload payload) {
+        if (currentPage == null || payload == null || !payload.hasContents()) return;
         float targetX = ((getWidth() * 0.5f) - panOffsetX) / scaleFactor;
         float targetY = ((getHeight() * 0.5f) - panOffsetY) / scaleFactor + viewportOffsetY;
-        float offsetX = targetX - clipboardCenterX;
-        float offsetY = targetY - clipboardCenterY;
+        float offsetX = targetX - payload.centerX;
+        float offsetY = targetY - payload.centerY;
         List<Stroke> pastedStrokes = new ArrayList<>();
-        for (Stroke s : clipboardStrokes) {
+        for (Stroke s : payload.strokes) {
             Stroke clone = cloneStroke(s, offsetX, offsetY);
             pastedStrokes.add(clone);
         }
         List<ShapeItem> pastedShapes = new ArrayList<>();
-        for (ShapeItem sh : clipboardShapes) {
+        for (ShapeItem sh : payload.shapes) {
             pastedShapes.add(cloneShape(sh, offsetX, offsetY));
         }
         List<TextItem> pastedTexts = new ArrayList<>();
-        for (TextItem item : clipboardTexts) pastedTexts.add(cloneText(item, offsetX, offsetY));
+        for (TextItem item : payload.texts) pastedTexts.add(cloneText(item, offsetX, offsetY));
         addSelectionToPage(pastedStrokes, pastedShapes, pastedTexts);
         recordAddedSelection(pastedStrokes, pastedShapes, pastedTexts);
     }

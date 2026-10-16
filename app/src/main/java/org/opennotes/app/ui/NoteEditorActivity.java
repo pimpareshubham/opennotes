@@ -14,6 +14,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.content.Context;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.ViewGroup;
 import android.view.View;
@@ -424,6 +425,32 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             pageNavParams.setMarginEnd(dp(16));
         }
         pageNav.setLayoutParams(pageNavParams);
+    }
+
+    @Override
+    public boolean onKeyShortcut(int keyCode, KeyEvent event) {
+        View focused = getCurrentFocus();
+        if (event == null || !event.isCtrlPressed() || focused instanceof EditText) {
+            return super.onKeyShortcut(keyCode, event);
+        }
+        if (canvasView == null) return super.onKeyShortcut(keyCode, event);
+        if (keyCode == KeyEvent.KEYCODE_C && canvasView.hasSelection()) {
+            canvasView.copySelection();
+            updateLassoActionAvailability();
+            Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_X && canvasView.hasSelection()) {
+            canvasView.cutSelection();
+            updateLassoActionAvailability();
+            Toast.makeText(this, "Cut to clipboard", Toast.LENGTH_SHORT).show();
+            return true;
+        }
+        if (keyCode == KeyEvent.KEYCODE_V && canvasView.hasClipboardContents()) {
+            canvasView.pasteSelection();
+            return true;
+        }
+        return super.onKeyShortcut(keyCode, event);
     }
 
     @Override
