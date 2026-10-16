@@ -1821,6 +1821,14 @@ public class CanvasView extends View {
             requestUnbufferedDispatch(event);
         }
 
+        boolean canceledUp = action == MotionEvent.ACTION_UP
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0;
+        if (action == MotionEvent.ACTION_CANCEL || canceledUp) {
+            cancelInProgressGesture();
+            return true;
+        }
+
         // Stylus-Only Mode check: palm rejection
         if (isStylusOnly && !hasStylusPointer) {
             if (pointerCount >= 2 && !isViewportLocked) {
@@ -2170,6 +2178,24 @@ public class CanvasView extends View {
         int r = Math.min(getWidth(), (int) Math.ceil(right));
         int b = Math.min(getHeight(), (int) Math.ceil(bottom));
         if (l < r && t < b) invalidate(l, t, r, b);
+    }
+
+    private void cancelInProgressGesture() {
+        boolean movedSelection = isMovingSelection;
+        activeStroke = null;
+        isDrawingShape = false;
+        isDrawingLasso = false;
+        isMovingSelection = false;
+        isPanning = false;
+        lassoPath.reset();
+        lassoPoints.clear();
+        laserTrail.clear();
+        if (movedSelection) {
+            if (!selectedStrokes.isEmpty()) strokeSpatialIndexDirty = true;
+            notifyChange();
+            notifyLassoSelection();
+        }
+        invalidate();
     }
 
     /** Ask Android for the fastest supported writing cadence only during input. */
