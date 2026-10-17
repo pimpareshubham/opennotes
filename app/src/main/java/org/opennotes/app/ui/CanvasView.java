@@ -911,83 +911,40 @@ public class CanvasView extends View {
         final List<Stroke> requestedStrokes = new ArrayList<>(strokesToConvert);
         final Page requestedPage = currentPage;
         final int textColor = currentColor;
-        RECOGNITION_PREPROCESSOR.execute(() -> {
-            // Segment handwriting strokes into natural lines (invariant to slope, slant, or angle)
-            List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines =
-                    org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(requestedStrokes);
-            post(() -> {
-                if (currentPage != requestedPage) return;
-                if (lines.isEmpty()) {
-                    return;
-                }
-                recognizeStrokeLine(requestedPage, lines, 0, new ArrayList<>(),
-                        textColor, letUserChooseCandidate);
-            });
-        });
-    }
+        final String preContext = recognitionPreContext(requestedPage, requestedStrokes);
 
-    /** Recognize each visual writing line independently; ML Kit's writing-area hint is single-line. */
-    private void recognizeStrokeLine(Page requestedPage,
-                                     List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines,
-                                     int index,
-                                     List<RecognizedStrokeLine> recognized,
-                                     int textColor, boolean reviewBeforeReplacing) {
-        if (currentPage != requestedPage) return;
-        if (index >= lines.size()) {
-            if (recognized.isEmpty()) return;
-            if (reviewBeforeReplacing) {
-                showRecognitionReview(requestedPage, recognized, textColor);
-            } else {
-                List<String> acceptedText = new ArrayList<>();
-                for (RecognizedStrokeLine line : recognized) acceptedText.add(line.result.text);
-                applyRecognizedText(requestedPage, recognized, textColor, acceptedText);
-            }
-            return;
-        }
-
-        org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine line = lines.get(index);
         org.opennotes.app.util.HandwritingRecognitionEngine.Callback callback =
                 new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
                     @Override
                     public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result) {
-                        if (currentPage != requestedPage) return;
-                        if (result == null || result.text.trim().isEmpty()) {
-                            android.widget.Toast.makeText(getContext(),
-                                    "Could not decipher handwriting on line " + (index + 1) + ". Your ink was kept.",
-                                    android.widget.Toast.LENGTH_SHORT).show();
-                            return;
+                        if (currentPage != requestedPage || result == null || result.text.trim().isEmpty()) return;
+                        List<RecognizedStrokeLine> lines = Collections.singletonList(
+                                new RecognizedStrokeLine(requestedStrokes, result));
+                        if (letUserChooseCandidate && result.alternatives.size() > 1) {
+                            showRecognitionReview(requestedPage, lines, textColor);
+                        } else {
+                            applyRecognizedText(requestedPage, lines, textColor,
+                                    Collections.singletonList(result.text));
                         }
-                        recognized.add(new RecognizedStrokeLine(line.strokes, result));
-                        recognizeStrokeLine(requestedPage, lines, index + 1, recognized,
-                                textColor, reviewBeforeReplacing);
                     }
 
                     @Override
                     public void onFailure(Exception error) {
-                        // Keep every source stroke intact if any line fails.
-                        if (org.opennotes.app.util.HandwritingRecognitionEngine
-                                .isModelDownloadCancellation(error)) {
-                            android.widget.Toast.makeText(getContext(),
-                                    "Recognition cancelled. Your ink has been kept intact.",
-                                    android.widget.Toast.LENGTH_SHORT).show();
-                        } else if (org.opennotes.app.util.HandwritingRecognitionEngine
-                                .isEmptyRecognitionFailure(error)) {
-                            android.widget.Toast.makeText(getContext(),
-                                    "Could not decipher handwriting. Try writing a bit clearer or select another language.",
-                                    android.widget.Toast.LENGTH_LONG).show();
-                        } else {
-                            org.opennotes.app.util.ErrorDialog.show(getContext(),
-                                    "Could not convert handwriting (your ink was kept)", error);
+                        if (org.opennotes.app.util.HandwritingRecognitionEngine.isModelDownloadCancellation(error)) {
+                            return;
                         }
+                        android.widget.Toast.makeText(getContext(),
+                                "Could not decipher handwriting. Your ink was kept.",
+                                android.widget.Toast.LENGTH_SHORT).show();
                     }
                 };
-        String preContext = recognitionPreContext(requestedPage, line.strokes, recognized);
-        if (reviewBeforeReplacing) {
+
+        if (letUserChooseCandidate) {
             org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokesWithFilteredSuggestions(
-                    getContext(), line.strokes, beautifyLanguage, preContext, callback);
+                    getContext(), requestedStrokes, beautifyLanguage, preContext, callback);
         } else {
             org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
-                    getContext(), line.strokes, beautifyLanguage, preContext, callback);
+                    getContext(), requestedStrokes, beautifyLanguage, preContext, callback);
         }
     }
 
@@ -1082,6 +1039,10 @@ public class CanvasView extends View {
 
     private int dp(float value) {
         return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private String recognitionPreContext(Page page, List<Stroke> strokes) {
+        return recognitionPreContext(page, strokes, null);
     }
 
     private String recognitionPreContext(Page page, List<Stroke> strokes,
@@ -1197,7 +1158,6 @@ public class CanvasView extends View {
 
             String fullText = text.trim();
             String[] subLines = fullText.split("\r?\n");
-            float rotation = Math.abs(result.angleDegrees) <= 5.0f ? 0f : result.angleDegrees;
             float linePitch = result.fontSize * 1.35f;
             if (subLines.length > 1) {
                 float computedPitch = result.bounds.height() / (float) subLines.length;
@@ -1216,20 +1176,14 @@ public class CanvasView extends View {
                 if (subLine.isEmpty()) continue;
                 float lineBaselineY = baseStartY + sIdx * linePitch;
                 float lineStartX = baseStartX;
-                if (Math.abs(rotation) > 5.0f) {
-                    double rad = Math.toRadians(rotation);
-                    float offsetY = sIdx * linePitch;
-                    lineStartX = baseStartX - (float) (offsetY * Math.sin(rad));
-                    lineBaselineY = baseStartY + (float) (offsetY * Math.cos(rad));
-                }
 
                 String[] words = subLine.split("\\s+");
                 textPaint.setTextSize(result.fontSize);
                 textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
                 float spaceWidth = textPaint.measureText(" ");
 
-                if (Math.abs(rotation) > 5.0f || words.length <= 1) {
-                    convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, rotation));
+                if (words.length <= 1) {
+                    convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, 0f));
                 } else {
                     float totalWordsWidth = 0f;
                     float[] wordWidths = new float[words.length];
@@ -3513,56 +3467,17 @@ public class CanvasView extends View {
                 // User is actively writing: pause/reset any pending auto-convert timer immediately
                 if (isAutoConvertTextEnabled && isAutoBeautifyEnabled) {
                     autoConvertHandler.removeCallbacks(autoConvertRunnable);
-                    // Smart Word Completion:
-                    // If the user previously wrote strokes, check if they gave enough space
-                    // between the previous word and this new stroke (space > wordGapThreshold,
-                    // next line below, or jump). If so, the previous word is completed!
+                    // Continuous Writing Flow at any angle:
+                    // Keep strokes together while writing nearby (whether horizontal, diagonal, or multi-word).
+                    // Only trigger intermediate conversion if the user makes a distant spatial jump across the page.
                     if (!pendingAutoConvertStrokes.isEmpty()) {
-                        RectF lastWordBounds = getStrokesBounds(pendingAutoConvertStrokes);
-                        if (!lastWordBounds.isEmpty() && hasEnoughInkForAutoConversion(pendingAutoConvertStrokes)) {
-                            float estHeight = Math.max(35f, lastWordBounds.height());
-                            boolean isIndic = "MARATHI".equalsIgnoreCase(beautifyLanguage) || "HINDI".equalsIgnoreCase(beautifyLanguage);
-
-                            boolean isNextWord;
-                            boolean isNextLine;
-                            boolean isDistantJump;
-
-                            if (isIndic) {
-                                // In Devanagari (Marathi/Hindi), strokes for the same character can be drawn nearby:
-                                // upper matra/anuswar at top, lower ukar at bottom, kana/velanti on sides.
-                                boolean isInDiacriticEnvelope = (canvasX >= lastWordBounds.left - estHeight * 0.9f)
-                                        && (canvasX <= lastWordBounds.right + Math.max(45f, estHeight * 0.9f))
-                                        && (canvasY >= lastWordBounds.top - Math.max(50f, estHeight * 1.0f))
-                                        && (canvasY <= lastWordBounds.bottom + Math.max(45f, estHeight * 0.8f));
-
-                                if (isInDiacriticEnvelope && pendingAutoConvertStrokes.size() <= 4) {
-                                    isNextWord = false;
-                                    isNextLine = false;
-                                    isDistantJump = false;
-                                } else {
-                                    float wordGapThreshold = Math.max(70f, estHeight * 1.1f);
-                                    float lineJumpThreshold = Math.max(65f, estHeight * 1.1f);
-                                    isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
-                                    isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold)
-                                            || (canvasX < lastWordBounds.centerX() - 30f && canvasY > lastWordBounds.centerY() + 20f);
-                                    isDistantJump = (canvasY < lastWordBounds.top - estHeight * 2.0f)
-                                            || (canvasX < lastWordBounds.left - 100f && canvasY > lastWordBounds.bottom + 20f);
-                                }
-                            } else {
-                                // Clean, natural English word separation:
-                                float wordGapThreshold = Math.max(50f, estHeight * 0.75f);
-                                float lineJumpThreshold = Math.max(45f, estHeight * 0.75f);
-                                isNextWord = (canvasX > lastWordBounds.right + wordGapThreshold);
-                                isNextLine = (canvasY > lastWordBounds.bottom + lineJumpThreshold)
-                                        || (canvasX < lastWordBounds.centerX() - 30f && canvasY > lastWordBounds.centerY() + 15f);
-                                isDistantJump = (canvasY < lastWordBounds.top - 60f)
-                                        || (canvasX < lastWordBounds.left - 90f);
-                            }
-
-                            if (isNextWord || isNextLine || isDistantJump) {
-                                List<Stroke> completedWord = new ArrayList<>(pendingAutoConvertStrokes);
+                        RectF lastBounds = getStrokesBounds(pendingAutoConvertStrokes);
+                        if (!lastBounds.isEmpty() && hasEnoughInkForAutoConversion(pendingAutoConvertStrokes)) {
+                            float distFromLast = (float) Math.hypot(canvasX - lastBounds.centerX(), canvasY - lastBounds.centerY());
+                            if (distFromLast > 450f) {
+                                List<Stroke> completed = new ArrayList<>(pendingAutoConvertStrokes);
                                 pendingAutoConvertStrokes.clear();
-                                convertStrokesToText(completedWord);
+                                convertStrokesToText(completed);
                             }
                         }
                     }
@@ -3696,9 +3611,8 @@ public class CanvasView extends View {
                             autoConvertHandler.removeCallbacks(autoConvertRunnable);
                             boolean isIndic = "MARATHI".equalsIgnoreCase(beautifyLanguage) || "HINDI".equalsIgnoreCase(beautifyLanguage);
                             int strokeCount = pendingAutoConvertStrokes.size();
-                            // English: prompt 1300ms pause so words don't pile up.
-                            // Indic: 2800ms to allow adding kana, matra, or anuswar without rushing.
-                            long delay = isIndic ? (strokeCount <= 2 ? 3000L : 2500L) : 1300L;
+                            // Comfortable pause delay so continuous handwriting or multi-word sentences are not interrupted
+                            long delay = isIndic ? (strokeCount <= 2 ? 3000L : 2600L) : 1800L;
                             autoConvertHandler.postDelayed(autoConvertRunnable, delay);
                         }
                     }

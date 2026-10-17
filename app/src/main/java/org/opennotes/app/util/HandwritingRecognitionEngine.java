@@ -336,53 +336,9 @@ public final class HandwritingRecognitionEngine {
                                                  Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
         final String contextText = preContext == null ? "" : preContext;
-
-        // Multi-line and any-angle segmentation:
-        // If the handwriting spans multiple lines (written one below another at any angle),
-        // cleanly segmenting into lines prevents ML Kit from confusing overlapping bounding boxes.
-        if (SemanticStrokeClusterer.isMultiLine(strokes)) {
-            List<SemanticStrokeClusterer.StrokeLine> lines = SemanticStrokeClusterer.segmentIntoLines(strokes);
-            if (lines != null && lines.size() > 1) {
-                recognizeMultiLineStatements(context, lines, 0, preferredLanguage, contextText,
-                        new StringBuilder(), new ArrayList<>(), new RectF(), callback);
-                return;
-            }
-        }
-
-        // Pass 1: Rigidly rotate sloped handwriting to canonical horizontal for ML Kit.
-        // Both Latin and Indic scripts are rigidly rotated so angled lines are leveled horizontally.
-        InkNormalizer.NormalizedInk normalized = InkNormalizer.normalizeInk(strokes, preferredLanguage);
-        final float writingAngle = (normalized != null && normalized.transform != null)
-                ? normalized.transform.angleDegrees
-                : estimateWritingAngleDegrees(strokes);
-        final boolean isSlanted = Math.abs(writingAngle) >= 6.0f;
-
-        List<Stroke> primaryStrokes = (isSlanted && normalized != null && normalized.strokes != null && !normalized.strokes.isEmpty())
-                ? normalized.strokes
-                : strokes;
-
-        final List<Stroke> effectivePrimary = primaryStrokes;
-        executeSingleRecognitionPass(context, effectivePrimary, strokes, isSlanted ? writingAngle : 0f, preferredLanguage, contextText, new Callback() {
-            @Override
-            public void onSuccess(RecognitionResult primaryResult) {
-                if (includeReviewSuggestions || primaryResult.alternatives.size() <= 1) {
-                    tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                            primaryResult, isSlanted, writingAngle, callback);
-                } else {
-                    callback.onSuccess(primaryResult);
-                }
-            }
-
-            @Override
-            public void onFailure(Exception error) {
-                if (isModelDownloadCancellation(error)) {
-                    callback.onFailure(error);
-                    return;
-                }
-                tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                        null, isSlanted, writingAngle, callback);
-            }
-        });
+        // Direct recognition: ML Kit natively understands inclined, tilted, and natural handwriting.
+        // We pass the raw strokes without imposing any horizontal reference frame or artificial rotation.
+        executeSingleRecognitionPass(context, strokes, preferredLanguage, contextText, callback);
     }
 
     private static void recognizeMultiLineStatements(Context context,
@@ -860,17 +816,34 @@ public final class HandwritingRecognitionEngine {
             float naturalHeight = bounds.height();
             float naturalWidth = bounds.width();
 
+            float charHeight = 0f;
+            if (strokesToRecognize != null && !strokesToRecognize.isEmpty()) {
+                List<Float> heights = new ArrayList<>();
+                for (Stroke s : strokesToRecognize) {
+                    if (s != null && s.getBounds() != null && s.getBounds().height() > 4f) {
+                        heights.add(s.getBounds().height());
+                    }
+                }
+                if (!heights.isEmpty()) {
+                    Collections.sort(heights);
+                    int idx = (int) (heights.size() * 0.75f);
+                    if (idx >= heights.size()) idx = heights.size() - 1;
+                    charHeight = heights.get(idx);
+                }
+            }
+            if (charHeight <= 0f) {
+                charHeight = bounds.height();
+            }
+
             float scale = 1.0f;
-            if (naturalHeight > 0f && naturalHeight < 180f) {
-                scale = Math.min(4.5f, 240f / naturalHeight);
+            if (charHeight > 0f && charHeight < 140f) {
+                scale = Math.min(4.5f, 160f / charHeight);
             }
 
             float scaledW = naturalWidth * scale;
             float scaledH = naturalHeight * scale;
             float padX = Math.max(24f, scaledW * 0.10f);
             float padY = Math.max(24f, scaledH * 0.10f);
-            float areaW = scaledW + padX * 2f;
-            float areaH = scaledH + padY * 2f;
 
             Ink.Builder inkBuilder = Ink.builder();
             long lastInkTime = -1L;
@@ -918,16 +891,11 @@ public final class HandwritingRecognitionEngine {
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(16).build());
 
-            boolean isBigLine = bounds.width() > 400f || bounds.width() > bounds.height() * 2.8f;
-            if (isBigLine) {
-                recognizeWithoutWritingArea(context, strokesToRecognize, originalStrokes, angleDegrees,
-                        recognizer, ink, language, preContext, bounds, callback, null);
-                return;
+            // Unconstrained recognition: ML Kit natively handles handwriting at any slope or angle
+            RecognitionContext.Builder contextBuilder = RecognitionContext.builder();
+            if (!preContext.isEmpty()) {
+                contextBuilder.setPreContext(preContext);
             }
-
-            RecognitionContext.Builder contextBuilder = RecognitionContext.builder()
-                    .setWritingArea(new WritingArea(areaW, areaH))
-                    .setPreContext(preContext);
             RecognitionContext recognitionContext = contextBuilder.build();
             recognizer.recognize(ink, recognitionContext)
                     .addOnSuccessListener(result -> {
@@ -1028,37 +996,38 @@ public final class HandwritingRecognitionEngine {
             RectF origBounds = boundsOf(srcStrokes);
             if (origBounds == null) origBounds = bounds;
 
-            // Character font size is proportional to canonical horizontal line height (bounds.height())
-            float fontSize = Math.max(26f, Math.min(92f, bounds.height() * 0.85f));
+            // Character font size estimation that works naturally at any angle or incline
+            float estimatedLineHeight = bounds.height();
+            if (srcStrokes != null && !srcStrokes.isEmpty()) {
+                List<Float> strokeHeights = new ArrayList<>();
+                for (Stroke s : srcStrokes) {
+                    if (s != null && s.getBounds() != null && s.getBounds().height() > 4f) {
+                        strokeHeights.add(s.getBounds().height());
+                    }
+                }
+                if (!strokeHeights.isEmpty()) {
+                    Collections.sort(strokeHeights);
+                    float medianStrokeH = strokeHeights.get(strokeHeights.size() / 2);
+                    if (bounds.height() > medianStrokeH * 2.0f) {
+                        estimatedLineHeight = Math.max(medianStrokeH * 1.35f, 32f);
+                    }
+                }
+            }
+            float fontSize = Math.max(26f, Math.min(65f, estimatedLineHeight * 0.85f));
 
             float startX = origBounds.left;
             float startY = origBounds.bottom - 4f;
-
-            if (Math.abs(angleDegrees) >= 2.0f) {
-                float pivotX = origBounds.centerX();
-                float pivotY = origBounds.centerY();
-                float canonStartX = bounds.left;
-                float canonStartY = bounds.bottom - 4f;
-                double rad = Math.toRadians(angleDegrees);
-                float cos = (float) Math.cos(rad);
-                float sin = (float) Math.sin(rad);
-                float dx = canonStartX - pivotX;
-                float dy = canonStartY - pivotY;
-                startX = dx * cos - dy * sin + pivotX;
-                startY = dx * sin + dy * cos + pivotY;
-            }
 
             final float finalFontSize = fontSize;
             final String finalText = text;
             final String finalLang = lang;
             final RectF finalBounds = new RectF(origBounds);
-            final float finalAngle = angleDegrees;
-            final float finalStartX = startX;
-            final float finalStartY = startY;
+            final float finalStartX = origBounds.left;
+            final float finalStartY = origBounds.bottom - 4f;
 
             MAIN.post(() -> callback.onSuccess(
                     new RecognitionResult(finalText, finalLang, finalBounds, finalFontSize,
-                            rerankedAlternatives, finalAngle, finalStartX, finalStartY)));
+                            rerankedAlternatives, 0f, finalStartX, finalStartY)));
         } finally {
             recognizer.close();
         }
