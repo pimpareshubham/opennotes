@@ -32,8 +32,12 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/add_page"
+            android:textStyle="bold"
             app:icon="@drawable/ic_add"
-            style="@style/Widget.Material3.Button.TonalButton" />
+            app:iconTint="#FFFFFF"
+            android:textColor="#FFFFFF"
+            app:backgroundTint="@color/accent"
+            app:cornerRadius="20dp" />
     </LinearLayout>
 
 </LinearLayout>

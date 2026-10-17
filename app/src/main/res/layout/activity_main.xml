@@ -207,8 +207,12 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/new_notebook"
+                android:textStyle="bold"
                 android:layout_marginTop="20dp"
                 app:icon="@drawable/ic_add"
+                app:iconTint="#FFFFFF"
+                android:textColor="#FFFFFF"
+                app:backgroundTint="@color/accent"
                 app:cornerRadius="24dp" />
         </LinearLayout>
     </FrameLayout>

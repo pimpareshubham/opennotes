@@ -61,6 +61,7 @@ import org.opennotes.app.model.TextItem;
 import org.opennotes.app.util.ErrorDialog;
 import org.opennotes.app.util.HandwritingRecognitionEngine;
 import org.opennotes.app.util.TypefaceManager;
+import org.opennotes.app.util.ThemeUtils;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -1354,13 +1355,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         final String[] zoomOptions = {"10%", "20%", "25%", "50%", "75%", "100% (Fit)", "150%", "200%", "400%", "800%", "1600%"};
         final float[] zoomValues = {10f, 20f, 25f, 50f, 75f, 100f, 150f, 200f, 400f, 800f, 1600f};
 
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Select Zoom Level")
                 .setItems(zoomOptions, (dialog, which) -> {
                     canvasView.setZoom(zoomValues[which]);
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     private void showLassoStyleDialog() {
@@ -1718,7 +1719,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 ShapeItem.Type.TABLE
         };
 
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Select Shape")
                 .setItems(shapes, (dialog, which) -> {
                     canvasView.setShapeType(types[which]);
@@ -1726,12 +1727,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     updateToolUi(DrawingTool.SHAPE);
                     Toast.makeText(this, "Drag on canvas to draw " + shapes[which], Toast.LENGTH_SHORT).show();
                 })
-                .show();
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     private void showRulerAngleDialog() {
         final String[] angles = {"0° (Horizontal Snap)", "30° Angle Guide", "45° Diagonal Snap", "60° Angle Guide", "90° (Vertical Snap)", "120° Angle Guide", "150° Angle Guide", "Disable Ruler Assist"};
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Ruler & Angle Guide")
                 .setItems(angles, (dialog, which) -> {
                     if (which == 7) {
@@ -1746,7 +1748,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         Toast.makeText(this, "Ruler Angle Snap: " + angles[which], Toast.LENGTH_SHORT).show();
                     }
                 })
-                .show();
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     private void showExportDialog() {
@@ -1756,7 +1759,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 "📄 Save Notebook as PDF to Device",
                 "🖼️ Save Page as PNG Image to Device"
         };
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Export & Share Note")
                 .setItems(options, (dialog, which) -> {
                     saveCurrentPage();
@@ -1792,8 +1795,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         }
                     }
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     private void showExportSuccessDialog(File file, String mimeType) {
@@ -1817,7 +1820,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         textInfo.setTextIsSelectable(true);
         layout.addView(textInfo);
 
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Note Exported Successfully")
                 .setView(layout)
                 .setPositiveButton("Share", (d, w) -> shareFile(file, mimeType))
@@ -1829,8 +1832,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         Toast.makeText(this, "Path copied to clipboard!", Toast.LENGTH_SHORT).show();
                     }
                 })
-                .setNegativeButton("Open", (d, w) -> openFile(file, mimeType))
-                .show();
+                .setNegativeButton("Open", (d, w) -> openFile(file, mimeType));
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     private void openFile(File file, String mimeType) {
@@ -1892,6 +1895,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .setTitle("Pages (" + pages.size() + ")")
                 .setNegativeButton("Close", null)
                 .create();
+        ThemeUtils.styleDialog(dialog, this);
 
         rv.setAdapter(new RecyclerView.Adapter<PageViewHolder>() {
             @Override
@@ -1966,12 +1970,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     showAutoBeautifySettingsDialog();
                     return true;
                 case 6:
-                    new MaterialAlertDialogBuilder(this)
+                    MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                             .setTitle("Clear Canvas")
                             .setMessage("Are you sure you want to clear all strokes on this page?")
                             .setPositiveButton("Clear", (d, w) -> canvasView.clearAll())
-                            .setNegativeButton("Cancel", null)
-                            .show();
+                            .setNegativeButton("Cancel", null);
+                    ThemeUtils.showStyledDialog(builder, this);
                     return true;
                 case 7:
                     if (!canvasView.selectAllContent()) {
@@ -2033,41 +2037,45 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         Button btnTeach = new Button(this);
         btnTeach.setText("🎓 Teach Word or Cursive Style");
+        ThemeUtils.styleButton(btnTeach, this, true);
         btnTeach.setOnClickListener(v -> showInteractiveTeachDialog());
         layout.addView(btnTeach);
 
         Button btnExport = new Button(this);
         btnExport.setText("📤 Export Profile (.onhw)");
+        ThemeUtils.styleButton(btnExport, this, false);
         btnExport.setOnClickListener(v -> exportProfileLauncher.launch("my_handwriting_profile.onhw"));
         layout.addView(btnExport);
 
         Button btnImport = new Button(this);
         btnImport.setText("📥 Import Profile (.onhw)");
+        ThemeUtils.styleButton(btnImport, this, false);
         btnImport.setOnClickListener(v -> importProfileLauncher.launch("*/*"));
         layout.addView(btnImport);
 
         if (learnedCount > 0) {
             Button btnClear = new Button(this);
             btnClear.setText("🗑️ Reset Learned Styles");
+            ThemeUtils.styleDangerButton(btnClear, this);
             btnClear.setOnClickListener(v -> {
-                new MaterialAlertDialogBuilder(this)
+                MaterialAlertDialogBuilder resetBuilder = new MaterialAlertDialogBuilder(this)
                         .setTitle("Reset Handwriting Profile")
                         .setMessage("Clear all learned personal styles and prototypes?")
                         .setPositiveButton("Reset", (d, w) -> {
                             model.clearLearnedData();
                             Toast.makeText(this, "Handwriting profile reset to default", Toast.LENGTH_SHORT).show();
                         })
-                        .setNegativeButton("Cancel", null)
-                        .show();
+                        .setNegativeButton("Cancel", null);
+                ThemeUtils.showStyledDialog(resetBuilder, this);
             });
             layout.addView(btnClear);
         }
 
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder profileBuilder = new MaterialAlertDialogBuilder(this)
                 .setTitle("🎓 My Handwriting Training Engine")
                 .setView(layout)
-                .setPositiveButton("Done", null)
-                .show();
+                .setPositiveButton("Done", null);
+        ThemeUtils.showStyledDialog(profileBuilder, this);
     }
 
     public void showTeachHandwritingDialog(String initialRecognized, List<org.opennotes.app.model.Stroke> strokes) {
@@ -2103,7 +2111,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         editIntended.setHint("e.g. are, date, R, Rx, people");
         layout.addView(editIntended);
 
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("🎓 Teach Handwriting Style")
                 .setView(layout)
                 .setPositiveButton("Train Style", (dialog, which) -> {
@@ -2116,8 +2124,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         Toast.makeText(this, "Please enter the intended text", Toast.LENGTH_SHORT).show();
                     }
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     private void showPageSettingsMenu() {
@@ -2145,12 +2153,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     showAutoBeautifySettingsDialog();
                     return true;
                 case 5:
-                    new MaterialAlertDialogBuilder(this)
+                    MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                             .setTitle("Clear Canvas")
                             .setMessage("Are you sure you want to clear all strokes on this page?")
                             .setPositiveButton("Clear", (d, w) -> canvasView.clearAll())
-                            .setNegativeButton("Cancel", null)
-                            .show();
+                            .setNegativeButton("Cancel", null);
+                    ThemeUtils.showStyledDialog(builder, this);
                     return true;
             }
             return false;
@@ -2162,13 +2170,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         String[] templates = {"Blank", "Ruled Lines", "Grid Paper", "Dot Grid", "Cornell Notes"};
         PaperTemplate[] tpls = {PaperTemplate.BLANK, PaperTemplate.RULED, PaperTemplate.GRID, PaperTemplate.DOTS, PaperTemplate.CORNELL};
 
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Select Paper Template")
                 .setItems(templates, (dialog, which) -> {
                     canvasView.setPaperTemplate(tpls[which]);
                     saveCurrentPage();
                 })
-                .show();
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     private void showPageColorSelectionDialog() {
@@ -2292,6 +2301,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             Toast.makeText(this, "Page background color updated", Toast.LENGTH_SHORT).show();
         });
 
+        ThemeUtils.styleDialog(dialog, this);
         dialog.show();
     }
 
@@ -2497,7 +2507,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     "📤 Export Handwriting Profile (.onhw)",
                     "📥 Import Handwriting Profile (.onhw)"
             };
-            new MaterialAlertDialogBuilder(this)
+            MaterialAlertDialogBuilder optBuilder = new MaterialAlertDialogBuilder(this)
                     .setTitle("AI & Handwriting Options")
                     .setItems(options, (optDialog, which) -> {
                         switch (which) {
@@ -2515,9 +2525,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                                 break;
                         }
                     })
-                    .show();
+                    .setNegativeButton("Cancel", null);
+            ThemeUtils.showStyledDialog(optBuilder, this);
         });
 
+        ThemeUtils.styleDialog(dialog, this);
         dialog.show();
         if (layoutCustomFontList != null) {
             TextView loadingFonts = new TextView(this);
@@ -2779,7 +2791,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             }
         });
 
-        builder.show();
+        AlertDialog dialog = builder.create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
     }
 
     private void showInteractiveTeachDialog() {
@@ -2800,6 +2814,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setView(view)
                 .create();
+        ThemeUtils.styleDialog(dialog, this);
 
         UserHandwritingModel model = UserHandwritingModel.getInstance(this);
         int learnedCount = model.getLearnedCount();
@@ -2892,6 +2907,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         builder.setNegativeButton("Close", (d, w) -> stopAudioRecording());
 
         AlertDialog dialog = builder.create();
+        ThemeUtils.styleDialog(dialog, this);
         dialog.show();
 
         Button btnAction = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
@@ -2991,7 +3007,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         builder.setNeutralButton("+ New Layer", (dialog, which) -> {
             Toast.makeText(this, "Layer created • Multi-layer ink surface active", Toast.LENGTH_SHORT).show();
         });
-        builder.show();
+        AlertDialog dialog = builder.create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
     }
 
     private void triggerRealtimeAutoSave() {
@@ -3024,7 +3042,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     public void onRequestTextInput(float x, float y) {
         EditText input = new EditText(this);
         input.setHint("Type note text...");
-        new MaterialAlertDialogBuilder(this)
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Insert Text")
                 .setView(input)
                 .setPositiveButton("Insert", (d, w) -> {
@@ -3033,8 +3051,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         canvasView.addTextItem(text, x, y);
                     }
                 })
-                .setNegativeButton("Cancel", null)
-                .show();
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     @Override

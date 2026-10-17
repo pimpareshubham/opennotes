@@ -172,6 +172,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                         .setView(content)
                         .setNegativeButton("Run in background", null);
         androidx.appcompat.app.AlertDialog progressDialog = builder.create();
+        org.opennotes.app.util.ThemeUtils.styleDialog(progressDialog, this);
         progressDialog.show();
 
         Exception[] failures = new Exception[2];
@@ -473,6 +474,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setView(dialogView)
                 .create();
+        org.opennotes.app.util.ThemeUtils.styleDialog(dialog, this);
 
         btnCancel.setOnClickListener(v -> dialog.dismiss());
 
@@ -557,10 +559,10 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         input.setText(notebook.title);
         input.setSelectAllOnFocus(true);
 
-        new MaterialAlertDialogBuilder(this)
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.rename)
                 .setView(input)
-                .setPositiveButton("Save", (dialog, which) -> {
+                .setPositiveButton("Save", (d, which) -> {
                     String newTitle = input.getText().toString().trim();
                     if (!newTitle.isEmpty()) {
                         notebook.title = newTitle;
@@ -569,7 +571,9 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                     }
                 })
                 .setNegativeButton(R.string.cancel, null)
-                .show();
+                .create();
+        org.opennotes.app.util.ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
     }
 
     private void duplicateNotebook(Notebook notebook) {
@@ -605,16 +609,18 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     }
 
     private void showDeleteConfirmDialog(Notebook notebook) {
-        new MaterialAlertDialogBuilder(this)
+        androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.delete)
                 .setMessage("Delete \"" + notebook.title + "\"? All pages will be permanently deleted.")
-                .setPositiveButton(R.string.delete, (dialog, which) -> {
+                .setPositiveButton(R.string.delete, (d, which) -> {
                     notebookIoExecutor.execute(() -> dbHelper.deleteNotebook(notebook.id));
                     loadNotebooks();
                     Toast.makeText(this, "Notebook deleted", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton(R.string.cancel, null)
-                .show();
+                .create();
+        org.opennotes.app.util.ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
     }
 
     @Override

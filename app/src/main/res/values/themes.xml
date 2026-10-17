@@ -2,28 +2,75 @@
 <resources>
     <!-- Base application theme -->
     <style name="Theme.OpenNotes" parent="Theme.Material3.DayNight.NoActionBar">
-        <!-- Primary brand color -->
-        <item name="colorPrimary">@color/primary</item>
+        <!-- Primary brand action color (Sky blue / vibrant StarNote cyan) -->
+        <item name="colorPrimary">@color/accent</item>
         <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorPrimaryContainer">@color/surface_variant</item>
-        <item name="colorOnPrimaryContainer">@color/text_primary</item>
+        <item name="colorPrimaryContainer">@color/accent_light</item>
+        <item name="colorOnPrimaryContainer">@color/accent</item>
 
         <!-- Secondary brand color -->
-        <item name="colorSecondary">@color/accent</item>
+        <item name="colorSecondary">@color/accent_blue</item>
         <item name="colorOnSecondary">#FFFFFF</item>
-        <item name="colorSecondaryContainer">@color/accent_light</item>
-        <item name="colorOnSecondaryContainer">@color/primary_dark</item>
+        <item name="colorSecondaryContainer">@color/surface_variant</item>
+        <item name="colorOnSecondaryContainer">@color/text_primary</item>
 
-        <!-- Status bar and navigation bar -->
-        <item name="android:statusBarColor">@color/surface</item>
-        <item name="android:windowLightStatusBar">true</item>
-        <item name="android:navigationBarColor">@color/surface</item>
-        <item name="android:windowLightNavigationBar">true</item>
-
+        <!-- Surface & Backgrounds -->
         <item name="android:windowBackground">@color/window_background</item>
+        <item name="colorSurface">@color/surface</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorSurfaceVariant">@color/surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorOutline">@color/divider</item>
+
+        <!-- Dialog Styling for MaterialAlertDialogBuilder and AlertDialog -->
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.OpenNotes.MaterialAlertDialog</item>
+        <item name="alertDialogTheme">@style/ThemeOverlay.OpenNotes.MaterialAlertDialog</item>
+
+        <!-- Status bar and navigation bar (light icons on dark background) -->
+        <item name="android:statusBarColor">@color/surface</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:navigationBarColor">@color/surface</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 
     <style name="Theme.OpenNotes.Editor" parent="Theme.OpenNotes">
         <item name="android:windowBackground">@color/surface_variant</item>
+    </style>
+
+    <!-- Material Alert Dialog Theme -->
+    <style name="ThemeOverlay.OpenNotes.MaterialAlertDialog" parent="ThemeOverlay.Material3.MaterialAlertDialog">
+        <item name="colorSurface">@color/surface_card</item>
+        <item name="colorOnSurface">@color/text_primary</item>
+        <item name="colorOnSurfaceVariant">@color/text_secondary</item>
+        <item name="colorPrimary">@color/accent</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+
+        <!-- High-contrast dialog button styles -->
+        <item name="buttonBarPositiveButtonStyle">@style/Widget.OpenNotes.DialogButton.Positive</item>
+        <item name="buttonBarNegativeButtonStyle">@style/Widget.OpenNotes.DialogButton.Negative</item>
+        <item name="buttonBarNeutralButtonStyle">@style/Widget.OpenNotes.DialogButton.Neutral</item>
+        <item name="android:buttonBarPositiveButtonStyle">@style/Widget.OpenNotes.DialogButton.Positive</item>
+        <item name="android:buttonBarNegativeButtonStyle">@style/Widget.OpenNotes.DialogButton.Negative</item>
+        <item name="android:buttonBarNeutralButtonStyle">@style/Widget.OpenNotes.DialogButton.Neutral</item>
+    </style>
+
+    <style name="Widget.OpenNotes.DialogButton.Positive" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/accent</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textAllCaps">false</item>
+    </style>
+
+    <style name="Widget.OpenNotes.DialogButton.Negative" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/text_primary</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textAllCaps">false</item>
+    </style>
+
+    <style name="Widget.OpenNotes.DialogButton.Neutral" parent="Widget.Material3.Button.TextButton.Dialog">
+        <item name="android:textColor">@color/text_secondary</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textAllCaps">false</item>
     </style>
 </resources>

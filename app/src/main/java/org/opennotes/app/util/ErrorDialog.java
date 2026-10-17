@@ -12,6 +12,7 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.appcompat.app.AlertDialog;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 
 /** Presents complete error details in a scrollable, selectable, copyable dialog. */
@@ -46,10 +47,10 @@ public final class ErrorDialog {
         scroll.addView(text, new ScrollView.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        new MaterialAlertDialogBuilder(context)
+        AlertDialog dialog = new MaterialAlertDialogBuilder(context)
                 .setTitle(title)
                 .setView(scroll, dp(context, 8), dp(context, 4), dp(context, 8), dp(context, 4))
-                .setPositiveButton("Copy details", (dialog, which) -> {
+                .setPositiveButton("Copy details", (dialog1, which) -> {
                     ClipboardManager clipboard = (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
                     if (clipboard != null) {
                         clipboard.setPrimaryClip(ClipData.newPlainText(title, completeDetails));
@@ -57,7 +58,9 @@ public final class ErrorDialog {
                     }
                 })
                 .setNegativeButton("Close", null)
-                .show();
+                .create();
+        ThemeUtils.styleDialog(dialog, context);
+        dialog.show();
     }
 
     private static int dp(Context context, int value) {

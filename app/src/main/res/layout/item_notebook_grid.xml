@@ -53,6 +53,7 @@
                 android:layout_margin="8dp"
                 android:padding="6dp"
                 android:src="@drawable/ic_star_outline"
+                app:tint="@color/text_secondary"
                 android:background="?selectableItemBackgroundBorderless" />
         </FrameLayout>
 
@@ -99,6 +100,7 @@
                 android:layout_height="36dp"
                 android:padding="6dp"
                 android:src="@drawable/ic_more_vert"
+                app:tint="@color/text_secondary"
                 android:background="?selectableItemBackgroundBorderless" />
         </LinearLayout>
 

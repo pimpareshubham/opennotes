@@ -235,7 +235,8 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Cancel"
-                android:textColor="@color/text_secondary" />
+                android:textColor="@color/text_primary"
+                android:textStyle="bold" />
 
             <Button
                 android:id="@+id/btnTeachSave"
@@ -244,6 +245,7 @@
                 android:layout_height="wrap_content"
                 android:text="🎓 Teach &amp; Save"
                 android:textColor="#FFFFFF"
+                android:textStyle="bold"
                 app:backgroundTint="#10B981"
                 android:layout_marginStart="8dp" />
         </LinearLayout>

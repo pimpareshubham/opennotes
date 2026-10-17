@@ -350,7 +350,8 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="Close"
-            android:textColor="@color/text_secondary" />
+            android:textStyle="bold"
+            android:textColor="@color/text_primary" />
 
         <Button
             android:id="@+id/btnApplyBeautifyDialog"
@@ -358,7 +359,10 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="8dp"
-            android:text="Save &amp; Apply" />
+            android:text="Save &amp; Apply"
+            android:textStyle="bold"
+            android:textColor="#FFFFFF"
+            app:backgroundTint="@color/accent" />
     </LinearLayout>
 
 </LinearLayout>

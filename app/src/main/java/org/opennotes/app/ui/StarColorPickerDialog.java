@@ -199,6 +199,8 @@ public class StarColorPickerDialog {
                 .setNegativeButton("Cancel", null)
                 .create();
 
+        org.opennotes.app.util.ThemeUtils.styleDialog(dialog, context);
+
         // Quick Swatches in Palette Tab
         int[] quicks = {
                 0xFF111827, 0xFFFFFFFF, 0xFF38BDF8, 0xFF3B82F6, 0xFF10B981,

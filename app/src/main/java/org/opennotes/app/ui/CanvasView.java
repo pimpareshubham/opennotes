@@ -1033,18 +1033,22 @@ public class CanvasView extends View {
             if (line.result.alternatives.size() > 1) {
                 android.widget.Button alternatives = new android.widget.Button(getContext());
                 alternatives.setText("Suggestions");
+                org.opennotes.app.util.ThemeUtils.styleButton(alternatives, getContext(), false);
                 alternatives.setOnClickListener(view -> {
                     CharSequence[] options = line.result.alternatives.toArray(new String[0]);
-                    new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
-                            .setTitle("Suggestions for this line")
-                            .setItems(options, (dialog, which) -> editor.setText(options[which]))
-                            .show();
+                    com.google.android.material.dialog.MaterialAlertDialogBuilder sugBuilder =
+                            new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
+                                    .setTitle("Suggestions for this line")
+                                    .setItems(options, (dialog, which) -> editor.setText(options[which]))
+                                    .setNegativeButton("Cancel", null);
+                    org.opennotes.app.util.ThemeUtils.showStyledDialog(sugBuilder, getContext());
                 });
                 btnRow.addView(alternatives);
             }
 
             android.widget.Button btnTeach = new android.widget.Button(getContext());
             btnTeach.setText("🎓 Teach Style");
+            org.opennotes.app.util.ThemeUtils.styleButton(btnTeach, getContext(), true);
             btnTeach.setOnClickListener(view -> {
                 String intended = editor.getText().toString().trim();
                 if (!intended.isEmpty()) {
@@ -1065,11 +1069,11 @@ public class CanvasView extends View {
         scrollView.setLayoutParams(new android.view.ViewGroup.LayoutParams(
                 android.view.ViewGroup.LayoutParams.MATCH_PARENT, dp(440)));
 
-        new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
+        androidx.appcompat.app.AlertDialog dialog = new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
                 .setTitle("Review handwriting conversion")
                 .setView(scrollView)
                 .setNegativeButton("Keep handwriting", null)
-                .setPositiveButton("Convert", (dialog, which) -> {
+                .setPositiveButton("Convert", (d, which) -> {
                     List<String> reviewedText = new ArrayList<>();
                     for (int i = 0; i < editors.size(); i++) {
                         String edited = editors.get(i).getText().toString().trim();
@@ -1084,7 +1088,9 @@ public class CanvasView extends View {
                     }
                     applyRecognizedText(requestedPage, lines, textColor, reviewedText);
                 })
-                .show();
+                .create();
+        org.opennotes.app.util.ThemeUtils.styleDialog(dialog, getContext());
+        dialog.show();
     }
 
     private int dp(float value) {
