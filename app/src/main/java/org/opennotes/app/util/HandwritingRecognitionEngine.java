@@ -17,7 +17,6 @@ import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizer;
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizerOptions;
 import com.google.mlkit.vision.digitalink.recognition.Ink;
 import com.google.mlkit.vision.digitalink.recognition.RecognitionContext;
-import com.google.mlkit.vision.digitalink.recognition.WritingArea;
 
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.Stroke;
@@ -314,15 +313,6 @@ public final class HandwritingRecognitionEngine {
                                         String preferredLanguage, String preContext,
                                         Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
-        if (org.opennotes.app.ai.SemanticStrokeClusterer.isMultiLine(strokes)) {
-            List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines =
-                    org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(strokes);
-            if (lines.size() > 1) {
-                recognizeMultiLineStatements(context, lines, 0, preferredLanguage, preContext,
-                        new StringBuilder(), new ArrayList<>(), new RectF(), callback);
-                return;
-            }
-        }
         recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, false, callback);
     }
 
@@ -336,15 +326,6 @@ public final class HandwritingRecognitionEngine {
                                                                String preContext,
                                                                Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
-        if (org.opennotes.app.ai.SemanticStrokeClusterer.isMultiLine(strokes)) {
-            List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines =
-                    org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(strokes);
-            if (lines.size() > 1) {
-                recognizeMultiLineStatements(context, lines, 0, preferredLanguage, preContext,
-                        new StringBuilder(), new ArrayList<>(), new RectF(), callback);
-                return;
-            }
-        }
         recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, true, callback);
     }
 
@@ -358,25 +339,22 @@ public final class HandwritingRecognitionEngine {
         final String contextText = preContext == null ? "" : preContext;
 
         final float writingAngle = InkNormalizer.detectWritingAngleDegrees(strokes);
-        final boolean isSlanted = Math.abs(writingAngle) >= 3.5f;
 
-        List<Stroke> primaryStrokes = isSlanted
-                ? transformedStrokeCopies(strokes, writingAngle, false, false)
-                : strokes;
-
-        executeSingleRecognitionPass(context, primaryStrokes, strokes, 0f, preferredLanguage, contextText, new Callback() {
+        // PRIMARY PASS: Always evaluate raw, unrotated handwriting first!
+        // Google's Digital Ink ML models are trained on natural human handwriting with natural slant.
+        executeSingleRecognitionPass(context, strokes, strokes, 0f, preferredLanguage, contextText, new Callback() {
             @Override
             public void onSuccess(RecognitionResult primaryResult) {
                 if (primaryResult != null && !primaryResult.text.trim().isEmpty()) {
                     if (includeReviewSuggestions && primaryResult.alternatives.size() <= 1) {
                         tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                                primaryResult, isSlanted, writingAngle, callback);
+                                primaryResult, false, writingAngle, callback);
                     } else {
                         callback.onSuccess(primaryResult);
                     }
                 } else {
                     tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                            null, isSlanted, writingAngle, callback);
+                            null, false, writingAngle, callback);
                 }
             }
 
@@ -387,68 +365,7 @@ public final class HandwritingRecognitionEngine {
                     return;
                 }
                 tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                        null, isSlanted, writingAngle, callback);
-            }
-        });
-    }
-
-    private static void recognizeMultiLineStatements(Context context,
-                                                     List<SemanticStrokeClusterer.StrokeLine> lines,
-                                                     int index,
-                                                     String preferredLanguage,
-                                                     String preContext,
-                                                     StringBuilder combinedText,
-                                                     List<String> combinedAlternatives,
-                                                     RectF combinedBounds,
-                                                     Callback callback) {
-        if (index >= lines.size()) {
-            String text = combinedText.toString().trim();
-            if (text.isEmpty()) {
-                callback.onFailure(new IllegalArgumentException("No text could be deciphered from handwriting lines."));
-                return;
-            }
-            float lineCount = Math.max(1f, (float) lines.size());
-            float fontSize = Math.max(26f, Math.min(92f, (combinedBounds.height() / lineCount) * 0.85f));
-            String lang = isLatin(preferredLanguage) ? "ENGLISH"
-                    : ("HINDI".equalsIgnoreCase(preferredLanguage) ? "HINDI" : "MARATHI");
-            final String finalText = text;
-            final String finalLang = lang;
-            final float finalFontSize = fontSize;
-            MAIN.post(() -> callback.onSuccess(
-                    new RecognitionResult(finalText, finalLang, new RectF(combinedBounds), finalFontSize, combinedAlternatives, 0f)));
-            return;
-        }
-
-        SemanticStrokeClusterer.StrokeLine line = lines.get(index);
-        recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, false, new Callback() {
-            @Override
-            public void onSuccess(RecognitionResult result) {
-                if (combinedText.length() > 0) combinedText.append("\n");
-                combinedText.append(result.text);
-
-                if (combinedBounds.isEmpty()) {
-                    combinedBounds.set(result.bounds);
-                } else {
-                    combinedBounds.union(result.bounds);
-                }
-
-                for (String alt : result.alternatives) {
-                    if (!combinedAlternatives.contains(alt)) combinedAlternatives.add(alt);
-                }
-
-                recognizeMultiLineStatements(context, lines, index + 1, preferredLanguage,
-                        result.text, combinedText, combinedAlternatives, combinedBounds, callback);
-            }
-
-            @Override
-            public void onFailure(Exception error) {
-                // If multi-line decomposition fails on any subline, fall back to single-pass block recognition
-                // with full multi-angle deskewing, hook trimming, and cross-language waterfall
-                List<Stroke> allStrokes = new ArrayList<>();
-                for (SemanticStrokeClusterer.StrokeLine l : lines) {
-                    if (l != null && l.strokes != null) allStrokes.addAll(l.strokes);
-                }
-                recognizeMultiHypothesis(context, allStrokes, preferredLanguage, preContext, false, callback);
+                        null, false, writingAngle, callback);
             }
         });
     }
@@ -473,52 +390,29 @@ public final class HandwritingRecognitionEngine {
                                                  Callback callback) {
         List<AngleHypothesis> hypotheses = new ArrayList<>();
 
-        if (primaryWasDeskewed) {
-            // Deskewed pass was primary; try raw original strokes as fallback
-            hypotheses.add(new AngleHypothesis(originalStrokes, 0f));
-            // Try subtle angle variations around the detected writing angle
+        if (Math.abs(writingAngle) >= 4.0f) {
             hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, writingAngle + 12f, false, false), writingAngle + 12f));
+                    transformedStrokeCopies(originalStrokes, writingAngle, false, false), writingAngle));
+        }
+        // Test common tilt variations: +15°, -15°, +30°, -30°, +45°, -45°, +90°, -90°
+        hypotheses.add(new AngleHypothesis(
+                transformedStrokeCopies(originalStrokes, 15f, false, false), 15f));
+        hypotheses.add(new AngleHypothesis(
+                transformedStrokeCopies(originalStrokes, -15f, false, false), -15f));
+        hypotheses.add(new AngleHypothesis(
+                transformedStrokeCopies(originalStrokes, 30f, false, false), 30f));
+        hypotheses.add(new AngleHypothesis(
+                transformedStrokeCopies(originalStrokes, -30f, false, false), -30f));
+        hypotheses.add(new AngleHypothesis(
+                transformedStrokeCopies(originalStrokes, 45f, false, false), 45f));
+        hypotheses.add(new AngleHypothesis(
+                transformedStrokeCopies(originalStrokes, -45f, false, false), -45f));
+        RectF bounds = boundsOf(originalStrokes);
+        if (bounds != null && bounds.height() > bounds.width() * 1.5f) {
             hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, writingAngle - 12f, false, false), writingAngle - 12f));
+                    transformedStrokeCopies(originalStrokes, 90f, false, false), 90f));
             hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, writingAngle + 25f, false, false), writingAngle + 25f));
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, writingAngle - 25f, false, false), writingAngle - 25f));
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, writingAngle + 180f, false, false), writingAngle + 180f));
-            float[] commonAngles = new float[]{-15f, 15f, -30f, 30f, -45f, 45f};
-            for (float ca : commonAngles) {
-                if (Math.abs(ca - writingAngle) > 10f) {
-                    hypotheses.add(new AngleHypothesis(
-                            transformedStrokeCopies(originalStrokes, ca, false, false), ca));
-                }
-            }
-        } else {
-            if (Math.abs(writingAngle) > 0.5f) {
-                hypotheses.add(new AngleHypothesis(
-                        transformedStrokeCopies(originalStrokes, writingAngle, false, false), writingAngle));
-            }
-            // Test common tilt variations: +15°, -15°, +30°, -30°, +45°, -45°, +90°, -90°
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, 15f, false, false), 15f));
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, -15f, false, false), -15f));
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, 30f, false, false), 30f));
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, -30f, false, false), -30f));
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, 45f, false, false), 45f));
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, -45f, false, false), -45f));
-            RectF bounds = boundsOf(originalStrokes);
-            if (bounds != null && bounds.height() > bounds.width() * 1.5f) {
-                hypotheses.add(new AngleHypothesis(
-                        transformedStrokeCopies(originalStrokes, 90f, false, false), 90f));
-                hypotheses.add(new AngleHypothesis(
-                        transformedStrokeCopies(originalStrokes, -90f, false, false), -90f));
-            }
+                    transformedStrokeCopies(originalStrokes, -90f, false, false), -90f));
         }
 
         runWaterfall(context, hypotheses, originalStrokes, 0, language, preContext, primaryResult, callback);
@@ -543,11 +437,7 @@ public final class HandwritingRecognitionEngine {
                     DigitalInkRecognitionModel fbModel = DigitalInkRecognitionModel.builder(fbId).build();
                     RemoteModelManager.getInstance().isModelDownloaded(fbModel).addOnCompleteListener(t -> {
                         if (t.isSuccessful() && Boolean.TRUE.equals(t.getResult())) {
-                            float fallbackAngle = InkNormalizer.detectWritingAngleDegrees(originalStrokes);
-                            List<Stroke> fbStrokes = Math.abs(fallbackAngle) >= 3.5f
-                                    ? transformedStrokeCopies(originalStrokes, fallbackAngle, false, false)
-                                    : originalStrokes;
-                            executeSingleRecognitionPass(context, fbStrokes, originalStrokes, fallbackAngle, fallbackLang, "", callback);
+                            executeSingleRecognitionPass(context, originalStrokes, originalStrokes, 0f, fallbackLang, "", callback);
                         } else {
                             callback.onFailure(new IllegalArgumentException(
                                     "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
@@ -964,17 +854,8 @@ public final class HandwritingRecognitionEngine {
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(16).build());
 
-            float areaW = scaledW + padX * 2f;
-            float areaH = scaledH + padY * 2f;
-            boolean isBigLine = bounds.width() > 400f || bounds.width() > bounds.height() * 2.8f;
-            if (isBigLine) {
-                recognizeWithoutWritingArea(context, strokesToRecognize, originalStrokes, angleDegrees,
-                        recognizer, ink, language, preContext, bounds, callback, null);
-                return;
-            }
-
-            RecognitionContext.Builder contextBuilder = RecognitionContext.builder()
-                    .setWritingArea(new WritingArea(areaW, areaH));
+            // Unconstrained recognition: ML Kit natively handles handwriting at any slope or aspect
+            RecognitionContext.Builder contextBuilder = RecognitionContext.builder();
             if (!preContext.isEmpty()) {
                 contextBuilder.setPreContext(preContext);
             }
@@ -983,47 +864,9 @@ public final class HandwritingRecognitionEngine {
                     .addOnSuccessListener(result -> {
                         String text = firstCandidate(result);
                         if (text.trim().isEmpty()) {
-                            recognizeWithoutWritingArea(context, strokesToRecognize, originalStrokes, angleDegrees,
-                                    recognizer, ink, language, preContext, bounds, callback, null);
-                        } else {
-                            completeRecognition(context, strokesToRecognize, originalStrokes, angleDegrees,
-                                    recognizer, result, language, preContext, bounds, callback);
-                        }
-                    })
-                    .addOnFailureListener(error -> recognizeWithoutWritingArea(
-                            context, strokesToRecognize, originalStrokes, angleDegrees,
-                            recognizer, ink, language, preContext, bounds, callback, error));
-        } catch (Exception error) {
-            postFailure(callback, error);
-        }
-    }
-
-    /** Retry without the optional writing-area hint, which may be a poor fit for selected ink. */
-    private static void recognizeWithoutWritingArea(Context context,
-                                                    List<Stroke> strokesToRecognize,
-                                                    List<Stroke> originalStrokes,
-                                                    float angleDegrees,
-                                                    DigitalInkRecognizer recognizer, Ink ink,
-                                                    String language, String preContext, RectF bounds,
-                                                    Callback callback, Exception firstError) {
-        try {
-            Task<com.google.mlkit.vision.digitalink.common.RecognitionResult> retryTask;
-            if (preContext.isEmpty()) {
-                retryTask = recognizer.recognize(ink);
-            } else {
-                RecognitionContext recContext = RecognitionContext.builder()
-                        .setPreContext(preContext).build();
-                retryTask = recognizer.recognize(ink, recContext);
-            }
-            retryTask
-                    .addOnSuccessListener(result -> {
-                        String text = firstCandidate(result);
-                        if (text.trim().isEmpty()) {
                             recognizer.close();
-                            IllegalArgumentException error = new IllegalArgumentException(
-                                     "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink.");
-                            if (firstError != null) error.addSuppressed(firstError);
-                            postFailure(callback, error);
+                            postFailure(callback, new IllegalArgumentException(
+                                     "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
                         } else {
                             completeRecognition(context, strokesToRecognize, originalStrokes, angleDegrees,
                                     recognizer, result, language, preContext, bounds, callback);
@@ -1031,12 +874,9 @@ public final class HandwritingRecognitionEngine {
                     })
                     .addOnFailureListener(error -> {
                         recognizer.close();
-                        if (firstError != null) error.addSuppressed(firstError);
                         postFailure(callback, error);
                     });
         } catch (Exception error) {
-            recognizer.close();
-            if (firstError != null) error.addSuppressed(firstError);
             postFailure(callback, error);
         }
     }
