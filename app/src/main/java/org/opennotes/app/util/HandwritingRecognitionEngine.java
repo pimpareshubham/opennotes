@@ -1021,6 +1021,9 @@ public final class HandwritingRecognitionEngine {
 
             String lang = isLatin(language) ? "ENGLISH"
                     : ("HINDI".equalsIgnoreCase(language) ? "HINDI" : "MARATHI");
+            if (text.matches("^[0-9\\s.,\\-+]+$") || text.matches("^[a-zA-Z0-9\\s.,\\-+!?'\"()]+$")) {
+                lang = "ENGLISH";
+            }
 
             List<Stroke> srcStrokes = (originalStrokes != null && !originalStrokes.isEmpty())
                     ? originalStrokes : strokesToRecognize;
@@ -1270,6 +1273,37 @@ public final class HandwritingRecognitionEngine {
         // Devanagari (Marathi/Hindi) linguistic and geometric feature matching
         if (InkNormalizer.isIndicLanguage(language)) {
             pool = rerankDevanagariCandidates(strokes, pool);
+
+            // Shirorekha check: in Marathi/Hindi handwriting, words have a shirorekha (top headline).
+            // Numbers (0-9) and Latin words do not have a shirorekha.
+            // If the user wrote digits without a shirorekha, promote numeric candidate over accidental Devanagari dictionary words!
+            boolean hasShirorekha = false;
+            if (strokes != null && !strokes.isEmpty()) {
+                RectF b = boundsOf(strokes);
+                if (b != null && b.width() > 10f) {
+                    float totalW = b.width();
+                    for (Stroke s : strokes) {
+                        if (s == null) continue;
+                        RectF sb = s.getBounds();
+                        if (sb != null && (sb.width() > totalW * 0.35f && (sb.width() / Math.max(1f, sb.height())) >= 2.2f)) {
+                            hasShirorekha = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (!hasShirorekha && !pool.isEmpty()) {
+                for (int i = 0; i < pool.size(); i++) {
+                    String c = pool.get(i).trim();
+                    if (!c.isEmpty() && c.matches("^[0-9\\s.,\\-+]+$") && pool.get(0).matches(".*[\\u0900-\\u097F].*")) {
+                        String numCand = pool.remove(i);
+                        pool.add(0, numCand);
+                        break;
+                    }
+                }
+            }
+
             UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
             if (userModel != null) {
                 for (String cand : alternatives) {

@@ -233,17 +233,20 @@ public class SemanticStrokeClusterer {
 
                 if (isDiacritic) {
                     // Vertical diacritic / accent / matra / shirorekha attached to character body
-                    if (hOverlap >= 0.20f * minW
+                    if (hOverlap >= 0.15f * minW
                             || (s1.minX >= s2.minX - 15f && s1.maxX <= s2.maxX + 15f)
                             || (s2.minX >= s1.minX - 15f && s2.maxX <= s1.maxX + 15f)) {
-                        if (vGap <= 0.55f * medianH || cyDist <= 0.85f * medianH) {
+                        if (vGap <= 0.35f * medianH && cyDist <= 0.70f * medianH) {
                             isSameLine = true;
                         }
                     }
                 } else {
-                    // Both are main character strokes: they must be on the same horizontal baseline!
-                    if (cyDist <= 0.42f * medianH) {
-                        if (vOverlap >= 0.20f * minH || vGap <= 0.25f * medianH) {
+                    // Main character strokes on the same line:
+                    // Consecutive characters in words have substantial vertical overlap and horizontal proximity
+                    if (hGap <= 2.5f * medianH) {
+                        if (vOverlap >= 0.15f * minH && cyDist <= 0.85f * medianH) {
+                            isSameLine = true;
+                        } else if (hGap <= 1.4f * medianH && cyDist <= 0.75f * medianH) {
                             isSameLine = true;
                         }
                     }
@@ -280,9 +283,12 @@ public class SemanticStrokeClusterer {
                 for (int i = 0; i < clusterList.size(); i++) {
                     List<ProjectedStroke> c1 = clusterList.get(i);
                     float c1Top = Float.MAX_VALUE, c1Bottom = -Float.MAX_VALUE, sumCy1 = 0f;
+                    float c1Left = Float.MAX_VALUE, c1Right = -Float.MAX_VALUE;
                     for (ProjectedStroke s : c1) {
                         c1Top = Math.min(c1Top, s.minY);
                         c1Bottom = Math.max(c1Bottom, s.maxY);
+                        c1Left = Math.min(c1Left, s.minX);
+                        c1Right = Math.max(c1Right, s.maxX);
                         sumCy1 += s.cy;
                     }
                     float c1Cy = sumCy1 / c1.size();
@@ -291,9 +297,12 @@ public class SemanticStrokeClusterer {
                     for (int j = i + 1; j < clusterList.size(); j++) {
                         List<ProjectedStroke> c2 = clusterList.get(j);
                         float c2Top = Float.MAX_VALUE, c2Bottom = -Float.MAX_VALUE, sumCy2 = 0f;
+                        float c2Left = Float.MAX_VALUE, c2Right = -Float.MAX_VALUE;
                         for (ProjectedStroke s : c2) {
                             c2Top = Math.min(c2Top, s.minY);
                             c2Bottom = Math.max(c2Bottom, s.maxY);
+                            c2Left = Math.min(c2Left, s.minX);
+                            c2Right = Math.max(c2Right, s.maxX);
                             sumCy2 += s.cy;
                         }
                         float c2Cy = sumCy2 / c2.size();
@@ -302,8 +311,10 @@ public class SemanticStrokeClusterer {
                         float cyDiff = Math.abs(c1Cy - c2Cy);
                         float vOverlap = Math.max(0f, Math.min(c1Bottom, c2Bottom) - Math.max(c1Top, c2Top));
                         float minClusterH = Math.min(c1H, c2H);
+                        float cHGap = Math.max(0f, Math.max(c1Left, c2Left) - Math.min(c1Right, c2Right));
 
-                        if (cyDiff <= 0.40f * medianH && (vOverlap >= 0.25f * minClusterH || cyDiff <= 0.30f * medianH)) {
+                        if (cHGap <= 2.5f * medianH && cyDiff <= 0.50f * medianH
+                                && (vOverlap >= 0.20f * minClusterH || cyDiff <= 0.35f * medianH)) {
                             c1.addAll(c2);
                             clusterList.remove(j);
                             merged = true;
@@ -342,7 +353,7 @@ public class SemanticStrokeClusterer {
                             bestIdx = k;
                         }
                     }
-                    if (bestIdx != -1 && minDistance <= 1.0f * medianH) {
+                    if (bestIdx != -1 && minDistance <= 1.2f * medianH) {
                         clusterList.get(bestIdx).addAll(cluster);
                         clusterList.remove(i);
                     }
