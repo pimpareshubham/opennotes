@@ -15,12 +15,20 @@ public class Stroke {
     public float width;
     public DrawingTool tool;
 
+    public enum LineStyle {
+        SOLID,
+        DASH,
+        DOT
+    }
+    public LineStyle lineStyle = LineStyle.SOLID;
+
     public Stroke(int color, float width, DrawingTool tool) {
         this.points = new ArrayList<>();
         this.recognitionPoints = new ArrayList<>();
         this.color = color;
         this.width = width;
         this.tool = tool;
+        this.lineStyle = LineStyle.SOLID;
     }
 
     private transient android.graphics.Path cachedPath;
@@ -376,6 +384,7 @@ public class Stroke {
         obj.put("color", color);
         obj.put("width", (double) width);
         obj.put("tool", tool.name());
+        obj.put("lineStyle", lineStyle != null ? lineStyle.name() : LineStyle.SOLID.name());
 
         JSONArray arr = new JSONArray();
         for (DrawingPoint pt : points) {
@@ -402,6 +411,12 @@ public class Stroke {
         }
 
         Stroke stroke = new Stroke(color, width, tool);
+        String lineStyleName = obj.optString("lineStyle", LineStyle.SOLID.name());
+        try {
+            stroke.lineStyle = LineStyle.valueOf(lineStyleName);
+        } catch (Exception e) {
+            stroke.lineStyle = LineStyle.SOLID;
+        }
         JSONArray arr = obj.optJSONArray("points");
         if (arr != null) {
             for (int i = 0; i < arr.length(); i++) {

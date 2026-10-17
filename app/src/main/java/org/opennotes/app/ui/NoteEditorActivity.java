@@ -1350,18 +1350,281 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showLassoStyleDialog() {
-        final String[] widths = canvasView.hasSelectedText()
-                ? new String[]{"Small (12)", "Normal (24)", "Medium (40)", "Large (64)", "Extra large (96)"}
-                : new String[]{"1 mm (Fine)", "2 mm (Normal)", "3 mm (Medium)", "5 mm (Thick)", "8 mm (Bold)"};
-        final float[] vals = {3f, 6f, 10f, 16f, 24f};
+        if (canvasView == null || !canvasView.hasSelection()) return;
 
-        new MaterialAlertDialogBuilder(this)
-                .setTitle(canvasView.hasSelectedText() ? "Change Ink Width / Text Size" : "Change Stroke Width")
-                .setItems(widths, (dialog, which) -> {
-                    canvasView.setSelectionStrokeWidth(vals[which]);
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+        View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_starnote_style, null);
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(dialogView)
+                .create();
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setBackgroundDrawableResource(android.R.color.transparent);
+        }
+
+        ImageView btnClose = dialogView.findViewById(R.id.btnCloseStyleDialog);
+        btnClose.setOnClickListener(v -> dialog.dismiss());
+
+        boolean hasText = canvasView.hasSelectedText();
+        boolean hasShapes = canvasView.hasSelectedShape();
+        boolean hasStrokes = canvasView.hasSelectedHandwriting();
+
+        // Section visibility
+        View groupLineStyle = dialogView.findViewById(R.id.groupLineStyle);
+        View groupTextOptions = dialogView.findViewById(R.id.groupTextOptions);
+        View groupShapeFill = dialogView.findViewById(R.id.groupShapeFill);
+        TextView textThicknessTitle = dialogView.findViewById(R.id.textThicknessTitle);
+        TextView textThicknessValue = dialogView.findViewById(R.id.textThicknessValue);
+        SeekBar seekThickness = dialogView.findViewById(R.id.seekThickness);
+
+        if (hasText && !hasStrokes && !hasShapes) {
+            groupLineStyle.setVisibility(View.GONE);
+            groupTextOptions.setVisibility(View.VISIBLE);
+            groupShapeFill.setVisibility(View.GONE);
+            textThicknessTitle.setText("Text Size");
+        } else {
+            groupLineStyle.setVisibility(View.VISIBLE);
+            groupTextOptions.setVisibility(hasText ? View.VISIBLE : View.GONE);
+            groupShapeFill.setVisibility(hasShapes ? View.VISIBLE : View.GONE);
+            textThicknessTitle.setText(hasText ? "Ink Width / Text Size" : "Thickness");
+        }
+
+        // 1. Line Style (Solid, Dash, Dot)
+        View btnSolid = dialogView.findViewById(R.id.btnStyleSolid);
+        View btnDash = dialogView.findViewById(R.id.btnStyleDash);
+        View btnDot = dialogView.findViewById(R.id.btnStyleDot);
+
+        Stroke.LineStyle currentStyle = canvasView.getSelectionLineStyle();
+        updateLineStyleButtons(btnSolid, btnDash, btnDot, currentStyle);
+
+        btnSolid.setOnClickListener(v -> {
+            canvasView.setSelectionLineStyle(Stroke.LineStyle.SOLID);
+            updateLineStyleButtons(btnSolid, btnDash, btnDot, Stroke.LineStyle.SOLID);
+        });
+        btnDash.setOnClickListener(v -> {
+            canvasView.setSelectionLineStyle(Stroke.LineStyle.DASH);
+            updateLineStyleButtons(btnSolid, btnDash, btnDot, Stroke.LineStyle.DASH);
+        });
+        btnDot.setOnClickListener(v -> {
+            canvasView.setSelectionLineStyle(Stroke.LineStyle.DOT);
+            updateLineStyleButtons(btnSolid, btnDash, btnDot, Stroke.LineStyle.DOT);
+        });
+
+        // 2. Thickness / Size slider and chips
+        float initialWidth = canvasView.getSelectionStrokeWidth();
+        if (hasText && !hasStrokes && !hasShapes) {
+            // Text size mapping: 12 to 72 sp
+            int progress = Math.max(0, Math.min(100, Math.round((initialWidth - 12f) / (72f - 12f) * 100f)));
+            seekThickness.setProgress(progress);
+            textThicknessValue.setText(Math.round(initialWidth) + " sp");
+
+            seekThickness.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    if (fromUser) {
+                        float size = 12f + (progress / 100f) * 60f;
+                        textThicknessValue.setText(Math.round(size) + " sp");
+                        canvasView.setSelectionStrokeWidth(size);
+                    }
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+        } else {
+            // Thickness mapping: 0.5 mm to 8.0 mm (stroke width 2f to 24f)
+            float mm = Math.max(0.5f, Math.min(8.0f, initialWidth / 3.0f));
+            int progress = Math.max(0, Math.min(100, Math.round((mm - 0.5f) / 7.5f * 100f)));
+            seekThickness.setProgress(progress);
+            textThicknessValue.setText(String.format(Locale.US, "%.1f mm", mm));
+
+            seekThickness.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    if (fromUser) {
+                        float curMm = 0.5f + (progress / 100f) * 7.5f;
+                        textThicknessValue.setText(String.format(Locale.US, "%.1f mm", curMm));
+                        canvasView.setSelectionStrokeWidth(curMm * 3.0f);
+                    }
+                }
+                @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+        }
+
+        // Quick Thickness Chips
+        bindThicknessChip(dialogView.findViewById(R.id.chipThick1), 1.0f, seekThickness, textThicknessValue, hasText && !hasStrokes && !hasShapes);
+        bindThicknessChip(dialogView.findViewById(R.id.chipThick2), 2.0f, seekThickness, textThicknessValue, hasText && !hasStrokes && !hasShapes);
+        bindThicknessChip(dialogView.findViewById(R.id.chipThick3), 3.5f, seekThickness, textThicknessValue, hasText && !hasStrokes && !hasShapes);
+        bindThicknessChip(dialogView.findViewById(R.id.chipThick5), 5.0f, seekThickness, textThicknessValue, hasText && !hasStrokes && !hasShapes);
+        bindThicknessChip(dialogView.findViewById(R.id.chipThick8), 8.0f, seekThickness, textThicknessValue, hasText && !hasStrokes && !hasShapes);
+
+        // 3. Color Swatches
+        LinearLayout layoutColors = dialogView.findViewById(R.id.layoutStyleColorSwatches);
+        int[] palette = {
+                0xFFFFFFFF, // Pure White
+                0xFF111827, // Dark Black
+                0xFF475569, // Slate Gray
+                0xFF625AFF, // Star Blue / Indigo
+                0xFF007355, // Emerald Green
+                0xFFB33333, // Coral Red
+                0xFFDAA001, // Amber Yellow
+                0xFFFEF08A  // Soft Pastel Yellow
+        };
+        int currentColor = canvasView.getSelectionColor();
+        populateStyleColorSwatches(layoutColors, palette, currentColor, color -> {
+            canvasView.setSelectionColor(color);
+        });
+
+        // 4. Text Font Family
+        if (hasText) {
+            View btnSans = dialogView.findViewById(R.id.btnFontSans);
+            View btnSerif = dialogView.findViewById(R.id.btnFontSerif);
+            View btnMono = dialogView.findViewById(R.id.btnFontMono);
+            View btnScript = dialogView.findViewById(R.id.btnFontScript);
+
+            if (btnSans != null) btnSans.setOnClickListener(v -> canvasView.setSelectionTypeface("sans"));
+            if (btnSerif != null) btnSerif.setOnClickListener(v -> canvasView.setSelectionTypeface("serif"));
+            if (btnMono != null) btnMono.setOnClickListener(v -> canvasView.setSelectionTypeface("mono"));
+            if (btnScript != null) btnScript.setOnClickListener(v -> canvasView.setSelectionTypeface("script"));
+        }
+
+        // 5. Shape Fill
+        if (hasShapes) {
+            androidx.appcompat.widget.SwitchCompat switchFill = dialogView.findViewById(R.id.switchShapeFill);
+            View scrollFillColors = dialogView.findViewById(R.id.scrollShapeFillColors);
+            LinearLayout layoutFillColors = dialogView.findViewById(R.id.layoutShapeFillColors);
+
+            Integer curFill = canvasView.getSelectionFillColor();
+            boolean isFilled = curFill != null && curFill != 0;
+            switchFill.setChecked(isFilled);
+            scrollFillColors.setVisibility(isFilled ? View.VISIBLE : View.GONE);
+
+            int[] fillPalette = {
+                    0x40625AFF, 0x4038BDF8, 0x4010B981, 0x40EF4444, 0x40F59E0B, 0x408B5CF6,
+                    0x80625AFF, 0x8038BDF8, 0x8010B981, 0x80EF4444, 0x80F59E0B, 0x808B5CF6
+            };
+            populateStyleColorSwatches(layoutFillColors, fillPalette, isFilled ? curFill : fillPalette[0], color -> {
+                canvasView.setSelectionFillColor(color);
+            });
+
+            switchFill.setOnCheckedChangeListener((btn, isChecked) -> {
+                scrollFillColors.setVisibility(isChecked ? View.VISIBLE : View.GONE);
+                if (isChecked) {
+                    canvasView.setSelectionFillColor(fillPalette[0]);
+                } else {
+                    canvasView.setSelectionFillColor(null);
+                }
+            });
+        }
+
+        dialog.show();
+    }
+
+    private void updateLineStyleButtons(View btnSolid, View btnDash, View btnDot, Stroke.LineStyle style) {
+        if (btnSolid != null) btnSolid.setSelected(style == Stroke.LineStyle.SOLID);
+        if (btnDash != null) btnDash.setSelected(style == Stroke.LineStyle.DASH);
+        if (btnDot != null) btnDot.setSelected(style == Stroke.LineStyle.DOT);
+    }
+
+    private void bindThicknessChip(TextView chip, float mm, SeekBar seekBar, TextView textValue, boolean isText) {
+        if (chip == null) return;
+        if (isText) {
+            int sp = Math.round(mm * 8f);
+            chip.setText(sp + " sp");
+            chip.setOnClickListener(v -> {
+                int progress = Math.max(0, Math.min(100, Math.round((sp - 12f) / 60f * 100f)));
+                seekBar.setProgress(progress);
+                textValue.setText(sp + " sp");
+                canvasView.setSelectionStrokeWidth(sp);
+            });
+        } else {
+            chip.setText(String.format(Locale.US, "%.1f mm", mm));
+            chip.setOnClickListener(v -> {
+                int progress = Math.max(0, Math.min(100, Math.round((mm - 0.5f) / 7.5f * 100f)));
+                seekBar.setProgress(progress);
+                textValue.setText(String.format(Locale.US, "%.1f mm", mm));
+                canvasView.setSelectionStrokeWidth(mm * 3.0f);
+            });
+        }
+    }
+
+    private void populateStyleColorSwatches(LinearLayout container, int[] colors, int selectedColor, java.util.function.Consumer<Integer> onSelected) {
+        if (container == null) return;
+        container.removeAllViews();
+        List<FrameLayout> swatchFrames = new ArrayList<>();
+        int swatchSize = dpToPx(34);
+        int margin = dpToPx(6);
+
+        for (int c : colors) {
+            FrameLayout frame = new FrameLayout(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(swatchSize, swatchSize);
+            lp.setMargins(0, 0, margin, 0);
+            frame.setLayoutParams(lp);
+
+            View circle = new View(this);
+            FrameLayout.LayoutParams clp = new FrameLayout.LayoutParams(dpToPx(28), dpToPx(28), Gravity.CENTER);
+            circle.setLayoutParams(clp);
+
+            GradientDrawable gd = new GradientDrawable();
+            gd.setShape(GradientDrawable.OVAL);
+            gd.setColor(c);
+            if (c == 0xFFFFFFFF || (c & 0xFFFFFF) == 0xFFFFFF) {
+                gd.setStroke(dpToPx(1), 0xFFCBD5E1);
+            }
+            circle.setBackground(gd);
+            frame.addView(circle);
+
+            // Active indicator ring
+            View ring = new View(this);
+            FrameLayout.LayoutParams rlp = new FrameLayout.LayoutParams(swatchSize, swatchSize, Gravity.CENTER);
+            ring.setLayoutParams(rlp);
+            GradientDrawable ringGd = new GradientDrawable();
+            ringGd.setShape(GradientDrawable.OVAL);
+            ringGd.setColor(Color.TRANSPARENT);
+            ringGd.setStroke(dpToPx(2), 0xFF625AFF);
+            ring.setBackground(ringGd);
+            ring.setVisibility(c == selectedColor ? View.VISIBLE : View.GONE);
+            frame.addView(ring);
+
+            frame.setClickable(true);
+            frame.setFocusable(true);
+            frame.setOnClickListener(v -> {
+                for (FrameLayout f : swatchFrames) {
+                    if (f.getChildCount() > 1) f.getChildAt(1).setVisibility(View.GONE);
+                }
+                ring.setVisibility(View.VISIBLE);
+                onSelected.accept(c);
+            });
+
+            swatchFrames.add(frame);
+            container.addView(frame);
+        }
+
+        // Plus icon button for custom color picker
+        FrameLayout plusFrame = new FrameLayout(this);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(swatchSize, swatchSize);
+        plusFrame.setLayoutParams(plp);
+        ImageView plusIcon = new ImageView(this);
+        FrameLayout.LayoutParams ilp = new FrameLayout.LayoutParams(dpToPx(28), dpToPx(28), Gravity.CENTER);
+        plusIcon.setLayoutParams(ilp);
+        GradientDrawable plusBg = new GradientDrawable();
+        plusBg.setShape(GradientDrawable.OVAL);
+        plusBg.setColor(0x1A808080);
+        plusBg.setStroke(dpToPx(1), 0x33808080);
+        plusIcon.setBackground(plusBg);
+        plusIcon.setImageResource(android.R.drawable.ic_input_add);
+        plusIcon.setColorFilter(0xFF625AFF);
+        plusIcon.setPadding(dpToPx(4), dpToPx(4), dpToPx(4), dpToPx(4));
+        plusFrame.addView(plusIcon);
+        plusFrame.setClickable(true);
+        plusFrame.setFocusable(true);
+        plusFrame.setOnClickListener(v -> {
+            StarColorPickerDialog.show(this, "Custom Style Color", selectedColor, color -> {
+                onSelected.accept(color);
+                populateStyleColorSwatches(container, colors, color, onSelected);
+            });
+        });
+        container.addView(plusFrame);
     }
 
 

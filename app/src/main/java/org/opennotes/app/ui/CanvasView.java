@@ -210,7 +210,7 @@ public class CanvasView extends View {
 
     // Undo / Redo history
     private static class ActionRecord {
-        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, REMOVE_TEXT, ADD_IMAGE, REMOVE_IMAGE, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT, ROTATE_SELECTION }
+        enum Type { ADD_STROKE, REMOVE_STROKE, ADD_SHAPE, REMOVE_SHAPE, ADD_TEXT, REMOVE_TEXT, ADD_IMAGE, REMOVE_IMAGE, MOVE_SELECTION, ADD_SELECTION, DELETE_SELECTION, CLEAR_ALL, STYLE_CHANGE, BEAUTIFY_SELECTION, CONVERT_TO_TEXT, ROTATE_SELECTION, SCALE_SELECTION }
         Type type;
         Stroke stroke;
         ShapeItem shape;
@@ -219,10 +219,16 @@ public class CanvasView extends View {
         float moveDx, moveDy;
         float rotateAngle;
         float rotateCenterX, rotateCenterY;
+        float scaleX = 1f, scaleY = 1f;
+        float scaleAnchorX, scaleAnchorY;
         List<Stroke> rotatedStrokes;
         List<ShapeItem> rotatedShapes;
         List<TextItem> rotatedTexts;
         List<ImageItem> rotatedImages;
+        List<Stroke> scaledStrokes;
+        List<ShapeItem> scaledShapes;
+        List<TextItem> scaledTexts;
+        List<ImageItem> scaledImages;
         List<Stroke> movedStrokes;
         List<ShapeItem> movedShapes;
         List<TextItem> movedTexts;
@@ -248,10 +254,14 @@ public class CanvasView extends View {
     private static final class ItemStyleSnapshot {
         final int color;
         final float size;
+        final Stroke.LineStyle lineStyle;
+        final Integer fillColor;
 
-        ItemStyleSnapshot(int color, float size) {
+        ItemStyleSnapshot(int color, float size, Stroke.LineStyle lineStyle, Integer fillColor) {
             this.color = color;
             this.size = size;
+            this.lineStyle = lineStyle;
+            this.fillColor = fillColor;
         }
     }
 
@@ -281,9 +291,11 @@ public class CanvasView extends View {
     private Paint templateDotPaint;
     private Paint textPaint;
     private Paint previewShapePaint;
+    private Paint previewShapeFillPaint;
     private Paint lassoPaint;
     private Paint selectionBoxPaint;
     private Paint selectionHandlePaint;
+    private Paint selectionHandleBorderPaint;
     private Paint selectionRotateHandlePaint;
     private Paint selectionRotateBorderPaint;
     private Paint selectionRotateIconPaint;
@@ -300,6 +312,23 @@ public class CanvasView extends View {
     private float rotationCenterX, rotationCenterY;
     private float lastRotationTouchAngle;
     private float currentLiveRotation = 0f;
+
+    // Selection interactive transform handles & resizing tracking
+    public enum LassoHandle {
+        NONE,
+        TOP_LEFT,
+        TOP_RIGHT,
+        BOTTOM_LEFT,
+        BOTTOM_RIGHT,
+        ROTATE
+    }
+    private LassoHandle activeLassoHandle = LassoHandle.NONE;
+    private boolean isResizingSelection = false;
+    private float transformAnchorX, transformAnchorY;
+    private float initialTouchDistance = 1f;
+    private float currentLiveScaleX = 1f;
+    private float currentLiveScaleY = 1f;
+    private final RectF initialSelectionBounds = new RectF();
 
     // Zero-lag high performance rendering buffers
     private final RectF visibleViewport = new RectF();
@@ -460,6 +489,9 @@ public class CanvasView extends View {
         previewShapePaint.setStrokeCap(Paint.Cap.ROUND);
         previewShapePaint.setStrokeJoin(Paint.Join.ROUND);
 
+        previewShapeFillPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        previewShapeFillPaint.setStyle(Paint.Style.FILL);
+
         scrollbarPaint.setColor(0x6638BDF8);
         scrollbarPaint.setStyle(Paint.Style.FILL);
 
@@ -471,17 +503,22 @@ public class CanvasView extends View {
 
         selectionBoxPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         selectionBoxPaint.setStyle(Paint.Style.STROKE);
-        selectionBoxPaint.setColor(0xFF38BDF8);
+        selectionBoxPaint.setColor(0xFF625AFF);
         selectionBoxPaint.setStrokeWidth(2.0f);
         selectionBoxPaint.setPathEffect(new DashPathEffect(new float[]{10, 6}, 0));
 
         selectionHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         selectionHandlePaint.setStyle(Paint.Style.FILL);
-        selectionHandlePaint.setColor(0xFF38BDF8);
+        selectionHandlePaint.setColor(0xFFFFFFFF);
+
+        selectionHandleBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        selectionHandleBorderPaint.setStyle(Paint.Style.STROKE);
+        selectionHandleBorderPaint.setColor(0xFF625AFF);
+        selectionHandleBorderPaint.setStrokeWidth(2.2f);
 
         selectionRotateHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         selectionRotateHandlePaint.setStyle(Paint.Style.FILL);
-        selectionRotateHandlePaint.setColor(0xFF6366F1);
+        selectionRotateHandlePaint.setColor(0xFF625AFF);
 
         selectionRotateBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         selectionRotateBorderPaint.setStyle(Paint.Style.STROKE);
@@ -1330,6 +1367,10 @@ public class CanvasView extends View {
                 rotateItemsAround(rec.rotatedStrokes, rec.rotatedShapes, rec.rotatedTexts, rec.rotatedImages,
                         rec.rotateCenterX, rec.rotateCenterY, -rec.rotateAngle);
                 break;
+            case SCALE_SELECTION:
+                scaleItemsAround(rec.scaledStrokes, rec.scaledShapes, rec.scaledTexts, rec.scaledImages,
+                        rec.scaleAnchorX, rec.scaleAnchorY, 1f / rec.scaleX, 1f / rec.scaleY);
+                break;
             case ADD_SELECTION:
                 removeRecordedSelection(rec);
                 break;
@@ -1406,6 +1447,10 @@ public class CanvasView extends View {
             case ROTATE_SELECTION:
                 rotateItemsAround(rec.rotatedStrokes, rec.rotatedShapes, rec.rotatedTexts, rec.rotatedImages,
                         rec.rotateCenterX, rec.rotateCenterY, rec.rotateAngle);
+                break;
+            case SCALE_SELECTION:
+                scaleItemsAround(rec.scaledStrokes, rec.scaledShapes, rec.scaledTexts, rec.scaledImages,
+                        rec.scaleAnchorX, rec.scaleAnchorY, rec.scaleX, rec.scaleY);
                 break;
             case ADD_SELECTION:
                 addRecordedSelection(rec);
@@ -1760,6 +1805,7 @@ public class CanvasView extends View {
             if (currentPage.images != null) {
                 for (ImageItem img : currentPage.images) {
                     if (img != null && RectF.intersects(img.getBounds(), visibleViewport)) {
+                        if (isTransformingSelection() && selectedImages.contains(img)) continue;
                         drawImage(canvas, img);
                     }
                 }
@@ -1768,12 +1814,14 @@ public class CanvasView extends View {
             // 3. Draw Committed Shapes (culled to visible screen)
             for (ShapeItem shape : currentPage.shapes) {
                 if (!RectF.intersects(shape.getBounds(), visibleViewport)) continue;
-                drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth);
+                if (isTransformingSelection() && selectedShapes.contains(shape)) continue;
+                drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth, shape.lineStyle, shape.fillColor);
             }
 
             // 4. Draw Committed Text (culled to visible screen)
             for (TextItem item : currentPage.texts) {
                 if (!RectF.intersects(item.getBounds(), visibleViewport)) continue;
+                if (isTransformingSelection() && selectedTexts.contains(item)) continue;
                 textPaint.setColor(item.color);
                 textPaint.setTextSize(item.fontSize);
                 textPaint.setTypeface(getCachedTypeface(item.fontKey));
@@ -1793,6 +1841,7 @@ public class CanvasView extends View {
                 if (index >= currentPage.strokes.size()) break;
                 Stroke stroke = currentPage.strokes.get(index);
                 if (!RectF.intersects(stroke.getBounds(), visibleViewport)) continue;
+                if (isTransformingSelection() && selectedStrokes.contains(stroke)) continue;
                 drawStroke(canvas, stroke);
             }
 
@@ -1811,14 +1860,25 @@ public class CanvasView extends View {
                 canvas.drawPath(lassoPath, lassoPaint);
             }
             if (hasLassoSelection && !selectionBounds.isEmpty()) {
+                canvas.save();
+                if (isRotatingSelection && Math.abs(currentLiveRotation) > 0.01f) {
+                    canvas.rotate(currentLiveRotation, rotationCenterX, rotationCenterY);
+                } else if (isResizingSelection && Math.abs(currentLiveScaleX - 1.0f) > 0.001f) {
+                    canvas.scale(currentLiveScaleX, currentLiveScaleY, transformAnchorX, transformAnchorY);
+                }
+
+                if (isTransformingSelection()) {
+                    drawTransformingSelectedItems(canvas);
+                }
+
                 canvas.drawRoundRect(selectionBounds, 12f, 12f, selectionBoxPaint);
 
-                // Draw Corner Transform Handles
-                float handleRadius = 6f / Math.max(0.5f, scaleFactor);
-                canvas.drawCircle(selectionBounds.left, selectionBounds.top, handleRadius, selectionHandlePaint);
-                canvas.drawCircle(selectionBounds.right, selectionBounds.top, handleRadius, selectionHandlePaint);
-                canvas.drawCircle(selectionBounds.left, selectionBounds.bottom, handleRadius, selectionHandlePaint);
-                canvas.drawCircle(selectionBounds.right, selectionBounds.bottom, handleRadius, selectionHandlePaint);
+                // Draw 4 Corner Handles (StarNote style 100x100 circle: white filled with #625AFF border)
+                float handleRadius = 8f / Math.max(0.5f, scaleFactor);
+                drawSelectionCornerHandle(canvas, selectionBounds.left, selectionBounds.top, handleRadius);
+                drawSelectionCornerHandle(canvas, selectionBounds.right, selectionBounds.top, handleRadius);
+                drawSelectionCornerHandle(canvas, selectionBounds.left, selectionBounds.bottom, handleRadius);
+                drawSelectionCornerHandle(canvas, selectionBounds.right, selectionBounds.bottom, handleRadius);
 
                 // Draw Rotation Stalk and Handle Knob on Right Side of Selection
                 float stalkLength = 46f / Math.max(0.5f, scaleFactor);
@@ -1833,8 +1893,24 @@ public class CanvasView extends View {
 
                 drawRotationIcon(canvas, rotKnobX, rotKnobY, rotKnobRadius * 0.58f);
 
+                canvas.restore();
+
                 if (isRotatingSelection) {
-                    drawRotationAngleBadge(canvas, rotKnobX, rotKnobY - rotKnobRadius - 12f / Math.max(0.5f, scaleFactor));
+                    float stalkL = 46f / Math.max(0.5f, scaleFactor);
+                    float unrotKnobX = selectionBounds.right + stalkL;
+                    float unrotKnobY = selectionBounds.centerY();
+                    double rad = Math.toRadians(currentLiveRotation);
+                    float cos = (float) Math.cos(rad);
+                    float sin = (float) Math.sin(rad);
+                    float dx = unrotKnobX - rotationCenterX;
+                    float dy = unrotKnobY - rotationCenterY;
+                    float badgeX = rotationCenterX + dx * cos - dy * sin;
+                    float badgeY = rotationCenterY + dx * sin + dy * cos;
+                    float rRadius = 18f / Math.max(0.5f, scaleFactor);
+                    drawRotationAngleBadge(canvas, badgeX, badgeY - rRadius - 12f / Math.max(0.5f, scaleFactor));
+                } else if (isResizingSelection) {
+                    int percent = Math.round(currentLiveScaleX * 100f);
+                    drawResizingScaleBadge(canvas, selectionBounds.centerX(), selectionBounds.top - 18f / Math.max(0.5f, scaleFactor), percent + "%");
                 }
             }
 
@@ -2172,7 +2248,20 @@ public class CanvasView extends View {
             paint.setStrokeWidth(stroke.width);
         }
 
+        if (stroke.lineStyle == Stroke.LineStyle.DASH) {
+            float dash = Math.max(8f, stroke.width * 3.0f);
+            float gap = Math.max(6f, stroke.width * 2.0f);
+            paint.setPathEffect(new DashPathEffect(new float[]{dash, gap}, 0f));
+        } else if (stroke.lineStyle == Stroke.LineStyle.DOT) {
+            float dot = Math.max(2f, stroke.width * 0.8f);
+            float gap = Math.max(6f, stroke.width * 2.2f);
+            paint.setPathEffect(new DashPathEffect(new float[]{dot, gap}, 0f));
+        } else {
+            paint.setPathEffect(null);
+        }
+
         canvas.drawPath(stroke.getPath(), paint);
+        paint.setPathEffect(null);
     }
 
     private void drawFountainStroke(Canvas canvas, Stroke stroke) {
@@ -2228,9 +2317,110 @@ public class CanvasView extends View {
         canvas.drawText(label, cx, textY, selectionRotateTextPaint);
     }
 
+    private void drawResizingScaleBadge(Canvas canvas, float cx, float topY, String label) {
+        float textSize = Math.max(11f, 13f / Math.max(0.5f, scaleFactor));
+        selectionRotateTextPaint.setTextSize(textSize);
+        float textW = selectionRotateTextPaint.measureText(label);
+        float padH = 10f / Math.max(0.5f, scaleFactor);
+        float padV = 5f / Math.max(0.5f, scaleFactor);
+        float pillW = textW + padH * 2f;
+        float pillH = textSize + padV * 2f;
+        RectF pillRect = new RectF(cx - pillW / 2f, topY - pillH, cx + pillW / 2f, topY);
+        canvas.drawRoundRect(pillRect, pillH / 2f, pillH / 2f, selectionRotateBadgePaint);
+        Paint.FontMetrics fm = selectionRotateTextPaint.getFontMetrics();
+        float textY = pillRect.centerY() - (fm.descent + fm.ascent) / 2f;
+        canvas.drawText(label, cx, textY, selectionRotateTextPaint);
+    }
+
+    private void drawSelectionCornerHandle(Canvas canvas, float x, float y, float radius) {
+        canvas.drawCircle(x, y, radius, selectionHandlePaint);
+        selectionHandleBorderPaint.setStrokeWidth(2.2f / Math.max(0.5f, scaleFactor));
+        canvas.drawCircle(x, y, radius, selectionHandleBorderPaint);
+    }
+
+    private boolean isTransformingSelection() {
+        return (isRotatingSelection && Math.abs(currentLiveRotation) > 0.01f)
+                || (isResizingSelection && Math.abs(currentLiveScaleX - 1.0f) > 0.001f);
+    }
+
+    private void drawTransformingSelectedItems(Canvas canvas) {
+        if (selectedImages != null) {
+            for (ImageItem img : selectedImages) {
+                if (img != null) drawImage(canvas, img);
+            }
+        }
+        if (selectedShapes != null) {
+            for (ShapeItem shape : selectedShapes) {
+                if (shape != null) {
+                    drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth, shape.lineStyle, shape.fillColor);
+                }
+            }
+        }
+        if (selectedTexts != null) {
+            for (TextItem item : selectedTexts) {
+                if (item != null) {
+                    textPaint.setColor(item.color);
+                    textPaint.setTextSize(item.fontSize);
+                    textPaint.setTypeface(getCachedTypeface(item.fontKey));
+                    if (Math.abs(item.rotationAngle) > 0.5f) {
+                        canvas.save();
+                        canvas.rotate(item.rotationAngle, item.x, item.y);
+                        canvas.drawText(item.text, item.x, item.y, textPaint);
+                        canvas.restore();
+                    } else {
+                        canvas.drawText(item.text, item.x, item.y, textPaint);
+                    }
+                }
+            }
+        }
+        if (selectedStrokes != null) {
+            for (Stroke stroke : selectedStrokes) {
+                if (stroke != null) drawStroke(canvas, stroke);
+            }
+        }
+    }
+
     private void drawShape(Canvas canvas, ShapeItem.Type type, float x1, float y1, float x2, float y2, int color, float strokeWidth) {
+        drawShape(canvas, type, x1, y1, x2, y2, color, strokeWidth, Stroke.LineStyle.SOLID, null);
+    }
+
+    private void drawShape(Canvas canvas, ShapeItem.Type type, float x1, float y1, float x2, float y2, int color, float strokeWidth, Stroke.LineStyle lineStyle, Integer fillColor) {
+        if (fillColor != null && fillColor != 0) {
+            previewShapeFillPaint.setColor(fillColor);
+            previewShapeFillPaint.setStyle(Paint.Style.FILL);
+            switch (type) {
+                case RECTANGLE:
+                case TABLE:
+                    canvas.drawRect(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2), previewShapeFillPaint);
+                    break;
+                case CIRCLE:
+                    RectF oval = new RectF(Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2));
+                    canvas.drawOval(oval, previewShapeFillPaint);
+                    break;
+                case TRIANGLE:
+                    drawTriangle(canvas, x1, y1, x2, y2, previewShapeFillPaint);
+                    break;
+                case STAR:
+                    drawStar(canvas, x1, y1, x2, y2, previewShapeFillPaint);
+                    break;
+                default:
+                    break;
+            }
+        }
+
         previewShapePaint.setColor(color);
         previewShapePaint.setStrokeWidth(strokeWidth);
+        if (lineStyle == Stroke.LineStyle.DASH) {
+            float dash = Math.max(8f, strokeWidth * 3.0f);
+            float gap = Math.max(6f, strokeWidth * 2.0f);
+            previewShapePaint.setPathEffect(new DashPathEffect(new float[]{dash, gap}, 0f));
+        } else if (lineStyle == Stroke.LineStyle.DOT) {
+            float dot = Math.max(2f, strokeWidth * 0.8f);
+            float gap = Math.max(6f, strokeWidth * 2.2f);
+            previewShapePaint.setPathEffect(new DashPathEffect(new float[]{dot, gap}, 0f));
+        } else {
+            previewShapePaint.setPathEffect(null);
+        }
 
         switch (type) {
             case LINE:
@@ -2276,6 +2466,7 @@ public class CanvasView extends View {
                 }
                 break;
         }
+        previewShapePaint.setPathEffect(null);
     }
 
     private void drawTriangle(Canvas canvas, float x1, float y1, float x2, float y2, Paint paint) {
@@ -2691,6 +2882,7 @@ public class CanvasView extends View {
 
     private Stroke cloneStroke(Stroke source, float dx, float dy) {
         Stroke clone = new Stroke(source.color, source.width, source.tool);
+        clone.lineStyle = source.lineStyle;
         if (source.points != null) {
             for (DrawingPoint point : source.points) {
                 clone.addPoint(point.x + dx, point.y + dy, point.pressure, point.timeMillis);
@@ -2701,8 +2893,11 @@ public class CanvasView extends View {
     }
 
     private ShapeItem cloneShape(ShapeItem source, float dx, float dy) {
-        return new ShapeItem(source.type, source.startX + dx, source.startY + dy,
+        ShapeItem sh = new ShapeItem(source.type, source.startX + dx, source.startY + dy,
                 source.endX + dx, source.endY + dy, source.color, source.strokeWidth);
+        sh.lineStyle = source.lineStyle;
+        sh.fillColor = source.fillColor;
+        return sh;
     }
 
     private TextItem cloneText(TextItem source, float dx, float dy) {
@@ -2737,19 +2932,19 @@ public class CanvasView extends View {
 
     private List<ItemStyleSnapshot> snapshotStrokeStyles(List<Stroke> items) {
         List<ItemStyleSnapshot> snapshots = new ArrayList<>(items.size());
-        for (Stroke item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.width));
+        for (Stroke item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.width, item.lineStyle, null));
         return snapshots;
     }
 
     private List<ItemStyleSnapshot> snapshotShapeStyles(List<ShapeItem> items) {
         List<ItemStyleSnapshot> snapshots = new ArrayList<>(items.size());
-        for (ShapeItem item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.strokeWidth));
+        for (ShapeItem item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.strokeWidth, item.lineStyle, item.fillColor));
         return snapshots;
     }
 
     private List<ItemStyleSnapshot> snapshotTextStyles(List<TextItem> items) {
         List<ItemStyleSnapshot> snapshots = new ArrayList<>(items.size());
-        for (TextItem item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.fontSize));
+        for (TextItem item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.fontSize, Stroke.LineStyle.SOLID, null));
         return snapshots;
     }
 
@@ -2773,6 +2968,7 @@ public class CanvasView extends View {
                 ItemStyleSnapshot snapshot = strokeSnapshots.get(i);
                 target.color = snapshot.color;
                 target.width = snapshot.size;
+                if (snapshot.lineStyle != null) target.lineStyle = snapshot.lineStyle;
                 target.markDirty();
             }
         }
@@ -2782,6 +2978,8 @@ public class CanvasView extends View {
                 ItemStyleSnapshot snapshot = shapeSnapshots.get(i);
                 target.color = snapshot.color;
                 target.strokeWidth = snapshot.size;
+                if (snapshot.lineStyle != null) target.lineStyle = snapshot.lineStyle;
+                target.fillColor = snapshot.fillColor;
                 target.markDirty();
             }
         }
@@ -2967,6 +3165,81 @@ public class CanvasView extends View {
         notifyLassoSelection();
     }
 
+    public void scaleItemsAround(List<Stroke> strokes, List<ShapeItem> shapes,
+                                 List<TextItem> texts, List<ImageItem> images,
+                                 float anchorX, float anchorY, float scaleX, float scaleY) {
+        if (Math.abs(scaleX - 1.0f) < 0.0001f && Math.abs(scaleY - 1.0f) < 0.0001f) return;
+        float avgScale = (Math.abs(scaleX) + Math.abs(scaleY)) / 2f;
+
+        if (strokes != null) {
+            for (Stroke s : strokes) {
+                if (s == null) continue;
+                if (s.points != null) {
+                    for (DrawingPoint pt : s.points) {
+                        float dx = pt.x - anchorX;
+                        float dy = pt.y - anchorY;
+                        pt.x = anchorX + dx * scaleX;
+                        pt.y = anchorY + dy * scaleY;
+                    }
+                }
+                if (s.recognitionPoints != null) {
+                    for (DrawingPoint pt : s.recognitionPoints) {
+                        float dx = pt.x - anchorX;
+                        float dy = pt.y - anchorY;
+                        pt.x = anchorX + dx * scaleX;
+                        pt.y = anchorY + dy * scaleY;
+                    }
+                }
+                s.width = Math.max(0.5f, s.width * avgScale);
+                s.markDirty();
+            }
+        }
+
+        if (shapes != null) {
+            for (ShapeItem sh : shapes) {
+                if (sh == null) continue;
+                float dx1 = sh.startX - anchorX;
+                float dy1 = sh.startY - anchorY;
+                sh.startX = anchorX + dx1 * scaleX;
+                sh.startY = anchorY + dy1 * scaleY;
+
+                float dx2 = sh.endX - anchorX;
+                float dy2 = sh.endY - anchorY;
+                sh.endX = anchorX + dx2 * scaleX;
+                sh.endY = anchorY + dy2 * scaleY;
+
+                sh.strokeWidth = Math.max(0.5f, sh.strokeWidth * avgScale);
+                sh.markDirty();
+            }
+        }
+
+        if (texts != null) {
+            for (TextItem item : texts) {
+                if (item == null) continue;
+                float dx = item.x - anchorX;
+                float dy = item.y - anchorY;
+                item.x = anchorX + dx * scaleX;
+                item.y = anchorY + dy * scaleY;
+                item.fontSize = Math.max(8f, item.fontSize * avgScale);
+                item.markDirty();
+            }
+        }
+
+        if (images != null) {
+            for (ImageItem img : images) {
+                if (img == null) continue;
+                float dx = img.x - anchorX;
+                float dy = img.y - anchorY;
+                img.x = anchorX + dx * scaleX;
+                img.y = anchorY + dy * scaleY;
+                img.width = Math.max(10f, img.width * scaleX);
+                img.height = Math.max(10f, img.height * scaleY);
+                img.markDirty();
+            }
+        }
+        strokeSpatialIndexDirty = true;
+    }
+
     public void beginLiveRotation() {
         currentLiveRotation = 0f;
         if (hasSelection()) {
@@ -2976,51 +3249,146 @@ public class CanvasView extends View {
     }
 
     public void updateLiveRotation(float angleDeltaFromLast) {
-        if (!hasSelection() || Math.abs(angleDeltaFromLast) < 0.001f) return;
-        float cx = rotationCenterX != 0f ? rotationCenterX : selectionBounds.centerX();
-        float cy = rotationCenterY != 0f ? rotationCenterY : selectionBounds.centerY();
-        rotateItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages, cx, cy, angleDeltaFromLast);
+        if (!hasSelection()) return;
         currentLiveRotation += angleDeltaFromLast;
-        updateSelectionBounds();
-        invalidate();
-        notifyLassoSelection();
+        postInvalidateOnAnimation();
     }
 
     public void finishLiveRotation() {
-        if (Math.abs(currentLiveRotation) > 0.01f && hasSelection()) {
+        if (Math.abs(currentLiveRotation) > 0.05f && hasSelection()) {
+            float cx = rotationCenterX != 0f ? rotationCenterX : selectionBounds.centerX();
+            float cy = rotationCenterY != 0f ? rotationCenterY : selectionBounds.centerY();
+            rotateItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages, cx, cy, currentLiveRotation);
             ActionRecord record = new ActionRecord();
             record.type = ActionRecord.Type.ROTATE_SELECTION;
             record.rotateAngle = currentLiveRotation;
-            record.rotateCenterX = rotationCenterX != 0f ? rotationCenterX : selectionBounds.centerX();
-            record.rotateCenterY = rotationCenterY != 0f ? rotationCenterY : selectionBounds.centerY();
+            record.rotateCenterX = cx;
+            record.rotateCenterY = cy;
             record.rotatedStrokes = new ArrayList<>(selectedStrokes);
             record.rotatedShapes = new ArrayList<>(selectedShapes);
             record.rotatedTexts = new ArrayList<>(selectedTexts);
             record.rotatedImages = new ArrayList<>(selectedImages);
             undoStack.push(record);
             redoStack.clear();
+            updateSelectionBounds();
             notifyChange();
+            notifyLassoSelection();
+            invalidate();
         }
         currentLiveRotation = 0f;
     }
 
     public void cancelLiveRotation() {
-        if (Math.abs(currentLiveRotation) > 0.001f && hasSelection()) {
-            float cx = rotationCenterX != 0f ? rotationCenterX : selectionBounds.centerX();
-            float cy = rotationCenterY != 0f ? rotationCenterY : selectionBounds.centerY();
-            rotateItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages, cx, cy, -currentLiveRotation);
-            updateSelectionBounds();
-            invalidate();
-            notifyLassoSelection();
-        }
         currentLiveRotation = 0f;
+        invalidate();
     }
 
-    public void setSelectionAbsoluteAngle(float targetAngle) {
-        if (!hasSelection()) return;
-        float current = getSelectionRotation();
-        float delta = targetAngle - current;
-        rotateSelection(delta);
+    public void beginLiveResizing(LassoHandle handle, float anchorX, float anchorY, float initialDistance) {
+        this.activeLassoHandle = handle;
+        this.isResizingSelection = true;
+        this.transformAnchorX = anchorX;
+        this.transformAnchorY = anchorY;
+        this.initialTouchDistance = Math.max(1f, initialDistance);
+        this.currentLiveScaleX = 1f;
+        this.currentLiveScaleY = 1f;
+    }
+
+    public void updateLiveResizing(float currentDistance) {
+        if (!isResizingSelection) return;
+        float scale = initialTouchDistance > 1f ? (currentDistance / initialTouchDistance) : 1f;
+        scale = Math.max(0.15f, Math.min(8.0f, scale));
+        this.currentLiveScaleX = scale;
+        this.currentLiveScaleY = scale;
+        postInvalidateOnAnimation();
+    }
+
+    public void finishLiveResizing() {
+        if (isResizingSelection && Math.abs(currentLiveScaleX - 1.0f) > 0.005f && hasSelection()) {
+            scaleItemsAround(selectedStrokes, selectedShapes, selectedTexts, selectedImages,
+                    transformAnchorX, transformAnchorY, currentLiveScaleX, currentLiveScaleY);
+            ActionRecord record = new ActionRecord();
+            record.type = ActionRecord.Type.SCALE_SELECTION;
+            record.scaleX = currentLiveScaleX;
+            record.scaleY = currentLiveScaleY;
+            record.scaleAnchorX = transformAnchorX;
+            record.scaleAnchorY = transformAnchorY;
+            record.scaledStrokes = new ArrayList<>(selectedStrokes);
+            record.scaledShapes = new ArrayList<>(selectedShapes);
+            record.scaledTexts = new ArrayList<>(selectedTexts);
+            record.scaledImages = new ArrayList<>(selectedImages);
+            undoStack.push(record);
+            redoStack.clear();
+            updateSelectionBounds();
+            notifyChange();
+            notifyLassoSelection();
+            invalidate();
+        }
+        isResizingSelection = false;
+        activeLassoHandle = LassoHandle.NONE;
+        currentLiveScaleX = 1f;
+        currentLiveScaleY = 1f;
+    }
+
+    public boolean hasSelectedShape() {
+        return !selectedShapes.isEmpty();
+    }
+
+    public Stroke.LineStyle getSelectionLineStyle() {
+        if (!selectedStrokes.isEmpty()) return selectedStrokes.get(0).lineStyle;
+        if (!selectedShapes.isEmpty()) return selectedShapes.get(0).lineStyle;
+        return Stroke.LineStyle.SOLID;
+    }
+
+    public void setSelectionLineStyle(Stroke.LineStyle lineStyle) {
+        if (!hasSelection() || lineStyle == null) return;
+        ActionRecord record = beginSelectionStyleChange();
+        for (Stroke s : selectedStrokes) {
+            s.lineStyle = lineStyle;
+            s.markDirty();
+        }
+        for (ShapeItem sh : selectedShapes) {
+            sh.lineStyle = lineStyle;
+            sh.markDirty();
+        }
+        finishSelectionStyleChange(record);
+    }
+
+    public float getSelectionStrokeWidth() {
+        if (!selectedStrokes.isEmpty()) return selectedStrokes.get(0).width;
+        if (!selectedShapes.isEmpty()) return selectedShapes.get(0).strokeWidth;
+        return 4f;
+    }
+
+    public int getSelectionColor() {
+        if (!selectedStrokes.isEmpty()) return selectedStrokes.get(0).color;
+        if (!selectedShapes.isEmpty()) return selectedShapes.get(0).color;
+        if (!selectedTexts.isEmpty()) return selectedTexts.get(0).color;
+        return currentColor;
+    }
+
+    public Integer getSelectionFillColor() {
+        if (!selectedShapes.isEmpty()) return selectedShapes.get(0).fillColor;
+        return null;
+    }
+
+    public void setSelectionFillColor(Integer fillColor) {
+        if (!hasSelection() || selectedShapes.isEmpty()) return;
+        ActionRecord record = beginSelectionStyleChange();
+        for (ShapeItem sh : selectedShapes) {
+            sh.fillColor = fillColor;
+            sh.markDirty();
+        }
+        finishSelectionStyleChange(record);
+    }
+
+    public void setSelectionTypeface(String fontKey) {
+        if (!hasSelection() || selectedTexts.isEmpty()) return;
+        ActionRecord record = beginSelectionStyleChange();
+        for (TextItem item : selectedTexts) {
+            item.fontKey = fontKey;
+            item.markDirty();
+        }
+        finishSelectionStyleChange(record);
     }
 
     private void finishSelectionMove() {
@@ -3309,10 +3677,11 @@ public class CanvasView extends View {
                         float stalkLength = 46f / Math.max(0.5f, scaleFactor);
                         float rotKnobX = selectionBounds.right + stalkLength;
                         float rotKnobY = selectionBounds.centerY();
-                        float hitRadius = 56f / Math.max(0.5f, scaleFactor);
+                        float hitRadius = 50f / Math.max(0.5f, scaleFactor);
                         float hdx = canvasX - rotKnobX;
                         float hdy = canvasY - rotKnobY;
                         if (hdx * hdx + hdy * hdy <= hitRadius * hitRadius) {
+                            activeLassoHandle = LassoHandle.ROTATE;
                             isRotatingSelection = true;
                             rotationCenterX = selectionBounds.centerX();
                             rotationCenterY = selectionBounds.centerY();
@@ -3323,7 +3692,60 @@ public class CanvasView extends View {
                             } catch (Exception ignored) {}
                             return true;
                         }
+
+                        // Check 4 Corner Handles for Resizing (StarNote 4 corners)
+                        float cornerHitRadius = 46f / Math.max(0.5f, scaleFactor);
+                        float cornerHitSq = cornerHitRadius * cornerHitRadius;
+
+                        // Top-Left (Anchor is Bottom-Right)
+                        float tlDx = canvasX - selectionBounds.left;
+                        float tlDy = canvasY - selectionBounds.top;
+                        if (tlDx * tlDx + tlDy * tlDy <= cornerHitSq) {
+                            float anchorX = selectionBounds.right;
+                            float anchorY = selectionBounds.bottom;
+                            float initDist = (float) Math.hypot(canvasX - anchorX, canvasY - anchorY);
+                            beginLiveResizing(LassoHandle.TOP_LEFT, anchorX, anchorY, initDist);
+                            try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
+                            return true;
+                        }
+
+                        // Top-Right (Anchor is Bottom-Left)
+                        float trDx = canvasX - selectionBounds.right;
+                        float trDy = canvasY - selectionBounds.top;
+                        if (trDx * trDx + trDy * trDy <= cornerHitSq) {
+                            float anchorX = selectionBounds.left;
+                            float anchorY = selectionBounds.bottom;
+                            float initDist = (float) Math.hypot(canvasX - anchorX, canvasY - anchorY);
+                            beginLiveResizing(LassoHandle.TOP_RIGHT, anchorX, anchorY, initDist);
+                            try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
+                            return true;
+                        }
+
+                        // Bottom-Left (Anchor is Top-Right)
+                        float blDx = canvasX - selectionBounds.left;
+                        float blDy = canvasY - selectionBounds.bottom;
+                        if (blDx * blDx + blDy * blDy <= cornerHitSq) {
+                            float anchorX = selectionBounds.right;
+                            float anchorY = selectionBounds.top;
+                            float initDist = (float) Math.hypot(canvasX - anchorX, canvasY - anchorY);
+                            beginLiveResizing(LassoHandle.BOTTOM_LEFT, anchorX, anchorY, initDist);
+                            try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
+                            return true;
+                        }
+
+                        // Bottom-Right (Anchor is Top-Left)
+                        float brDx = canvasX - selectionBounds.right;
+                        float brDy = canvasY - selectionBounds.bottom;
+                        if (brDx * brDx + brDy * brDy <= cornerHitSq) {
+                            float anchorX = selectionBounds.left;
+                            float anchorY = selectionBounds.top;
+                            float initDist = (float) Math.hypot(canvasX - anchorX, canvasY - anchorY);
+                            beginLiveResizing(LassoHandle.BOTTOM_RIGHT, anchorX, anchorY, initDist);
+                            try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
+                            return true;
+                        }
                     }
+
                     if (hasLassoSelection && selectionBounds.contains(canvasX, canvasY)) {
                         isMovingSelection = true;
                         lassoMoveStartX = canvasX;
@@ -3349,7 +3771,9 @@ public class CanvasView extends View {
                         else if (delta < -180f) delta += 360f;
                         updateLiveRotation(delta);
                         lastRotationTouchAngle = currentAngle;
-                        postInvalidateOnAnimation();
+                    } else if (isResizingSelection) {
+                        float curDist = (float) Math.hypot(canvasX - transformAnchorX, canvasY - transformAnchorY);
+                        updateLiveResizing(curDist);
                     } else if (isMovingSelection) {
                         float dx = canvasX - lassoMoveStartX;
                         float dy = canvasY - lassoMoveStartY;
@@ -3374,9 +3798,10 @@ public class CanvasView extends View {
                 case MotionEvent.ACTION_UP:
                     if (isRotatingSelection) {
                         isRotatingSelection = false;
+                        activeLassoHandle = LassoHandle.NONE;
                         finishLiveRotation();
-                        notifyChange();
-                        notifyLassoSelection();
+                    } else if (isResizingSelection) {
+                        finishLiveResizing();
                     } else if (isMovingSelection) {
                         float finalDx = canvasX - lassoMoveStartX;
                         float finalDy = canvasY - lassoMoveStartY;
@@ -3774,12 +4199,17 @@ public class CanvasView extends View {
             isRotatingSelection = false;
             finishLiveRotation();
         }
+        if (isResizingSelection) {
+            finishLiveResizing();
+        }
+        activeLassoHandle = LassoHandle.NONE;
         activeStroke = null;
         activeInputPointerId = -1;
         isDrawingShape = false;
         isDrawingLasso = false;
         isMovingSelection = false;
         isRotatingSelection = false;
+        isResizingSelection = false;
         isPanning = false;
         lassoPath.reset();
         lassoPoints.clear();

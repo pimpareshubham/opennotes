@@ -22,6 +22,8 @@ public class ShapeItem {
     public float endY;
     public int color;
     public float strokeWidth;
+    public Stroke.LineStyle lineStyle = Stroke.LineStyle.SOLID;
+    public Integer fillColor = null;
 
     public ShapeItem(Type type, float startX, float startY, float endX, float endY, int color, float strokeWidth) {
         this.type = type;
@@ -31,6 +33,8 @@ public class ShapeItem {
         this.endY = endY;
         this.color = color;
         this.strokeWidth = strokeWidth;
+        this.lineStyle = Stroke.LineStyle.SOLID;
+        this.fillColor = null;
     }
 
     private transient android.graphics.RectF cachedBounds;
@@ -57,6 +61,10 @@ public class ShapeItem {
         obj.put("endY", (double) endY);
         obj.put("color", color);
         obj.put("strokeWidth", (double) strokeWidth);
+        obj.put("lineStyle", lineStyle != null ? lineStyle.name() : Stroke.LineStyle.SOLID.name());
+        if (fillColor != null) {
+            obj.put("fillColor", fillColor.intValue());
+        }
         return obj;
     }
 
@@ -76,6 +84,16 @@ public class ShapeItem {
         int color = obj.optInt("color", 0xFF000000);
         float sw = (float) obj.optDouble("strokeWidth", 4.0);
 
-        return new ShapeItem(type, sx, sy, ex, ey, color, sw);
+        ShapeItem shape = new ShapeItem(type, sx, sy, ex, ey, color, sw);
+        String lineStyleName = obj.optString("lineStyle", Stroke.LineStyle.SOLID.name());
+        try {
+            shape.lineStyle = Stroke.LineStyle.valueOf(lineStyleName);
+        } catch (Exception e) {
+            shape.lineStyle = Stroke.LineStyle.SOLID;
+        }
+        if (obj.has("fillColor")) {
+            shape.fillColor = obj.optInt("fillColor");
+        }
+        return shape;
     }
 }
