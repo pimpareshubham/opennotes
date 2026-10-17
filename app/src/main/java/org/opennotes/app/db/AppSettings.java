@@ -30,6 +30,7 @@ public class AppSettings {
     private static final String KEY_STABILIZATION = "pref_stabilization";
     private static final String KEY_STRAIGHT_LINE_ASSIST = "pref_straight_line_assist";
     private static final String KEY_STYLUS_ONLY = "pref_stylus_only";
+    private static final String KEY_FINGER_MOVE_CANVAS = "pref_finger_move_canvas";
     private static final String KEY_PAGE_BG_COLOR = "pref_default_page_bg_color";
     private static final String KEY_PAPER_TEMPLATE = "pref_default_paper_template";
     private static final String KEY_GRID_VIEW = "pref_is_grid_view";
@@ -61,7 +62,9 @@ public class AppSettings {
     public DrawingTool getLastTool() {
         String name = prefs.getString(KEY_LAST_TOOL, DrawingTool.FOUNTAIN.name());
         try {
-            return DrawingTool.valueOf(name);
+            DrawingTool tool = DrawingTool.valueOf(name);
+            if (tool == DrawingTool.HAND) return DrawingTool.FOUNTAIN;
+            return tool;
         } catch (Exception e) {
             return DrawingTool.FOUNTAIN;
         }
@@ -125,6 +128,15 @@ public class AppSettings {
 
     public void setStylusOnly(boolean enabled) {
         prefs.edit().putBoolean(KEY_STYLUS_ONLY, enabled).apply();
+    }
+
+    // Single Finger Move Canvas
+    public boolean isFingerMoveCanvas() {
+        return prefs.getBoolean(KEY_FINGER_MOVE_CANVAS, false);
+    }
+
+    public void setFingerMoveCanvas(boolean enabled) {
+        prefs.edit().putBoolean(KEY_FINGER_MOVE_CANVAS, enabled).apply();
     }
 
     // Default Page Background Color

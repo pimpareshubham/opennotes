@@ -683,18 +683,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         if (toolHand != null) {
             toolHand.setOnClickListener(v -> {
-                closeToolPropertiesCard();
-                if (canvasView.getTool() == DrawingTool.HAND) {
-                    DrawingTool fallback = DrawingTool.FOUNTAIN;
-                    canvasView.setTool(fallback);
-                    updateToolUi(fallback);
-                    if (appSettings != null) appSettings.setLastTool(fallback);
-                    Toast.makeText(this, "✏️ Pen Drawing Mode", Toast.LENGTH_SHORT).show();
+                v.animate().scaleX(1.2f).scaleY(1.2f).setDuration(100)
+                        .withEndAction(() -> v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start()).start();
+                boolean nextState = !canvasView.isFingerMoveCanvasEnabled();
+                canvasView.setFingerMoveCanvasEnabled(nextState);
+                if (appSettings != null) appSettings.setFingerMoveCanvas(nextState);
+                updateHandToolUi(nextState);
+                if (nextState) {
+                    Toast.makeText(this, "🖐️ Move Canvas with Finger: ON\n(Stylus draws with pen, finger moves canvas)", Toast.LENGTH_SHORT).show();
                 } else {
-                    canvasView.setTool(DrawingTool.HAND);
-                    updateToolUi(DrawingTool.HAND);
-                    if (appSettings != null) appSettings.setLastTool(DrawingTool.HAND);
-                    Toast.makeText(this, "🖐️ Touch Move Canvas: Drag with single finger to move", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "✏️ Move Canvas with Finger: OFF", Toast.LENGTH_SHORT).show();
                 }
             });
         }
@@ -1091,6 +1089,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         // Restore Tool
         DrawingTool savedTool = appSettings.getLastTool();
+        if (savedTool == DrawingTool.HAND) savedTool = DrawingTool.FOUNTAIN;
         canvasView.setTool(savedTool);
         updateToolUi(savedTool);
 
@@ -1126,6 +1125,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         // Restore Palm Rejection (Stylus Only)
         boolean savedStylusOnly = appSettings.isStylusOnly();
         canvasView.setStylusOnly(savedStylusOnly);
+
+        // Restore Single Finger Move Canvas
+        boolean savedFingerMove = appSettings.isFingerMoveCanvas();
+        canvasView.setFingerMoveCanvasEnabled(savedFingerMove);
+        updateHandToolUi(savedFingerMove);
 
         // Restore Auto-Beautification Settings
         boolean savedBeautify = appSettings.isAutoBeautifyEnabled();
@@ -1267,7 +1271,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void updateToolUi(DrawingTool tool) {
-        ImageView[] allTools = {toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso, toolShape, toolText, toolLaser, toolHand};
+        ImageView[] allTools = {toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso, toolShape, toolText, toolLaser};
         for (ImageView iv : allTools) {
             if (iv != null) {
                 iv.setBackgroundResource(0);
@@ -1305,9 +1309,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             case LASER:
                 activeIv = toolLaser;
                 break;
-            case HAND:
-                activeIv = toolHand;
-                break;
             default:
                 break;
         }
@@ -1315,6 +1316,19 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (activeIv != null) {
             activeIv.setBackgroundResource(R.drawable.bg_tool_button_active);
             activeIv.setColorFilter(0xFF38BDF8);
+        }
+
+        updateHandToolUi(canvasView != null && canvasView.isFingerMoveCanvasEnabled());
+    }
+
+    private void updateHandToolUi(boolean enabled) {
+        if (toolHand == null) return;
+        if (enabled) {
+            toolHand.setColorFilter(0xFF38BDF8);
+            toolHand.setBackgroundResource(R.drawable.bg_tool_button_active);
+        } else {
+            toolHand.setColorFilter(0xFFF8FAFC);
+            toolHand.setBackgroundResource(0);
         }
     }
 
@@ -1824,7 +1838,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(uri, mimeType);
+            intent.setClipData(android.content.ClipData.newRawUri("Exported Note", uri));
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+            java.util.List<android.content.pm.ResolveInfo> resInfoList = getPackageManager().queryIntentActivities(intent, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+            for (android.content.pm.ResolveInfo resolveInfo : resInfoList) {
+                String packageName = resolveInfo.activityInfo.packageName;
+                grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            }
+
             startActivity(intent);
         } catch (Exception e) {
             ErrorDialog.show(this, "Could not open exported file", e);
@@ -1841,8 +1863,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             intent.putExtra(Intent.EXTRA_TEXT, "Exported from OpenNotes: " + file.getName());
             intent.setClipData(android.content.ClipData.newRawUri("Exported Note", uri));
             intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
             Intent chooser = Intent.createChooser(intent, "Share Note with…");
             chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+
+            java.util.List<android.content.pm.ResolveInfo> resInfoList = getPackageManager().queryIntentActivities(chooser, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
+            for (android.content.pm.ResolveInfo resolveInfo : resInfoList) {
+                String packageName = resolveInfo.activityInfo.packageName;
+                grantUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            }
+
             startActivity(chooser);
         } catch (Exception ex) {
             ErrorDialog.show(this, "Could not share exported file", ex);

@@ -85,6 +85,7 @@ public class CanvasView extends View {
     private int pageBackgroundColor = 0xFF121214; // Default sleek dark note background matching video
     private boolean isInfinite = true;
     private boolean isStylusOnly = false;
+    private boolean isFingerMoveCanvasEnabled = false;
     private boolean isViewportLocked = false;
     private float contentHeight = 0f;
     private float viewportOffsetY = 0f;
@@ -668,6 +669,18 @@ public class CanvasView extends View {
 
     public boolean isStylusOnly() {
         return isStylusOnly;
+    }
+
+    public void setFingerMoveCanvasEnabled(boolean enabled) {
+        this.isFingerMoveCanvasEnabled = enabled;
+        if (!enabled) {
+            handPanDragging = false;
+        }
+        invalidate();
+    }
+
+    public boolean isFingerMoveCanvasEnabled() {
+        return isFingerMoveCanvasEnabled;
     }
 
     public void setViewportLocked(boolean locked) {
@@ -1293,6 +1306,10 @@ public class CanvasView extends View {
     }
 
     public void setTool(DrawingTool tool) {
+        if (tool == DrawingTool.HAND) {
+            setFingerMoveCanvasEnabled(true);
+            return;
+        }
         this.currentTool = tool;
         if (tool != DrawingTool.LASSO) {
             clearSelection();
@@ -3455,8 +3472,24 @@ public class CanvasView extends View {
             setInputFrameRatePreference(false);
         }
 
-        // 0. Single-finger & multi-finger Canvas Hand Move Tool (Bypasses Palm & StylusOnly rejection)
-        if (currentTool == DrawingTool.HAND) {
+        int stylusPointerIndex = findStylusPointerIndex(event);
+        boolean hasStylusPointer = stylusPointerIndex >= 0;
+        if (hasStylusPointer) {
+            handPanDragging = false;
+            lastStylusActiveTime = SystemClock.uptimeMillis();
+        }
+        boolean isPalm = isPalmTouch(event);
+        boolean mixedStylusTouch = hasStylusPointer && pointerCount > 1;
+        boolean canceledPointerUp = action == MotionEvent.ACTION_POINTER_UP
+                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0;
+
+        // 0. Single-Finger & Multi-Finger Canvas Move Gesture Mode
+        // When enabled, fingers only move & zoom the canvas. Stylus always draws with the active pen/tool!
+        boolean fingerMoveActive = isFingerMoveCanvasEnabled || (currentTool == DrawingTool.HAND);
+        if (fingerMoveActive && !hasStylusPointer) {
+            if (isPalm) return true;
+
             if (getParent() != null) {
                 if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
                     getParent().requestDisallowInterceptTouchEvent(false);
@@ -3466,7 +3499,7 @@ public class CanvasView extends View {
             }
             if (isViewportLocked) return true;
 
-            // Two-finger pinch-zoom and pan support while in Hand mode
+            // Two-finger pinch-zoom and pan support while in Finger Move mode
             if (pointerCount >= 2) {
                 handPanDragging = false;
                 scaleDetector.onTouchEvent(event);
@@ -3474,7 +3507,7 @@ public class CanvasView extends View {
                 return true;
             }
 
-            // Single-finger (or stylus/mouse) dragging
+            // Single-finger dragging to move canvas
             float touchX = event.getX(0);
             float touchY = event.getY(0);
             switch (action) {
@@ -3511,17 +3544,7 @@ public class CanvasView extends View {
             return true;
         }
 
-        int stylusPointerIndex = findStylusPointerIndex(event);
-        boolean hasStylusPointer = stylusPointerIndex >= 0;
-        if (hasStylusPointer) {
-            lastStylusActiveTime = SystemClock.uptimeMillis();
-        }
         boolean isWithinStylusCooldown = (SystemClock.uptimeMillis() - lastStylusActiveTime) < 800L;
-        boolean isPalm = isPalmTouch(event);
-        boolean mixedStylusTouch = hasStylusPointer && pointerCount > 1;
-        boolean canceledPointerUp = action == MotionEvent.ACTION_POINTER_UP
-                && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
-                && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0;
 
         // Android can report a palm as a finger before canceling it. Never let
         // a finger touching during a live stylus stroke start a pinch detector.
