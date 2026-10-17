@@ -1082,7 +1082,13 @@ public class CanvasView extends View {
                     new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
                         @Override
                         public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result) {
-                            if (currentPage != requestedPage || result == null || result.text.trim().isEmpty()) return;
+                            if (currentPage != requestedPage) return;
+                            if (result == null || result.text == null || result.text.trim().isEmpty()) {
+                                android.widget.Toast.makeText(getContext(),
+                                        "Could not decipher handwriting. Your ink was kept.",
+                                        android.widget.Toast.LENGTH_SHORT).show();
+                                return;
+                            }
                             List<RecognizedStrokeLine> lines = Collections.singletonList(
                                     new RecognizedStrokeLine(requestedStrokes, result));
                             if (letUserChooseCandidate && result.alternatives.size() > 1) {
@@ -1096,6 +1102,15 @@ public class CanvasView extends View {
                         @Override
                         public void onFailure(Exception error) {
                             if (org.opennotes.app.util.HandwritingRecognitionEngine.isModelDownloadCancellation(error)) {
+                                return;
+                            }
+                            if (error != null && error.getMessage() != null &&
+                                    (error.getMessage().toLowerCase().contains("download")
+                                     || error.getMessage().toLowerCase().contains("model not installed")
+                                     || error.getMessage().toLowerCase().contains("network"))) {
+                                android.widget.Toast.makeText(getContext(),
+                                        "Downloading handwriting model. Please try again in a moment.",
+                                        android.widget.Toast.LENGTH_SHORT).show();
                                 return;
                             }
                             android.widget.Toast.makeText(getContext(),
@@ -1114,12 +1129,13 @@ public class CanvasView extends View {
         } else {
             // Multi-line handwriting: recognize each line independently to preserve
             // character accuracy, language context, and distinct vertical baselines
-            recognizeLinesSequentially(requestedPage, segmentedLines, 0,
+            recognizeLinesSequentially(requestedPage, requestedStrokes, segmentedLines, 0,
                     new ArrayList<>(), textColor, letUserChooseCandidate);
         }
     }
 
     private void recognizeLinesSequentially(Page requestedPage,
+                                           List<Stroke> requestedStrokes,
                                            List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> segmentedLines,
                                            int index,
                                            List<RecognizedStrokeLine> accumulatedLines,
@@ -1128,9 +1144,57 @@ public class CanvasView extends View {
         if (currentPage != requestedPage) return;
         if (index >= segmentedLines.size()) {
             if (accumulatedLines.isEmpty()) {
-                android.widget.Toast.makeText(getContext(),
-                        "Could not decipher handwriting. Your ink was kept.",
-                        android.widget.Toast.LENGTH_SHORT).show();
+                // FALLBACK: Sub-line recognition yielded no results (e.g. over-split word or fragmented strokes).
+                // Fall back to recognizing all requested strokes as a complete block.
+                final String fallbackPreContext = recognitionPreContext(requestedPage, requestedStrokes);
+                org.opennotes.app.util.HandwritingRecognitionEngine.Callback fallbackCallback =
+                        new org.opennotes.app.util.HandwritingRecognitionEngine.Callback() {
+                            @Override
+                            public void onSuccess(org.opennotes.app.util.HandwritingRecognitionEngine.RecognitionResult result) {
+                                if (currentPage != requestedPage) return;
+                                if (result == null || result.text == null || result.text.trim().isEmpty()) {
+                                    android.widget.Toast.makeText(getContext(),
+                                            "Could not decipher handwriting. Your ink was kept.",
+                                            android.widget.Toast.LENGTH_SHORT).show();
+                                    return;
+                                }
+                                List<RecognizedStrokeLine> lines = Collections.singletonList(
+                                        new RecognizedStrokeLine(requestedStrokes, result));
+                                if (letUserChooseCandidate && result.alternatives.size() > 1) {
+                                    showRecognitionReview(requestedPage, lines, textColor);
+                                } else {
+                                    applyRecognizedText(requestedPage, lines, textColor,
+                                            Collections.singletonList(result.text));
+                                }
+                            }
+
+                            @Override
+                            public void onFailure(Exception error) {
+                                if (org.opennotes.app.util.HandwritingRecognitionEngine.isModelDownloadCancellation(error)) {
+                                    return;
+                                }
+                                if (error != null && error.getMessage() != null &&
+                                        (error.getMessage().toLowerCase().contains("download")
+                                         || error.getMessage().toLowerCase().contains("model not installed")
+                                         || error.getMessage().toLowerCase().contains("network"))) {
+                                    android.widget.Toast.makeText(getContext(),
+                                            "Downloading handwriting model. Please try again in a moment.",
+                                            android.widget.Toast.LENGTH_SHORT).show();
+                                    return;
+                                }
+                                android.widget.Toast.makeText(getContext(),
+                                        "Could not decipher handwriting. Your ink was kept.",
+                                        android.widget.Toast.LENGTH_SHORT).show();
+                            }
+                        };
+
+                if (letUserChooseCandidate) {
+                    org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokesWithFilteredSuggestions(
+                            getContext(), requestedStrokes, beautifyLanguage, fallbackPreContext, fallbackCallback);
+                } else {
+                    org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
+                            getContext(), requestedStrokes, beautifyLanguage, fallbackPreContext, fallbackCallback);
+                }
                 return;
             }
             if (letUserChooseCandidate) {
@@ -1157,7 +1221,7 @@ public class CanvasView extends View {
                         if (result != null && !result.text.trim().isEmpty()) {
                             accumulatedLines.add(new RecognizedStrokeLine(lineStrokes, result));
                         }
-                        recognizeLinesSequentially(requestedPage, segmentedLines, index + 1,
+                        recognizeLinesSequentially(requestedPage, requestedStrokes, segmentedLines, index + 1,
                                 accumulatedLines, textColor, letUserChooseCandidate);
                     }
 
@@ -1166,7 +1230,7 @@ public class CanvasView extends View {
                         if (org.opennotes.app.util.HandwritingRecognitionEngine.isModelDownloadCancellation(error)) {
                             return;
                         }
-                        recognizeLinesSequentially(requestedPage, segmentedLines, index + 1,
+                        recognizeLinesSequentially(requestedPage, requestedStrokes, segmentedLines, index + 1,
                                 accumulatedLines, textColor, letUserChooseCandidate);
                     }
                 };

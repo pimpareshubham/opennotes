@@ -443,11 +443,12 @@ public final class HandwritingRecognitionEngine {
             @Override
             public void onFailure(Exception error) {
                 // If multi-line decomposition fails on any subline, fall back to single-pass block recognition
+                // with full multi-angle deskewing, hook trimming, and cross-language waterfall
                 List<Stroke> allStrokes = new ArrayList<>();
                 for (SemanticStrokeClusterer.StrokeLine l : lines) {
                     if (l != null && l.strokes != null) allStrokes.addAll(l.strokes);
                 }
-                executeSingleRecognitionPass(context, allStrokes, preferredLanguage, preContext, callback);
+                recognizeMultiHypothesis(context, allStrokes, preferredLanguage, preContext, false, callback);
             }
         });
     }
