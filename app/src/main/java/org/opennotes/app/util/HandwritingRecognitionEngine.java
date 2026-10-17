@@ -926,17 +926,22 @@ public final class HandwritingRecognitionEngine {
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(16).build());
 
             // Primary pass: RecognitionContext with WritingArea and preContext
-            RecognitionContext.Builder contextBuilder = RecognitionContext.builder();
-            if (!preContext.isEmpty()) {
-                contextBuilder.setPreContext(preContext);
+            RecognitionContext recognitionContext = null;
+            try {
+                float writingAreaW = Math.max(200f, scaledW + padX * 2.0f);
+                float writingAreaH = Math.max(120f, scaledH + padY * 2.0f);
+                recognitionContext = RecognitionContext.builder()
+                        .setPreContext(preContext != null ? preContext : "")
+                        .setWritingArea(new WritingArea(writingAreaW, writingAreaH))
+                        .build();
+            } catch (Exception e) {
+                Log.w(TAG, "Failed to build RecognitionContext, proceeding unconstrained", e);
             }
-            float writingAreaW = Math.max(200f, scaledW + padX * 2.0f);
-            float writingAreaH = Math.max(120f, scaledH + padY * 2.0f);
-            contextBuilder.setWritingArea(new WritingArea(writingAreaW, writingAreaH));
-            RecognitionContext recognitionContext = contextBuilder.build();
 
-            recognizer.recognize(ink, recognitionContext)
-                    .addOnSuccessListener(result -> {
+            Task<com.google.mlkit.vision.digitalink.common.RecognitionResult> primaryTask =
+                    recognitionContext != null ? recognizer.recognize(ink, recognitionContext) : recognizer.recognize(ink);
+
+            primaryTask.addOnSuccessListener(result -> {
                         String text = firstCandidate(result);
                         if (text.trim().isEmpty()) {
                             // Secondary fallback pass: unconstrained recognition without WritingArea
