@@ -216,6 +216,15 @@ public class SemanticStrokeClusterer {
             for (int j = i + 1; j < n; j++) {
                 ProjectedStroke s2 = projected.get(j);
 
+                float combinedTop = Math.min(s1.minY, s2.minY);
+                float combinedBottom = Math.max(s1.maxY, s2.maxY);
+                float combinedH = combinedBottom - combinedTop;
+
+                // INVARIANT: Strokes on the same line cannot span more than 1.85 * medianH
+                if (combinedH > 1.85f * medianH) {
+                    continue;
+                }
+
                 float vOverlap = Math.max(0f, Math.min(s1.maxY, s2.maxY) - Math.max(s1.minY, s2.minY));
                 float minH = Math.min(s1.height, s2.height);
 
@@ -223,33 +232,27 @@ public class SemanticStrokeClusterer {
                 float minW = Math.min(s1.width, s2.width);
 
                 float vGap = Math.max(0f, Math.max(s1.minY, s2.minY) - Math.min(s1.maxY, s2.maxY));
+                float hGap = Math.max(0f, Math.max(s1.minX, s2.minX) - Math.min(s1.maxX, s2.maxX));
                 float cyDist = Math.abs(s1.cy - s2.cy);
 
                 boolean isSameLine = false;
 
-                // Condition 1: Substantial vertical overlap between strokes
-                if (vOverlap >= 0.30f * minH || vOverlap >= 0.20f * medianH) {
-                    if (cyDist <= 0.65f * medianH || vOverlap >= 0.45f * minH) {
+                // Condition 1: Substantial vertical overlap with aligned centers
+                if (vOverlap >= 0.35f * minH && cyDist <= 0.40f * medianH) {
+                    isSameLine = true;
+                }
+                // Condition 2: Shirorekha / Matra / Diacritic attachment
+                // Must overlap horizontally, have small vertical gap, and combined height is within single-line bounds
+                else if (hOverlap >= 0.30f * minW
+                        || (s1.minX >= s2.minX - 10f && s1.maxX <= s2.maxX + 10f)
+                        || (s2.minX >= s1.minX - 10f && s2.maxX <= s1.maxX + 10f)) {
+                    if (vGap <= 0.25f * medianH && cyDist <= 0.70f * medianH) {
                         isSameLine = true;
                     }
                 }
-
-                // Condition 2: Vertical diacritic / Shirorekha / upper matra / lower matra
-                // Strong horizontal overlap with character body and small vertical gap
-                if (!isSameLine) {
-                    boolean strongHOverlap = hOverlap >= 0.25f * minW
-                            || (s1.minX >= s2.minX - 15f && s1.maxX <= s2.maxX + 15f)
-                            || (s2.minX >= s1.minX - 15f && s2.maxX <= s1.maxX + 15f);
-                    if (strongHOverlap && (vGap <= 0.45f * medianH || cyDist <= 0.90f * medianH)) {
-                        isSameLine = true;
-                    }
-                }
-
-                // Condition 3: Same line continuation (words side-by-side on same baseline)
-                if (!isSameLine) {
-                    if (cyDist <= 0.40f * medianH && vOverlap > 0f) {
-                        isSameLine = true;
-                    }
+                // Condition 3: Horizontally adjacent strokes in the same word
+                else if (hGap <= 0.50f * medianH && cyDist <= 0.30f * medianH && vOverlap >= 0.25f * minH) {
+                    isSameLine = true;
                 }
 
                 if (isSameLine) {
@@ -302,12 +305,20 @@ public class SemanticStrokeClusterer {
                         float c2Cy = sumCy2 / c2.size();
                         float c2H = Math.max(1f, c2Bottom - c2Top);
 
+                        float combTop = Math.min(c1Top, c2Top);
+                        float combBot = Math.max(c1Bottom, c2Bottom);
+                        float combH = combBot - combTop;
+
+                        // Merged line height cannot exceed 1.85 * medianH
+                        if (combH > 1.85f * medianH) {
+                            continue;
+                        }
+
                         float vOverlap = Math.max(0f, Math.min(c1Bottom, c2Bottom) - Math.max(c1Top, c2Top));
                         float minClusterH = Math.min(c1H, c2H);
                         float cyDiff = Math.abs(c1Cy - c2Cy);
 
-                        if ((vOverlap >= 0.40f * minClusterH || cyDiff <= 0.35f * medianH)
-                                && cyDiff <= 0.50f * Math.max(c1H, c2H)) {
+                        if (cyDiff <= 0.30f * medianH && vOverlap >= 0.35f * minClusterH) {
                             c1.addAll(c2);
                             clusterList.remove(j);
                             merged = true;
