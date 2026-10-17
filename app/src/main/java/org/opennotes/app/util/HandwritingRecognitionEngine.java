@@ -313,6 +313,16 @@ public final class HandwritingRecognitionEngine {
     public static void recognizeStrokes(Context context, List<Stroke> strokes,
                                         String preferredLanguage, String preContext,
                                         Callback callback) {
+        if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
+        if (org.opennotes.app.ai.SemanticStrokeClusterer.isMultiLine(strokes)) {
+            List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines =
+                    org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(strokes);
+            if (lines.size() > 1) {
+                recognizeMultiLineStatements(context, lines, 0, preferredLanguage, preContext,
+                        new StringBuilder(), new ArrayList<>(), new RectF(), callback);
+                return;
+            }
+        }
         recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, false, callback);
     }
 
@@ -325,6 +335,16 @@ public final class HandwritingRecognitionEngine {
                                                                String preferredLanguage,
                                                                String preContext,
                                                                Callback callback) {
+        if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
+        if (org.opennotes.app.ai.SemanticStrokeClusterer.isMultiLine(strokes)) {
+            List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> lines =
+                    org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(strokes);
+            if (lines.size() > 1) {
+                recognizeMultiLineStatements(context, lines, 0, preferredLanguage, preContext,
+                        new StringBuilder(), new ArrayList<>(), new RectF(), callback);
+                return;
+            }
+        }
         recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, true, callback);
     }
 
@@ -1105,67 +1125,7 @@ public final class HandwritingRecognitionEngine {
     }
 
     private static boolean hasDistinctMultipleLines(List<Stroke> strokes) {
-        if (strokes == null || strokes.size() < 2) return false;
-
-        class ProjectedLineStroke {
-            final float minX, maxX, cy, height;
-            ProjectedLineStroke(Stroke s) {
-                float pMinX = Float.MAX_VALUE, pMaxX = -Float.MAX_VALUE;
-                float pMinY = Float.MAX_VALUE, pMaxY = -Float.MAX_VALUE;
-                List<DrawingPoint> pts = s.getRecognitionPoints();
-                if (pts == null || pts.isEmpty()) pts = s.points;
-                if (pts != null) {
-                    for (DrawingPoint p : pts) {
-                        if (p == null || !isFinite(p.x) || !isFinite(p.y)) continue;
-                        pMinX = Math.min(pMinX, p.x);
-                        pMaxX = Math.max(pMaxX, p.x);
-                        pMinY = Math.min(pMinY, p.y);
-                        pMaxY = Math.max(pMaxY, p.y);
-                    }
-                }
-                if (pMinX != Float.MAX_VALUE) {
-                    this.minX = pMinX;
-                    this.maxX = pMaxX;
-                    this.height = Math.max(1f, pMaxY - pMinY);
-                    this.cy = (pMinY + pMaxY) * 0.5f;
-                } else {
-                    RectF b = s.getBounds();
-                    this.minX = b != null ? b.left : 0f;
-                    this.maxX = b != null ? b.right : 0f;
-                    this.height = Math.max(1f, b != null ? b.height() : 0f);
-                    this.cy = b != null ? b.centerY() : 0f;
-                }
-            }
-        }
-
-        List<ProjectedLineStroke> list = new ArrayList<>(strokes.size());
-        List<Float> heights = new ArrayList<>(strokes.size());
-        for (Stroke s : strokes) {
-            if (s == null) continue;
-            ProjectedLineStroke pls = new ProjectedLineStroke(s);
-            list.add(pls);
-            heights.add(pls.height);
-        }
-        if (list.size() < 2) return false;
-
-        Collections.sort(heights);
-        float medianH = heights.get(heights.size() / 2);
-        if (medianH <= 4f) return false;
-
-        for (int i = 0; i < list.size(); i++) {
-            ProjectedLineStroke s1 = list.get(i);
-            for (int j = i + 1; j < list.size(); j++) {
-                ProjectedLineStroke s2 = list.get(j);
-                boolean xOverlap = !(s1.maxX < s2.minX - medianH * 0.5f || s2.maxX < s1.minX - medianH * 0.5f);
-                if (xOverlap) {
-                    float verticalGap = Math.abs(s1.cy - s2.cy);
-                    if (verticalGap >= medianH * 1.75f) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
+        return org.opennotes.app.ai.SemanticStrokeClusterer.isMultiLine(strokes);
     }
 
     private static List<String> rerankDevanagariCandidates(List<Stroke> strokes, List<String> candidates) {

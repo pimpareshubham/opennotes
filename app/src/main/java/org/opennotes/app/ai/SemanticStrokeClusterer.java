@@ -60,6 +60,7 @@ public class SemanticStrokeClusterer {
         final float maxX;
         final float minY;
         final float maxY;
+        final float width;
         final float height;
         final long minTime;
         final long maxTime;
@@ -111,6 +112,7 @@ public class SemanticStrokeClusterer {
                 this.maxX = pMaxX;
                 this.minY = pMinY;
                 this.maxY = pMaxY;
+                this.width = Math.max(1f, pMaxX - pMinX);
                 this.height = Math.max(1f, pMaxY - pMinY);
             } else {
                 this.cx = originalBounds.centerX();
@@ -119,6 +121,7 @@ public class SemanticStrokeClusterer {
                 this.maxX = originalBounds.right;
                 this.minY = originalBounds.top;
                 this.maxY = originalBounds.bottom;
+                this.width = Math.max(1f, originalBounds.width());
                 this.height = Math.max(1f, originalBounds.height());
             }
 
@@ -127,22 +130,228 @@ public class SemanticStrokeClusterer {
         }
     }
 
-    /**
-     * Determines whether a set of strokes contains multiple distinct lines of writing.
-     */
-    public static boolean isMultiLine(List<Stroke> strokes) {
-        return false;
+    private static int dsuFind(int[] parent, int i) {
+        int root = i;
+        while (root != parent[root]) {
+            root = parent[root];
+        }
+        int curr = i;
+        while (curr != root) {
+            int nxt = parent[curr];
+            parent[curr] = root;
+            curr = nxt;
+        }
+        return root;
     }
 
     /**
-     * Preserves strokes naturally without artificial horizontal projection or arbitrary line fragmentation.
+     * Determines whether a set of strokes contains multiple distinct lines or rows of writing.
+     */
+    public static boolean isMultiLine(List<Stroke> strokes) {
+        if (strokes == null || strokes.size() < 2) return false;
+        List<StrokeLine> lines = segmentIntoLines(strokes);
+        return lines != null && lines.size() > 1;
+    }
+
+    /**
+     * Segments strokes into horizontal lines of writing.
+     * Uses connected component analysis with Devanagari diacritic attachment
+     * and horizontal baseline cluster merging.
      */
     public static List<StrokeLine> segmentIntoLines(List<Stroke> strokes) {
         List<StrokeLine> result = new ArrayList<>();
         if (strokes == null || strokes.isEmpty()) return result;
-        RectF b = InkNormalizer.getBounds(strokes);
-        List<StrokeWord> words = Collections.singletonList(new StrokeWord(new ArrayList<>(strokes), b, 0f));
-        result.add(new StrokeLine(new ArrayList<>(strokes), words, b, 0f));
+
+        if (strokes.size() == 1) {
+            RectF b = InkNormalizer.getBounds(strokes);
+            List<StrokeWord> words = Collections.singletonList(new StrokeWord(new ArrayList<>(strokes), b, 0f));
+            result.add(new StrokeLine(new ArrayList<>(strokes), words, b, 0f));
+            return result;
+        }
+
+        RectF overallBounds = InkNormalizer.getBounds(strokes);
+        float angleDegrees = InkNormalizer.detectWritingAngleDegrees(strokes);
+        boolean isRotated = Math.abs(angleDegrees) >= 3.5f;
+        float rotAngle = isRotated ? angleDegrees : 0f;
+        float pivotX = overallBounds != null ? overallBounds.centerX() : 0f;
+        float pivotY = overallBounds != null ? overallBounds.centerY() : 0f;
+
+        List<ProjectedStroke> projected = new ArrayList<>(strokes.size());
+        for (Stroke s : strokes) {
+            if (s != null) {
+                projected.add(new ProjectedStroke(s, rotAngle, pivotX, pivotY));
+            }
+        }
+        if (projected.isEmpty()) return result;
+        if (projected.size() == 1) {
+            RectF b = InkNormalizer.getBounds(strokes);
+            List<StrokeWord> words = Collections.singletonList(new StrokeWord(new ArrayList<>(strokes), b, rotAngle));
+            result.add(new StrokeLine(new ArrayList<>(strokes), words, b, rotAngle));
+            return result;
+        }
+
+        // Estimate median stroke height excluding tiny flecks/noise
+        List<Float> heights = new ArrayList<>();
+        for (ProjectedStroke ps : projected) {
+            if (ps.height > 6f) {
+                heights.add(ps.height);
+            }
+        }
+        if (heights.isEmpty()) {
+            for (ProjectedStroke ps : projected) {
+                heights.add(ps.height);
+            }
+        }
+        Collections.sort(heights);
+        float medianH = !heights.isEmpty() ? heights.get(heights.size() / 2) : 30f;
+        medianH = Math.max(15f, medianH);
+
+        int n = projected.size();
+        int[] parent = new int[n];
+        for (int i = 0; i < n; i++) parent[i] = i;
+
+        // Form connected components of strokes on the same line
+        for (int i = 0; i < n; i++) {
+            ProjectedStroke s1 = projected.get(i);
+            for (int j = i + 1; j < n; j++) {
+                ProjectedStroke s2 = projected.get(j);
+
+                float vOverlap = Math.max(0f, Math.min(s1.maxY, s2.maxY) - Math.max(s1.minY, s2.minY));
+                float minH = Math.min(s1.height, s2.height);
+
+                float hOverlap = Math.max(0f, Math.min(s1.maxX, s2.maxX) - Math.max(s1.minX, s2.minX));
+                float minW = Math.min(s1.width, s2.width);
+
+                float vGap = Math.max(0f, Math.max(s1.minY, s2.minY) - Math.min(s1.maxY, s2.maxY));
+                float cyDist = Math.abs(s1.cy - s2.cy);
+
+                boolean isSameLine = false;
+
+                // Condition 1: Substantial vertical overlap between strokes
+                if (vOverlap >= 0.30f * minH || vOverlap >= 0.20f * medianH) {
+                    if (cyDist <= 0.65f * medianH || vOverlap >= 0.45f * minH) {
+                        isSameLine = true;
+                    }
+                }
+
+                // Condition 2: Vertical diacritic / Shirorekha / upper matra / lower matra
+                // Strong horizontal overlap with character body and small vertical gap
+                if (!isSameLine) {
+                    boolean strongHOverlap = hOverlap >= 0.25f * minW
+                            || (s1.minX >= s2.minX - 15f && s1.maxX <= s2.maxX + 15f)
+                            || (s2.minX >= s1.minX - 15f && s2.maxX <= s1.maxX + 15f);
+                    if (strongHOverlap && (vGap <= 0.45f * medianH || cyDist <= 0.90f * medianH)) {
+                        isSameLine = true;
+                    }
+                }
+
+                // Condition 3: Same line continuation (words side-by-side on same baseline)
+                if (!isSameLine) {
+                    if (cyDist <= 0.40f * medianH && vOverlap > 0f) {
+                        isSameLine = true;
+                    }
+                }
+
+                if (isSameLine) {
+                    int rootI = dsuFind(parent, i);
+                    int rootJ = dsuFind(parent, j);
+                    if (rootI != rootJ) {
+                        parent[rootI] = rootJ;
+                    }
+                }
+            }
+        }
+
+        // Group into initial clusters
+        java.util.Map<Integer, List<ProjectedStroke>> clustersMap = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < n; i++) {
+            int root = dsuFind(parent, i);
+            List<ProjectedStroke> list = clustersMap.get(root);
+            if (list == null) {
+                list = new ArrayList<>();
+                clustersMap.put(root, list);
+            }
+            list.add(projected.get(i));
+        }
+        List<List<ProjectedStroke>> clusterList = new ArrayList<>(clustersMap.values());
+
+        // Merge horizontally separated word clusters that lie along the same baseline
+        if (clusterList.size() > 1) {
+            boolean merged = true;
+            while (merged) {
+                merged = false;
+                for (int i = 0; i < clusterList.size(); i++) {
+                    List<ProjectedStroke> c1 = clusterList.get(i);
+                    float c1Top = Float.MAX_VALUE, c1Bottom = -Float.MAX_VALUE, sumCy1 = 0f;
+                    for (ProjectedStroke s : c1) {
+                        c1Top = Math.min(c1Top, s.minY);
+                        c1Bottom = Math.max(c1Bottom, s.maxY);
+                        sumCy1 += s.cy;
+                    }
+                    float c1Cy = sumCy1 / c1.size();
+                    float c1H = Math.max(1f, c1Bottom - c1Top);
+
+                    for (int j = i + 1; j < clusterList.size(); j++) {
+                        List<ProjectedStroke> c2 = clusterList.get(j);
+                        float c2Top = Float.MAX_VALUE, c2Bottom = -Float.MAX_VALUE, sumCy2 = 0f;
+                        for (ProjectedStroke s : c2) {
+                            c2Top = Math.min(c2Top, s.minY);
+                            c2Bottom = Math.max(c2Bottom, s.maxY);
+                            sumCy2 += s.cy;
+                        }
+                        float c2Cy = sumCy2 / c2.size();
+                        float c2H = Math.max(1f, c2Bottom - c2Top);
+
+                        float vOverlap = Math.max(0f, Math.min(c1Bottom, c2Bottom) - Math.max(c1Top, c2Top));
+                        float minClusterH = Math.min(c1H, c2H);
+                        float cyDiff = Math.abs(c1Cy - c2Cy);
+
+                        if ((vOverlap >= 0.40f * minClusterH || cyDiff <= 0.35f * medianH)
+                                && cyDiff <= 0.50f * Math.max(c1H, c2H)) {
+                            c1.addAll(c2);
+                            clusterList.remove(j);
+                            merged = true;
+                            break;
+                        }
+                    }
+                    if (merged) break;
+                }
+            }
+        }
+
+        // Sort lines top to bottom by vertical center
+        Collections.sort(clusterList, (l1, l2) -> {
+            float sum1 = 0f;
+            for (ProjectedStroke s : l1) sum1 += s.cy;
+            float avg1 = sum1 / l1.size();
+
+            float sum2 = 0f;
+            for (ProjectedStroke s : l2) sum2 += s.cy;
+            float avg2 = sum2 / l2.size();
+
+            return Float.compare(avg1, avg2);
+        });
+
+        // Reconstruct StrokeLines preserving each stroke's natural temporal drawing order
+        for (List<ProjectedStroke> cluster : clusterList) {
+            java.util.Set<Stroke> lineStrokesSet = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (ProjectedStroke ps : cluster) {
+                lineStrokesSet.add(ps.originalStroke);
+            }
+            List<Stroke> orderedLineStrokes = new ArrayList<>();
+            for (Stroke s : strokes) {
+                if (lineStrokesSet.contains(s)) {
+                    orderedLineStrokes.add(s);
+                }
+            }
+            if (orderedLineStrokes.isEmpty()) continue;
+
+            RectF lineBounds = InkNormalizer.getBounds(orderedLineStrokes);
+            List<StrokeWord> words = Collections.singletonList(
+                    new StrokeWord(new ArrayList<>(orderedLineStrokes), lineBounds, rotAngle));
+            result.add(new StrokeLine(orderedLineStrokes, words, lineBounds, rotAngle));
+        }
+
         return result;
     }
 }
