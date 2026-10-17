@@ -281,14 +281,15 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         final String folder = currentFolder;
         final boolean favoritesOnly = isFavoritesOnly;
         final String searchQuery = currentSearchQuery;
+        final boolean isSearching = searchQuery != null && !searchQuery.trim().isEmpty();
         notebookIoExecutor.execute(() -> {
             List<Notebook> result = dbHelper.getAllNotebooks(folder, favoritesOnly, searchQuery);
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed() || generation != notebookLoadGeneration) return;
-                adapter.updateData(result);
-                boolean isEmpty = result.isEmpty();
-                emptyStateView.setVisibility(isEmpty ? View.VISIBLE : View.GONE);
-                recyclerView.setVisibility(isEmpty ? View.GONE : View.VISIBLE);
+                adapter.updateData(result, isSearching);
+                boolean showEmpty = isSearching && result.isEmpty();
+                emptyStateView.setVisibility(showEmpty ? View.VISIBLE : View.GONE);
+                recyclerView.setVisibility(View.VISIBLE);
             });
         });
     }
@@ -520,6 +521,11 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         notebook.isFavorite = !notebook.isFavorite;
         notebookIoExecutor.execute(() -> dbHelper.updateNotebook(notebook));
         loadNotebooks();
+    }
+
+    @Override
+    public void onCreateNewNotebookClick() {
+        showCreateNotebookDialog();
     }
 
     @Override

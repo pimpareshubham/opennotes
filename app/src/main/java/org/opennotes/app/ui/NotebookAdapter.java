@@ -20,18 +20,23 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-public class NotebookAdapter extends RecyclerView.Adapter<NotebookAdapter.NotebookViewHolder> {
+public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+
+    public static final int VIEW_TYPE_NEW_NOTEBOOK = 0;
+    public static final int VIEW_TYPE_NOTEBOOK = 1;
 
     public interface OnNotebookClickListener {
         void onNotebookClick(Notebook notebook);
         void onNotebookFavoriteClick(Notebook notebook);
         void onNotebookMoreClick(Notebook notebook, View anchorView);
+        void onCreateNewNotebookClick();
     }
 
     private final Context context;
     private List<Notebook> notebooks;
     private final OnNotebookClickListener listener;
     private final SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault());
+    private boolean isSearching = false;
 
     public NotebookAdapter(Context context, List<Notebook> notebooks, OnNotebookClickListener listener) {
         this.context = context;
@@ -40,20 +45,53 @@ public class NotebookAdapter extends RecyclerView.Adapter<NotebookAdapter.Notebo
     }
 
     public void updateData(List<Notebook> newNotebooks) {
+        updateData(newNotebooks, false);
+    }
+
+    public void updateData(List<Notebook> newNotebooks, boolean isSearching) {
         this.notebooks = newNotebooks;
+        this.isSearching = isSearching;
         notifyDataSetChanged();
+    }
+
+    @Override
+    public int getItemViewType(int position) {
+        if (!isSearching && position == 0) {
+            return VIEW_TYPE_NEW_NOTEBOOK;
+        }
+        return VIEW_TYPE_NOTEBOOK;
     }
 
     @NonNull
     @Override
-    public NotebookViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+    public RecyclerView.ViewHolder onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
+        if (viewType == VIEW_TYPE_NEW_NOTEBOOK) {
+            View view = LayoutInflater.from(context).inflate(R.layout.item_notebook_new, parent, false);
+            return new NewNotebookViewHolder(view);
+        }
         View view = LayoutInflater.from(context).inflate(R.layout.item_notebook_grid, parent, false);
         return new NotebookViewHolder(view);
     }
 
     @Override
-    public void onBindViewHolder(@NonNull NotebookViewHolder holder, int position) {
-        Notebook nb = notebooks.get(position);
+    public void onBindViewHolder(@NonNull RecyclerView.ViewHolder baseHolder, int position) {
+        if (getItemViewType(position) == VIEW_TYPE_NEW_NOTEBOOK) {
+            NewNotebookViewHolder holder = (NewNotebookViewHolder) baseHolder;
+            holder.itemView.setOnClickListener(v -> {
+                v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80)
+                        .withEndAction(() -> {
+                            v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start();
+                            if (listener != null) listener.onCreateNewNotebookClick();
+                        }).start();
+            });
+            return;
+        }
+
+        NotebookViewHolder holder = (NotebookViewHolder) baseHolder;
+        int notebookIndex = isSearching ? position : position - 1;
+        if (notebookIndex < 0 || notebookIndex >= notebooks.size()) return;
+
+        Notebook nb = notebooks.get(notebookIndex);
 
         holder.titleView.setText(nb.title);
         holder.pagesBadge.setText(nb.pageCount + (nb.pageCount == 1 ? " page" : " pages"));
@@ -96,7 +134,16 @@ public class NotebookAdapter extends RecyclerView.Adapter<NotebookAdapter.Notebo
 
     @Override
     public int getItemCount() {
-        return notebooks.size();
+        if (isSearching) {
+            return notebooks.size();
+        }
+        return notebooks.size() + 1;
+    }
+
+    public static class NewNotebookViewHolder extends RecyclerView.ViewHolder {
+        public NewNotebookViewHolder(@NonNull View itemView) {
+            super(itemView);
+        }
     }
 
     public static class NotebookViewHolder extends RecyclerView.ViewHolder {

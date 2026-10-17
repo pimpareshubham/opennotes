@@ -146,7 +146,50 @@ public class CanvasView extends View {
     private float highlighterLockStartX = 0f;
     private float highlighterLockStartY = 0f;
 
-    // Laser pointer presentation mode (ephemeral glowing trail)
+    // Laser pointer presentation mode (ephemeral glowing trail & StarNote bullseye dot)
+    public enum LaserMode {
+        LINE,
+        DOT
+    }
+    private LaserMode laserMode = LaserMode.LINE;
+    private long laserFadeDurationMs = 1500L;
+    private int laserColor = 0xFFEF4444; // StarNote Red (#EF4444)
+    private float laserTipRadius = 12f;
+    private float laserStrokeWidth = 14f;
+    private boolean isLaserTouching = false;
+    private float laserCurrentX = 0f;
+    private float laserCurrentY = 0f;
+    private Paint laserHaloPaint;
+    private Paint laserTipOuterPaint;
+    private Paint laserTipMiddlePaint;
+    private Paint laserTipCenterPaint;
+
+    // Interactive Screen Capture Crop Mode
+    public interface OnScreenCropListener {
+        void onCropConfirmed(Bitmap croppedBitmap);
+        void onCropCancelled();
+    }
+    private boolean isScreenCropActive = false;
+    private final RectF screenCropRect = new RectF();
+    private OnScreenCropListener screenCropListener;
+    private int activeCropHandle = -1; // -1: none, 0..7: handles, 8: move
+    private float cropTouchStartX, cropTouchStartY;
+    private final RectF cropInitialRect = new RectF();
+    private Paint cropScrimPaint;
+    private Paint cropBorderPaint;
+    private Paint cropHandlePaint;
+    private Paint cropHandleStrokePaint;
+    private Paint cropButtonBgPaint;
+    private Paint cropButtonTextPaint;
+    private final RectF cropCancelBtnRect = new RectF();
+    private final RectF cropConfirmBtnRect = new RectF();
+
+    // Audio Memo click listener
+    public interface OnAudioMemoClickListener {
+        void onAudioMemoClick(ImageItem item);
+    }
+    private OnAudioMemoClickListener audioMemoClickListener;
+
     public static class LaserPoint {
         public float x, y;
         public long timestamp;
@@ -566,12 +609,12 @@ public class CanvasView extends View {
         predictedInkPaint.setStrokeCap(Paint.Cap.ROUND);
         predictedInkPaint.setStrokeJoin(Paint.Join.ROUND);
 
-        // Neon Laser Presentation Tool
+        // StarNote Laser Presentation Tool (Fading trail & bullseye reticle)
         laserGlowPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         laserGlowPaint.setStyle(Paint.Style.STROKE);
         laserGlowPaint.setStrokeCap(Paint.Cap.ROUND);
         laserGlowPaint.setStrokeJoin(Paint.Join.ROUND);
-        laserGlowPaint.setColor(0xFFFF2255);
+        laserGlowPaint.setColor(laserColor);
 
         laserCorePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         laserCorePaint.setStyle(Paint.Style.STROKE);
@@ -581,7 +624,52 @@ public class CanvasView extends View {
 
         laserTipPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         laserTipPaint.setStyle(Paint.Style.FILL);
-        laserTipPaint.setColor(0xFFFF2255);
+        laserTipPaint.setColor(laserColor);
+
+        laserHaloPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        laserHaloPaint.setStyle(Paint.Style.FILL);
+        laserHaloPaint.setColor(laserColor);
+        laserHaloPaint.setAlpha(65);
+
+        laserTipOuterPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        laserTipOuterPaint.setStyle(Paint.Style.FILL);
+        laserTipOuterPaint.setColor(laserColor);
+
+        laserTipMiddlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        laserTipMiddlePaint.setStyle(Paint.Style.FILL);
+        laserTipMiddlePaint.setColor(Color.WHITE);
+
+        laserTipCenterPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        laserTipCenterPaint.setStyle(Paint.Style.FILL);
+        laserTipCenterPaint.setColor(laserColor);
+
+        // Screen Crop Paints (matching StarNote layout_screen_capture.xml)
+        cropScrimPaint = new Paint();
+        cropScrimPaint.setColor(0x88000000);
+
+        cropBorderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        cropBorderPaint.setStyle(Paint.Style.STROKE);
+        cropBorderPaint.setColor(0xFF38BDF8);
+        cropBorderPaint.setStrokeWidth(2.5f);
+        cropBorderPaint.setPathEffect(new DashPathEffect(new float[]{12f, 8f}, 0f));
+
+        cropHandlePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        cropHandlePaint.setStyle(Paint.Style.FILL);
+        cropHandlePaint.setColor(0xFFFFFFFF);
+
+        cropHandleStrokePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        cropHandleStrokePaint.setStyle(Paint.Style.STROKE);
+        cropHandleStrokePaint.setColor(0xFF6E4AFE);
+        cropHandleStrokePaint.setStrokeWidth(2f);
+
+        cropButtonBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        cropButtonBgPaint.setStyle(Paint.Style.FILL);
+        cropButtonBgPaint.setColor(0xFF1E1E24);
+
+        cropButtonTextPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        cropButtonTextPaint.setTextAlign(Paint.Align.CENTER);
+        cropButtonTextPaint.setTextSize(14f);
+        cropButtonTextPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
     }
 
     public void setOnCanvasChangeListener(OnCanvasChangeListener listener) {
@@ -1495,6 +1583,131 @@ public class CanvasView extends View {
         this.straightHighlighterEnabled = enabled;
     }
 
+    public LaserMode getLaserMode() {
+        return laserMode;
+    }
+
+    public void setLaserMode(LaserMode mode) {
+        this.laserMode = mode != null ? mode : LaserMode.LINE;
+        invalidate();
+    }
+
+    public long getLaserFadeDurationMs() {
+        return laserFadeDurationMs;
+    }
+
+    public void setLaserFadeDurationMs(long durationMs) {
+        this.laserFadeDurationMs = Math.max(400L, Math.min(5000L, durationMs));
+    }
+
+    public int getLaserColor() {
+        return laserColor;
+    }
+
+    public void setLaserColor(int color) {
+        this.laserColor = color;
+        if (laserGlowPaint != null) laserGlowPaint.setColor(color);
+        if (laserTipPaint != null) laserTipPaint.setColor(color);
+        if (laserHaloPaint != null) {
+            laserHaloPaint.setColor(color);
+            laserHaloPaint.setAlpha(65);
+        }
+        if (laserTipOuterPaint != null) laserTipOuterPaint.setColor(color);
+        if (laserTipCenterPaint != null) laserTipCenterPaint.setColor(color);
+        invalidate();
+    }
+
+    public float getLaserTipRadius() {
+        return laserTipRadius;
+    }
+
+    public void setLaserTipRadius(float radius) {
+        this.laserTipRadius = radius;
+        invalidate();
+    }
+
+    public float getLaserStrokeWidth() {
+        return laserStrokeWidth;
+    }
+
+    public void setLaserStrokeWidth(float width) {
+        this.laserStrokeWidth = width;
+        this.laserTipRadius = Math.max(8f, width * 0.85f);
+        invalidate();
+    }
+
+    public void setOnAudioMemoClickListener(OnAudioMemoClickListener listener) {
+        this.audioMemoClickListener = listener;
+    }
+
+    public void startScreenCrop(OnScreenCropListener listener) {
+        this.screenCropListener = listener;
+        this.isScreenCropActive = true;
+        float viewW = getWidth() > 0 ? getWidth() : 1080;
+        float viewH = getHeight() > 0 ? getHeight() : 1920;
+        float cropW = Math.min(viewW * 0.7f, 600f) / Math.max(0.5f, scaleFactor);
+        float cropH = Math.min(viewH * 0.45f, 420f) / Math.max(0.5f, scaleFactor);
+        float cx = getCenterCanvasX();
+        float cy = getCenterCanvasY();
+        screenCropRect.set(cx - cropW / 2f, cy - cropH / 2f, cx + cropW / 2f, cy + cropH / 2f);
+        invalidate();
+    }
+
+    public void stopScreenCrop() {
+        this.isScreenCropActive = false;
+        this.screenCropListener = null;
+        invalidate();
+    }
+
+    public boolean isScreenCropActive() {
+        return isScreenCropActive;
+    }
+
+    public Bitmap captureCropBitmap() {
+        if (screenCropRect.width() <= 10 || screenCropRect.height() <= 10) return null;
+        int bmpW = Math.max(1, Math.min(2400, Math.round(screenCropRect.width())));
+        int bmpH = Math.max(1, Math.min(3200, Math.round(screenCropRect.height())));
+        Bitmap bmp = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        c.drawColor(pageBackgroundColor);
+        c.translate(-screenCropRect.left, -screenCropRect.top);
+        if (currentPage != null) {
+            if (currentPage.images != null) {
+                for (ImageItem img : currentPage.images) {
+                    if (img != null) drawImage(c, img);
+                }
+            }
+            if (currentPage.shapes != null) {
+                for (ShapeItem shp : currentPage.shapes) {
+                    if (shp != null) drawShape(c, shp.type, shp.startX, shp.startY, shp.endX, shp.endY, shp.color, shp.strokeWidth, shp.lineStyle, shp.fillColor);
+                }
+            }
+            if (currentPage.texts != null) {
+                for (TextItem txt : currentPage.texts) {
+                    if (txt != null) {
+                        textPaint.setColor(txt.color);
+                        textPaint.setTextSize(txt.fontSize);
+                        textPaint.setTypeface(getCachedTypeface(txt.fontKey));
+                        if (Math.abs(txt.rotationAngle) > 0.5f) {
+                            c.save();
+                            c.rotate(txt.rotationAngle, txt.x, txt.y);
+                            c.drawText(txt.text, txt.x, txt.y, textPaint);
+                            c.restore();
+                        } else {
+                            c.drawText(txt.text, txt.x, txt.y, textPaint);
+                        }
+                    }
+                }
+            }
+            if (currentPage.strokes != null) {
+                for (Stroke s : currentPage.strokes) {
+                    if (s != null) drawStroke(c, s);
+                }
+            }
+        }
+        return bmp;
+    }
+
     public boolean canUndo() {
         return !undoStack.isEmpty();
     }
@@ -2086,12 +2299,12 @@ public class CanvasView extends View {
                 }
             }
 
-            // 9. Draw Laser Pointer Presentation Trail & Glowing Tip
-            if (!laserTrail.isEmpty()) {
+            // 9. Draw Laser Pointer Presentation Trail & StarNote Glowing Bullseye Tip
+            if (!laserTrail.isEmpty() && laserMode == LaserMode.LINE) {
                 long now = SystemClock.uptimeMillis();
                 int expiredCount = 0;
                 while (expiredCount < laserTrail.size()
-                        && now - laserTrail.get(expiredCount).timestamp > 1200) {
+                        && now - laserTrail.get(expiredCount).timestamp > laserFadeDurationMs) {
                     expiredCount++;
                 }
                 if (expiredCount > 0) laserTrail.subList(0, expiredCount).clear();
@@ -2101,47 +2314,69 @@ public class CanvasView extends View {
                     for (int i = 0; i < laserTrail.size() - 1; i++) {
                         LaserPoint p1 = laserTrail.get(i);
                         LaserPoint p2 = laserTrail.get(i + 1);
-                        // A pen lift starts a new path; never draw a connector
-                        // between independent laser gestures.
                         if (p2.startsSubpath) continue;
-                        LaserPoint p0 = i > 0 && !p1.startsSubpath
-                                ? laserTrail.get(i - 1) : p1;
-                        LaserPoint p3 = i + 2 < laserTrail.size()
-                                && !laserTrail.get(i + 2).startsSubpath
-                                ? laserTrail.get(i + 2) : p2;
-                        float lifeRatio = Math.max(0.05f,
-                                1.0f - (float) (now - p2.timestamp) / 1200f);
-                        int bucket = Math.min(LASER_FADE_BUCKETS - 1,
-                                (int) (lifeRatio * LASER_FADE_BUCKETS));
+                        LaserPoint p0 = i > 0 && !p1.startsSubpath ? laserTrail.get(i - 1) : p1;
+                        LaserPoint p3 = i + 2 < laserTrail.size() && !laserTrail.get(i + 2).startsSubpath ? laserTrail.get(i + 2) : p2;
+                        float lifeRatio = Math.max(0.05f, 1.0f - (float) (now - p2.timestamp) / (float) laserFadeDurationMs);
+                        int bucket = Math.min(LASER_FADE_BUCKETS - 1, (int) (lifeRatio * LASER_FADE_BUCKETS));
                         Path path = laserFadePaths[bucket];
                         float control1X = p1.x + (p2.x - p0.x) / 6f;
                         float control1Y = p1.y + (p2.y - p0.y) / 6f;
                         float control2X = p2.x - (p3.x - p1.x) / 6f;
                         float control2Y = p2.y - (p3.y - p1.y) / 6f;
                         path.moveTo(p1.x, p1.y);
-                        path.cubicTo(control1X, control1Y, control2X, control2Y,
-                                p2.x, p2.y);
+                        path.cubicTo(control1X, control1Y, control2X, control2Y, p2.x, p2.y);
                         usedLaserFadePaths[bucket] = true;
                     }
                 }
                 for (int bucket = 0; bucket < LASER_FADE_BUCKETS; bucket++) {
                     if (!usedLaserFadePaths[bucket]) continue;
                     float lifeRatio = (bucket + 0.5f) / LASER_FADE_BUCKETS;
-                    laserGlowPaint.setAlpha((int) (200 * lifeRatio));
-                    laserGlowPaint.setStrokeWidth(16f * lifeRatio);
+                    laserGlowPaint.setColor(laserColor);
+                    laserGlowPaint.setAlpha((int) (180 * lifeRatio));
+                    laserGlowPaint.setStrokeWidth(laserStrokeWidth * 2.2f * lifeRatio);
                     canvas.drawPath(laserFadePaths[bucket], laserGlowPaint);
                     laserCorePaint.setAlpha((int) (255 * lifeRatio));
-                    laserCorePaint.setStrokeWidth(4.5f * lifeRatio);
+                    laserCorePaint.setStrokeWidth(laserStrokeWidth * 0.65f * lifeRatio);
                     canvas.drawPath(laserFadePaths[bucket], laserCorePaint);
                 }
                 if (!laserTrail.isEmpty()) {
-                    LaserPoint tip = laserTrail.get(laserTrail.size() - 1);
-                    canvas.drawCircle(tip.x, tip.y, 8f, laserTipPaint);
-                    laserCorePaint.setAlpha(255);
-                    laserCorePaint.setStrokeWidth(4.5f);
-                    canvas.drawCircle(tip.x, tip.y, 4f, laserCorePaint);
                     postInvalidateOnAnimation();
                 }
+            }
+
+            // Draw Active Concentric Bullseye Reticle (visible ONLY while touching)
+            if (isLaserTouching) {
+                float tipX = laserCurrentX;
+                float tipY = laserCurrentY;
+                float tipBaseRadius = laserTipRadius / Math.max(0.5f, scaleFactor);
+
+                // 1. Soft glowing halo
+                laserHaloPaint.setColor(laserColor);
+                laserHaloPaint.setAlpha(65);
+                canvas.drawCircle(tipX, tipY, tipBaseRadius * 1.45f, laserHaloPaint);
+
+                // 2. Outer circle (solid laser color)
+                laserTipOuterPaint.setColor(laserColor);
+                laserTipOuterPaint.setAlpha(255);
+                canvas.drawCircle(tipX, tipY, tipBaseRadius, laserTipOuterPaint);
+
+                // 3. Middle ring (pure white)
+                laserTipMiddlePaint.setColor(Color.WHITE);
+                laserTipMiddlePaint.setAlpha(255);
+                canvas.drawCircle(tipX, tipY, tipBaseRadius * 0.72f, laserTipMiddlePaint);
+
+                // 4. Center core dot (solid laser color)
+                laserTipCenterPaint.setColor(laserColor);
+                laserTipCenterPaint.setAlpha(255);
+                canvas.drawCircle(tipX, tipY, tipBaseRadius * 0.36f, laserTipCenterPaint);
+
+                postInvalidateOnAnimation();
+            }
+
+            // 10. Screen Capture Crop Overlay
+            if (isScreenCropActive) {
+                drawScreenCropOverlay(canvas, viewWidth, viewHeight);
             }
         }
 
@@ -2151,6 +2386,160 @@ public class CanvasView extends View {
         if (isInfinite && effectiveHeight > viewHeight) {
             drawScrollbar(canvas, viewWidth, viewHeight, effectiveHeight);
         }
+    }
+
+    private void drawCropHandle(Canvas canvas, float x, float y, float radius) {
+        canvas.drawCircle(x, y, radius, cropHandlePaint);
+        canvas.drawCircle(x, y, radius, cropHandleStrokePaint);
+    }
+
+    private void drawScreenCropOverlay(Canvas canvas, int viewWidth, int viewHeight) {
+        if (!isScreenCropActive) return;
+
+        // 1. Draw 4 dark scrim rectangles around the crop rect
+        float minX = -10000f;
+        float maxX = 10000f;
+        float minY = -10000f;
+        float maxY = 30000f;
+        canvas.drawRect(minX, minY, maxX, screenCropRect.top, cropScrimPaint); // top
+        canvas.drawRect(minX, screenCropRect.bottom, maxX, maxY, cropScrimPaint); // bottom
+        canvas.drawRect(minX, screenCropRect.top, screenCropRect.left, screenCropRect.bottom, cropScrimPaint); // left
+        canvas.drawRect(screenCropRect.right, screenCropRect.top, maxX, screenCropRect.bottom, cropScrimPaint); // right
+
+        // 2. Dashed cyan border around screenCropRect
+        cropBorderPaint.setColor(0xFF38BDF8);
+        cropBorderPaint.setStrokeWidth(2.5f / Math.max(0.5f, scaleFactor));
+        cropBorderPaint.setPathEffect(new DashPathEffect(new float[]{12f / scaleFactor, 8f / scaleFactor}, 0f));
+        canvas.drawRect(screenCropRect, cropBorderPaint);
+
+        // 3. 8 Handles (StarNote Style: white filled with #6E4AFE violet border)
+        float hRadius = 7.5f / Math.max(0.5f, scaleFactor);
+        cropHandleStrokePaint.setStrokeWidth(1.8f / Math.max(0.5f, scaleFactor));
+        drawCropHandle(canvas, screenCropRect.left, screenCropRect.top, hRadius);
+        drawCropHandle(canvas, screenCropRect.centerX(), screenCropRect.top, hRadius);
+        drawCropHandle(canvas, screenCropRect.right, screenCropRect.top, hRadius);
+        drawCropHandle(canvas, screenCropRect.right, screenCropRect.centerY(), hRadius);
+        drawCropHandle(canvas, screenCropRect.right, screenCropRect.bottom, hRadius);
+        drawCropHandle(canvas, screenCropRect.centerX(), screenCropRect.bottom, hRadius);
+        drawCropHandle(canvas, screenCropRect.left, screenCropRect.bottom, hRadius);
+        drawCropHandle(canvas, screenCropRect.left, screenCropRect.centerY(), hRadius);
+
+        // 4. Floating Action Pill below bottom edge (StarNote shape_screen_capture_btn_bg)
+        float barW = 210f / Math.max(0.5f, scaleFactor);
+        float barH = 38f / Math.max(0.5f, scaleFactor);
+        float barMargin = 14f / Math.max(0.5f, scaleFactor);
+        float barLeft = screenCropRect.centerX() - barW / 2f;
+        float barTop = screenCropRect.bottom + barMargin;
+        float barRight = barLeft + barW;
+        float barBottom = barTop + barH;
+        RectF barRect = new RectF(barLeft, barTop, barRight, barBottom);
+
+        canvas.drawRoundRect(barRect, 14f / Math.max(0.5f, scaleFactor), 14f / Math.max(0.5f, scaleFactor), cropButtonBgPaint);
+        cropBorderPaint.setPathEffect(null);
+        cropBorderPaint.setStrokeWidth(1f / Math.max(0.5f, scaleFactor));
+        cropBorderPaint.setColor(0xFF334155);
+        canvas.drawRoundRect(barRect, 14f / Math.max(0.5f, scaleFactor), 14f / Math.max(0.5f, scaleFactor), cropBorderPaint);
+
+        // Cancel Button [ ✕ Cancel ]
+        cropCancelBtnRect.set(barLeft, barTop, barLeft + barW / 2f, barBottom);
+        cropButtonTextPaint.setColor(0xFFEF4444);
+        cropButtonTextPaint.setTextSize(13f / Math.max(0.5f, scaleFactor));
+        canvas.drawText("✕ Cancel", cropCancelBtnRect.centerX(), barTop + barH * 0.65f, cropButtonTextPaint);
+
+        // Center Divider
+        canvas.drawLine(barLeft + barW / 2f, barTop + 6f / Math.max(0.5f, scaleFactor),
+                barLeft + barW / 2f, barBottom - 6f / Math.max(0.5f, scaleFactor), cropBorderPaint);
+
+        // Confirm Button [ ✓ Insert ]
+        cropConfirmBtnRect.set(barLeft + barW / 2f, barTop, barRight, barBottom);
+        cropButtonTextPaint.setColor(0xFF10B981);
+        canvas.drawText("✓ Insert", cropConfirmBtnRect.centerX(), barTop + barH * 0.65f, cropButtonTextPaint);
+    }
+
+    private boolean handleScreenCropTouch(MotionEvent event) {
+        int action = event.getActionMasked();
+        float rawX = event.getX();
+        float rawY = event.getY();
+        float canvasX = (rawX - panOffsetX) / scaleFactor;
+        float canvasY = (rawY - panOffsetY) / scaleFactor + viewportOffsetY;
+        float hitSlop = 28f / Math.max(0.5f, scaleFactor);
+
+        switch (action) {
+            case MotionEvent.ACTION_DOWN:
+                if (cropCancelBtnRect.contains(canvasX, canvasY)) {
+                    stopScreenCrop();
+                    if (screenCropListener != null) screenCropListener.onCropCancelled();
+                    return true;
+                }
+                if (cropConfirmBtnRect.contains(canvasX, canvasY)) {
+                    Bitmap bmp = captureCropBitmap();
+                    stopScreenCrop();
+                    if (screenCropListener != null) screenCropListener.onCropConfirmed(bmp);
+                    return true;
+                }
+
+                // Check handles: 0: LT, 1: T, 2: RT, 3: R, 4: RB, 5: B, 6: LB, 7: L
+                float left = screenCropRect.left;
+                float right = screenCropRect.right;
+                float top = screenCropRect.top;
+                float bottom = screenCropRect.bottom;
+                float midX = screenCropRect.centerX();
+                float midY = screenCropRect.centerY();
+
+                if (Math.hypot(canvasX - left, canvasY - top) <= hitSlop) activeCropHandle = 0;
+                else if (Math.hypot(canvasX - midX, canvasY - top) <= hitSlop) activeCropHandle = 1;
+                else if (Math.hypot(canvasX - right, canvasY - top) <= hitSlop) activeCropHandle = 2;
+                else if (Math.hypot(canvasX - right, canvasY - midY) <= hitSlop) activeCropHandle = 3;
+                else if (Math.hypot(canvasX - right, canvasY - bottom) <= hitSlop) activeCropHandle = 4;
+                else if (Math.hypot(canvasX - midX, canvasY - bottom) <= hitSlop) activeCropHandle = 5;
+                else if (Math.hypot(canvasX - left, canvasY - bottom) <= hitSlop) activeCropHandle = 6;
+                else if (Math.hypot(canvasX - left, canvasY - midY) <= hitSlop) activeCropHandle = 7;
+                else if (screenCropRect.contains(canvasX, canvasY)) activeCropHandle = 8; // Move whole box
+                else activeCropHandle = -1;
+
+                cropTouchStartX = canvasX;
+                cropTouchStartY = canvasY;
+                cropInitialRect.set(screenCropRect);
+                return true;
+
+            case MotionEvent.ACTION_MOVE:
+                if (activeCropHandle == -1) return true;
+                float dx = canvasX - cropTouchStartX;
+                float dy = canvasY - cropTouchStartY;
+                float minSize = 60f / Math.max(0.5f, scaleFactor);
+
+                if (activeCropHandle == 8) {
+                    screenCropRect.set(cropInitialRect);
+                    screenCropRect.offset(dx, dy);
+                } else {
+                    float newL = cropInitialRect.left;
+                    float newT = cropInitialRect.top;
+                    float newR = cropInitialRect.right;
+                    float newB = cropInitialRect.bottom;
+
+                    if (activeCropHandle == 0 || activeCropHandle == 6 || activeCropHandle == 7) {
+                        newL = Math.min(cropInitialRect.right - minSize, cropInitialRect.left + dx);
+                    }
+                    if (activeCropHandle == 2 || activeCropHandle == 3 || activeCropHandle == 4) {
+                        newR = Math.max(cropInitialRect.left + minSize, cropInitialRect.right + dx);
+                    }
+                    if (activeCropHandle == 0 || activeCropHandle == 1 || activeCropHandle == 2) {
+                        newT = Math.min(cropInitialRect.bottom - minSize, cropInitialRect.top + dy);
+                    }
+                    if (activeCropHandle == 4 || activeCropHandle == 5 || activeCropHandle == 6) {
+                        newB = Math.max(cropInitialRect.top + minSize, cropInitialRect.bottom + dy);
+                    }
+                    screenCropRect.set(newL, newT, newR, newB);
+                }
+                invalidate();
+                return true;
+
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                activeCropHandle = -1;
+                return true;
+        }
+        return true;
     }
 
     private Typeface getCachedTypeface(String fontKey) {
@@ -3617,6 +4006,9 @@ public class CanvasView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (isScreenCropActive) {
+            return handleScreenCropTouch(event);
+        }
         int action = event.getActionMasked();
         int pointerCount = event.getPointerCount();
         recordMotionEventForPrediction(event);
@@ -3796,6 +4188,21 @@ public class CanvasView extends View {
         int primaryToolType = event.getToolType(inputPointerIndex);
         float pressure = normalizeInputPressure(event.getPressure(inputPointerIndex), primaryToolType);
 
+        // Audio Memo sticker single tap check
+        if (action == MotionEvent.ACTION_DOWN && currentTool != DrawingTool.LASSO) {
+            if (currentPage != null && currentPage.images != null) {
+                for (int i = currentPage.images.size() - 1; i >= 0; i--) {
+                    ImageItem img = currentPage.images.get(i);
+                    if (img != null && img.audioPath != null && img.getBounds().contains(canvasX, canvasY)) {
+                        if (audioMemoClickListener != null) {
+                            audioMemoClickListener.onAudioMemoClick(img);
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
         // Long-press gesture tracking for "Press and hold to paste wherever we want"
         if (action == MotionEvent.ACTION_DOWN) {
             touchDownRawX = rawX;
@@ -3819,28 +4226,40 @@ public class CanvasView extends View {
             }
         }
 
-        // 2b. Laser Pointer Tool (ephemeral glowing presentation trail)
+        // 2b. StarNote Laser Presentation Tool (ephemeral trail + concentric bullseye target dot)
         if (currentTool == DrawingTool.LASER) {
             switch (action) {
                 case MotionEvent.ACTION_DOWN:
-                    laserTrail.add(new LaserPoint(canvasX, canvasY,
-                            event.getEventTime(), true));
+                    isLaserTouching = true;
+                    laserCurrentX = canvasX;
+                    laserCurrentY = canvasY;
+                    if (laserMode == LaserMode.LINE) {
+                        laserTrail.add(new LaserPoint(canvasX, canvasY,
+                                event.getEventTime(), true));
+                    }
                     postInvalidateOnAnimation();
                     return true;
                 case MotionEvent.ACTION_MOVE:
-                    int historySize = event.getHistorySize();
-                    for (int i = 0; i < historySize; i++) {
-                        float histRawX = event.getHistoricalX(inputPointerIndex, i);
-                        float histRawY = event.getHistoricalY(inputPointerIndex, i);
-                        float histX = (histRawX - panOffsetX) / scaleFactor;
-                        float histY = (histRawY - panOffsetY) / scaleFactor + viewportOffsetY;
-                        laserTrail.add(new LaserPoint(histX, histY,
-                                event.getHistoricalEventTime(i)));
+                    isLaserTouching = true;
+                    laserCurrentX = canvasX;
+                    laserCurrentY = canvasY;
+                    if (laserMode == LaserMode.LINE) {
+                        int historySize = event.getHistorySize();
+                        for (int i = 0; i < historySize; i++) {
+                            float histRawX = event.getHistoricalX(inputPointerIndex, i);
+                            float histRawY = event.getHistoricalY(inputPointerIndex, i);
+                            float histX = (histRawX - panOffsetX) / scaleFactor;
+                            float histY = (histRawY - panOffsetY) / scaleFactor + viewportOffsetY;
+                            laserTrail.add(new LaserPoint(histX, histY,
+                                    event.getHistoricalEventTime(i)));
+                        }
+                        laserTrail.add(new LaserPoint(canvasX, canvasY, event.getEventTime()));
                     }
-                    laserTrail.add(new LaserPoint(canvasX, canvasY, event.getEventTime()));
                     postInvalidateOnAnimation();
                     return true;
                 case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    isLaserTouching = false;
                     postInvalidateOnAnimation();
                     return true;
             }

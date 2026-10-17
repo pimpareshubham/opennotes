@@ -4,9 +4,14 @@ import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import androidx.core.content.ContextCompat;
 import android.media.MediaPlayer;
 import android.media.MediaRecorder;
 import android.net.Uri;
@@ -185,6 +190,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private ActivityResultLauncher<String> fontPickerLauncher;
     private ActivityResultLauncher<String> exportProfileLauncher;
     private ActivityResultLauncher<String> importProfileLauncher;
+    private ActivityResultLauncher<Uri> takePictureLauncher;
+    private Uri tempCameraPhotoUri;
+    private MediaPlayer audioMemoPlayer;
     private MediaRecorder voiceRecorder;
     private MediaPlayer voicePlayer;
     private File currentAudioFile;
@@ -210,6 +218,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         imagePickerLauncher = registerForActivityResult(new ActivityResultContracts.GetContent(), uri -> {
             if (uri != null) {
                 handleInsertImage(uri);
+            }
+        });
+
+        takePictureLauncher = registerForActivityResult(new ActivityResultContracts.TakePicture(), success -> {
+            if (Boolean.TRUE.equals(success) && tempCameraPhotoUri != null) {
+                handleInsertImage(tempCameraPhotoUri);
             }
         });
 
@@ -849,18 +863,54 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             btnCloudSync.setOnClickListener(v -> Toast.makeText(this, "100% Offline • Notes saved directly on device storage", Toast.LENGTH_SHORT).show());
         }
         if (btnCamera != null) {
-            btnCamera.setOnClickListener(v -> imagePickerLauncher.launch("image/*"));
+            btnCamera.setOnClickListener(v -> showInsertPhotoDialog());
         }
         if (btnCrop != null) {
             btnCrop.setOnClickListener(v -> {
-                canvasView.setTool(DrawingTool.LASSO);
-                updateToolUi(DrawingTool.LASSO);
-                Toast.makeText(this, "Crop Tool: Circle stroke area with lasso to extract or copy", Toast.LENGTH_SHORT).show();
+                if (canvasView.isScreenCropActive()) {
+                    canvasView.stopScreenCrop();
+                } else {
+                    canvasView.startScreenCrop(new CanvasView.OnScreenCropListener() {
+                        @Override
+                        public void onCropConfirmed(Bitmap croppedBitmap) {
+                            if (croppedBitmap != null) {
+                                try {
+                                    File imagesDir = new File(getFilesDir(), "note_images");
+                                    if (!imagesDir.exists()) imagesDir.mkdirs();
+                                    File destFile = new File(imagesDir, "crop_" + System.currentTimeMillis() + ".png");
+                                    try (FileOutputStream fos = new FileOutputStream(destFile)) {
+                                        croppedBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                                    }
+                                    float width = Math.min(croppedBitmap.getWidth(), 800f);
+                                    float height = width * ((float) croppedBitmap.getHeight() / croppedBitmap.getWidth());
+                                    float centerX = canvasView.getCenterCanvasX();
+                                    float centerY = canvasView.getCenterCanvasY();
+                                    ImageItem imgItem = new ImageItem(destFile.getAbsolutePath(), centerX - width / 2f, centerY - height / 2f, width, height);
+                                    canvasView.addImageItem(imgItem);
+                                    saveCurrentPage();
+                                    Toast.makeText(NoteEditorActivity.this, "✂️ Screenshot cropped and inserted into page!", Toast.LENGTH_SHORT).show();
+                                } catch (Exception e) {
+                                    Toast.makeText(NoteEditorActivity.this, "Failed to save cropped screenshot: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                                }
+                            }
+                        }
+
+                        @Override
+                        public void onCropCancelled() {
+                            Toast.makeText(NoteEditorActivity.this, "Screenshot cancelled", Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }
             });
         }
         if (btnMic != null) {
             btnMic.setOnClickListener(v -> showVoiceRecorderDialog());
         }
+        canvasView.setOnAudioMemoClickListener(item -> {
+            if (item != null && item.audioPath != null) {
+                playAudioFile(new File(item.audioPath));
+            }
+        });
         if (btnSplitView != null) {
             btnSplitView.setOnClickListener(v -> setZenFullscreen(!isZenFullscreen));
         }
@@ -1004,25 +1054,95 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (textToolPropertyTitle != null && title != null) {
             textToolPropertyTitle.setText(title);
         }
-        if (switchStraightLine != null) {
-            switchStraightLine.setOnCheckedChangeListener(null);
-            if (canvasView.getTool() == DrawingTool.HIGHLIGHTER) {
-                if (textStraightLineTitle != null) textStraightLineTitle.setText("Lock 0° / 90° (Straight Highlighter)");
-                switchStraightLine.setChecked(canvasView.isStraightHighlighterEnabled());
-            } else {
-                if (textStraightLineTitle != null) textStraightLineTitle.setText("Straight-Line Snapping");
-                switchStraightLine.setChecked(canvasView.isStraightLineAssist());
+        if (canvasView.getTool() == DrawingTool.LASER) {
+            if (textToolPropertyTitle != null) textToolPropertyTitle.setText("Laser Presentation Pointer");
+            if (btnNibFine != null) {
+                btnNibFine.setText("Trail Line");
+                btnNibFine.setOnClickListener(v -> {
+                    canvasView.setLaserMode(CanvasView.LaserMode.LINE);
+                    updateNibButtons(btnNibFine);
+                    Toast.makeText(this, "Laser: Trail Line Mode", Toast.LENGTH_SHORT).show();
+                });
             }
-            switchStraightLine.setOnCheckedChangeListener((btn, isChecked) -> {
+            if (btnNibMedium != null) {
+                btnNibMedium.setText("Pointer Dot");
+                btnNibMedium.setOnClickListener(v -> {
+                    canvasView.setLaserMode(CanvasView.LaserMode.DOT);
+                    updateNibButtons(btnNibMedium);
+                    Toast.makeText(this, "Laser: Pointer Dot Mode", Toast.LENGTH_SHORT).show();
+                });
+            }
+            if (btnNibBold != null) {
+                btnNibBold.setVisibility(View.GONE);
+            }
+            boolean isLine = canvasView.getLaserMode() == CanvasView.LaserMode.LINE;
+            updateNibButtons(isLine ? btnNibFine : btnNibMedium);
+
+            if (seekStrokeThickness != null) seekStrokeThickness.setProgress(Math.round(canvasView.getLaserStrokeWidth()));
+            if (textThicknessValue != null) textThicknessValue.setText(String.format(Locale.US, "%.1f mm", canvasView.getLaserStrokeWidth() * 0.3f));
+
+            if (textStraightLineTitle != null) textStraightLineTitle.setText("Long Trail Duration (2.5s vs 1.2s)");
+            if (switchStraightLine != null) {
+                switchStraightLine.setOnCheckedChangeListener(null);
+                switchStraightLine.setChecked(canvasView.getLaserFadeDurationMs() > 1500L);
+                switchStraightLine.setOnCheckedChangeListener((btn, isChecked) -> {
+                    long duration = isChecked ? 2500L : 1200L;
+                    canvasView.setLaserFadeDurationMs(duration);
+                    Toast.makeText(this, isChecked ? "Trail Duration: 2.5s" : "Trail Duration: 1.2s", Toast.LENGTH_SHORT).show();
+                });
+            }
+        } else {
+            if (btnNibFine != null) {
+                btnNibFine.setText("Fine");
+                btnNibFine.setOnClickListener(v -> {
+                    canvasView.setStrokeWidth(3.0f);
+                    if (seekStrokeThickness != null) seekStrokeThickness.setProgress(3);
+                    if (textThicknessValue != null) textThicknessValue.setText("0.9 mm");
+                    updateNibButtons(btnNibFine);
+                    if (appSettings != null) appSettings.setStrokeWidth(3.0f);
+                });
+            }
+            if (btnNibMedium != null) {
+                btnNibMedium.setText("Medium");
+                btnNibMedium.setOnClickListener(v -> {
+                    canvasView.setStrokeWidth(6.0f);
+                    if (seekStrokeThickness != null) seekStrokeThickness.setProgress(6);
+                    if (textThicknessValue != null) textThicknessValue.setText("1.8 mm");
+                    updateNibButtons(btnNibMedium);
+                    if (appSettings != null) appSettings.setStrokeWidth(6.0f);
+                });
+            }
+            if (btnNibBold != null) {
+                btnNibBold.setVisibility(View.VISIBLE);
+                btnNibBold.setText("Bold");
+                btnNibBold.setOnClickListener(v -> {
+                    canvasView.setStrokeWidth(12.0f);
+                    if (seekStrokeThickness != null) seekStrokeThickness.setProgress(12);
+                    if (textThicknessValue != null) textThicknessValue.setText("3.6 mm");
+                    updateNibButtons(btnNibBold);
+                    if (appSettings != null) appSettings.setStrokeWidth(12.0f);
+                });
+            }
+            if (switchStraightLine != null) {
+                switchStraightLine.setOnCheckedChangeListener(null);
                 if (canvasView.getTool() == DrawingTool.HIGHLIGHTER) {
-                    canvasView.setStraightHighlighterEnabled(isChecked);
-                    Toast.makeText(this, isChecked ? "Straight Highlighter Lock: ON (0° / 90°)" : "Straight Highlighter Lock: OFF", Toast.LENGTH_SHORT).show();
+                    if (textStraightLineTitle != null) textStraightLineTitle.setText("Lock 0° / 90° (Straight Highlighter)");
+                    switchStraightLine.setChecked(canvasView.isStraightHighlighterEnabled());
                 } else {
-                    canvasView.setStraightLineAssist(isChecked);
-                    if (btnRuler != null) btnRuler.setColorFilter(isChecked ? 0xFF38BDF8 : 0xFF94A3B8);
-                    if (appSettings != null) appSettings.setStraightLineAssist(isChecked);
+                    if (textStraightLineTitle != null) textStraightLineTitle.setText("Straight-Line Snapping");
+                    switchStraightLine.setChecked(canvasView.isStraightLineAssist());
                 }
-            });
+                switchStraightLine.setOnCheckedChangeListener((btn, isChecked) -> {
+                    if (canvasView.getTool() == DrawingTool.HIGHLIGHTER) {
+                        canvasView.setStraightHighlighterEnabled(isChecked);
+                        Toast.makeText(this, isChecked ? "Straight Highlighter Lock: ON (0° / 90°)" : "Straight Highlighter Lock: OFF", Toast.LENGTH_SHORT).show();
+                    } else {
+                        canvasView.setStraightLineAssist(isChecked);
+                        if (btnRuler != null) btnRuler.setColorFilter(isChecked ? 0xFF38BDF8 : 0xFF94A3B8);
+                        if (appSettings != null) appSettings.setStraightLineAssist(isChecked);
+                    }
+                });
+            }
         }
         cardToolProperties.animate().cancel();
         cardToolProperties.setVisibility(View.VISIBLE);
@@ -1271,9 +1391,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 if (fromUser) {
                     float width = Math.max(1f, progress);
-                    canvasView.setStrokeWidth(width);
+                    if (canvasView.getTool() == DrawingTool.LASER) {
+                        canvasView.setLaserStrokeWidth(width);
+                    } else {
+                        canvasView.setStrokeWidth(width);
+                        if (appSettings != null) appSettings.setStrokeWidth(width);
+                    }
                     textThicknessValue.setText(String.format(Locale.US, "%.1f mm", width * 0.3f));
-                    if (appSettings != null) appSettings.setStrokeWidth(width);
                 }
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
@@ -2962,6 +3086,29 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
+    private void showInsertPhotoDialog() {
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this);
+        builder.setTitle("Insert Image");
+        String[] options = {"Take Photo with Camera", "Choose from Gallery"};
+        builder.setItems(options, (dialog, which) -> {
+            if (which == 0) {
+                try {
+                    File photoFile = new File(getCacheDir(), "camera_" + System.currentTimeMillis() + ".jpg");
+                    tempCameraPhotoUri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", photoFile);
+                    takePictureLauncher.launch(tempCameraPhotoUri);
+                } catch (Exception e) {
+                    Toast.makeText(this, "Camera error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            } else {
+                imagePickerLauncher.launch("image/*");
+            }
+        });
+        builder.setNegativeButton("Cancel", null);
+        AlertDialog dialog = builder.create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
+    }
+
     private void showDownloadModelsDialog() {
         MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this);
         builder.setTitle("📥 Offline Handwriting Recognition Models");
@@ -3236,11 +3383,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 btnAction.setText("Stop & Save");
                 btnAction.setTextColor(0xFFEF4444);
             } else {
+                long elapsed = (System.currentTimeMillis() - recordStartTime) / 1000;
+                long mins = elapsed / 60;
+                long secs = elapsed % 60;
+                String durationStr = String.format(Locale.US, "%02d:%02d", mins, secs);
                 stopAudioRecording();
                 statusView.setText("✓ Voice note saved directly to notebook!");
                 btnAction.setText("Play Note");
                 btnAction.setTextColor(0xFF38BDF8);
                 btnAction.setOnClickListener(v2 -> playRecordedAudio(statusView));
+                createAndInsertAudioMemoCard(currentAudioFile, durationStr);
             }
         });
     }
@@ -3297,19 +3449,136 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void playRecordedAudio(TextView statusView) {
         if (currentAudioFile != null && currentAudioFile.exists()) {
-            try {
-                if (voicePlayer != null) {
-                    voicePlayer.release();
+            playAudioFile(currentAudioFile);
+            statusView.setText("▶ Playing audio memo...");
+        }
+    }
+
+    private void playAudioFile(File file) {
+        if (file == null || !file.exists()) {
+            Toast.makeText(this, "Voice memo file not found", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        try {
+            if (audioMemoPlayer != null) {
+                if (audioMemoPlayer.isPlaying()) {
+                    audioMemoPlayer.stop();
+                    audioMemoPlayer.release();
+                    audioMemoPlayer = null;
+                    Toast.makeText(this, "⏹ Playback stopped", Toast.LENGTH_SHORT).show();
+                    return;
                 }
-                voicePlayer = new MediaPlayer();
-                voicePlayer.setDataSource(currentAudioFile.getAbsolutePath());
-                voicePlayer.prepare();
-                voicePlayer.start();
-                statusView.setText("▶ Playing audio memo...");
-                voicePlayer.setOnCompletionListener(mp -> statusView.setText("✓ Playback finished"));
-            } catch (Exception e) {
-                ErrorDialog.show(this, "Could not play voice note", e);
+                audioMemoPlayer.release();
+                audioMemoPlayer = null;
             }
+            audioMemoPlayer = new MediaPlayer();
+            audioMemoPlayer.setDataSource(file.getAbsolutePath());
+            audioMemoPlayer.prepare();
+            audioMemoPlayer.start();
+            Toast.makeText(this, "▶ Playing voice memo...", Toast.LENGTH_SHORT).show();
+            audioMemoPlayer.setOnCompletionListener(mp -> {
+                audioMemoPlayer.release();
+                audioMemoPlayer = null;
+                Toast.makeText(NoteEditorActivity.this, "✓ Voice memo finished", Toast.LENGTH_SHORT).show();
+            });
+        } catch (Exception e) {
+            Toast.makeText(this, "Playback error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void createAndInsertAudioMemoCard(File audioFile, String durationStr) {
+        if (audioFile == null || !audioFile.exists()) return;
+        try {
+            int cardW = 460;
+            int cardH = 120;
+            Bitmap cardBitmap = Bitmap.createBitmap(cardW, cardH, Bitmap.Config.ARGB_8888);
+            android.graphics.Canvas canvas = new android.graphics.Canvas(cardBitmap);
+
+            // Card background (Dark slate with rounded corners)
+            Paint bgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            bgPaint.setColor(0xFF1E293B);
+            bgPaint.setStyle(Paint.Style.FILL);
+            RectF cardBounds = new RectF(2, 2, cardW - 2, cardH - 2);
+            canvas.drawRoundRect(cardBounds, 24f, 24f, bgPaint);
+
+            // Card border
+            Paint borderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            borderPaint.setColor(0xFF38BDF8);
+            borderPaint.setStyle(Paint.Style.STROKE);
+            borderPaint.setStrokeWidth(2.5f);
+            canvas.drawRoundRect(cardBounds, 24f, 24f, borderPaint);
+
+            // Left icon circle badge
+            Paint badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            badgePaint.setColor(0xFF0284C7);
+            badgePaint.setStyle(Paint.Style.FILL);
+            canvas.drawCircle(58, 60, 36, badgePaint);
+
+            // Soundwave bars inside badge
+            Paint wavePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            wavePaint.setColor(0xFFFFFFFF);
+            wavePaint.setStyle(Paint.Style.STROKE);
+            wavePaint.setStrokeWidth(4.5f);
+            wavePaint.setStrokeCap(Paint.Cap.ROUND);
+            canvas.drawLine(44, 60 - 8, 44, 60 + 8, wavePaint);
+            canvas.drawLine(53, 60 - 18, 53, 60 + 18, wavePaint);
+            canvas.drawLine(63, 60 - 24, 63, 60 + 24, wavePaint);
+            canvas.drawLine(72, 60 - 12, 72, 60 + 12, wavePaint);
+
+            // Title: Voice Memo
+            Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            textPaint.setColor(0xFFF8FAFC);
+            textPaint.setTextSize(26f);
+            textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            canvas.drawText("Voice Memo", 112, 54, textPaint);
+
+            // Subtitle / Duration Pill
+            Paint durPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            durPaint.setColor(0xFF94A3B8);
+            durPaint.setTextSize(18f);
+            durPaint.setTypeface(Typeface.DEFAULT);
+            canvas.drawText("⏱ " + durationStr + " • Tap to Play", 112, 88, durPaint);
+
+            // Right Play Button Circle
+            Paint playBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            playBgPaint.setColor(0xFF38BDF8);
+            playBgPaint.setStyle(Paint.Style.FILL);
+            canvas.drawCircle(cardW - 55, 60, 26, playBgPaint);
+
+            // Play Triangle
+            Paint playTriPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            playTriPaint.setColor(0xFF0F172A);
+            playTriPaint.setStyle(Paint.Style.FILL);
+            Path playPath = new Path();
+            float cx = cardW - 54;
+            float cy = 60;
+            playPath.moveTo(cx - 7, cy - 11);
+            playPath.lineTo(cx + 11, cy);
+            playPath.lineTo(cx - 7, cy + 11);
+            playPath.close();
+            canvas.drawPath(playPath, playTriPaint);
+
+            File memosDir = new File(getFilesDir(), "voice_memos");
+            if (!memosDir.exists()) memosDir.mkdirs();
+            File memoCardFile = new File(memosDir, "audio_card_" + System.currentTimeMillis() + ".png");
+            try (FileOutputStream fos = new FileOutputStream(memoCardFile)) {
+                cardBitmap.compress(Bitmap.CompressFormat.PNG, 100, fos);
+            }
+
+            float width = 360f;
+            float height = 94f;
+            float centerX = canvasView.getCenterCanvasX();
+            float centerY = canvasView.getCenterCanvasY();
+            float startX = centerX - width / 2f;
+            float startY = centerY - height / 2f;
+
+            ImageItem imgItem = new ImageItem(memoCardFile.getAbsolutePath(), startX, startY, width, height);
+            imgItem.audioPath = audioFile.getAbsolutePath();
+            canvasView.addImageItem(imgItem);
+            saveCurrentPage();
+            Toast.makeText(this, "🎙 Voice memo card added to note! Tap anytime to listen.", Toast.LENGTH_LONG).show();
+        } catch (Exception e) {
+            Toast.makeText(this, "Failed to create memo card: " + e.getMessage(), Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -3414,6 +3683,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         stopAudioRecording();
         if (voicePlayer != null) {
             try { voicePlayer.release(); voicePlayer = null; } catch (Exception ignored) {}
+        }
+        if (audioMemoPlayer != null) {
+            try { audioMemoPlayer.release(); audioMemoPlayer = null; } catch (Exception ignored) {}
         }
         saveDebounceHandler.removeCallbacksAndMessages(null);
         saveCurrentPage();

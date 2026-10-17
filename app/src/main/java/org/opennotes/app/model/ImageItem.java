@@ -10,13 +10,19 @@ public class ImageItem {
     public float y;
     public float width;
     public float height;
+    public String audioPath; // Optional: If non-null, this image is an interactive Audio Memo sticker
 
     public ImageItem(String imagePath, float x, float y, float width, float height) {
+        this(imagePath, x, y, width, height, null);
+    }
+
+    public ImageItem(String imagePath, float x, float y, float width, float height, String audioPath) {
         this.imagePath = imagePath;
         this.x = x;
         this.y = y;
         this.width = width;
         this.height = height;
+        this.audioPath = audioPath;
     }
 
     private transient RectF cachedBounds;
@@ -37,6 +43,9 @@ public class ImageItem {
         obj.put("y", (double) y);
         obj.put("width", (double) width);
         obj.put("height", (double) height);
+        if (audioPath != null && !audioPath.isEmpty()) {
+            obj.put("audioPath", audioPath);
+        }
         return obj;
     }
 
@@ -46,6 +55,7 @@ public class ImageItem {
         float y = (float) obj.optDouble("y", 0.0);
         float width = (float) obj.optDouble("width", 200.0);
         float height = (float) obj.optDouble("height", 200.0);
-        return new ImageItem(path, x, y, width, height);
+        String audio = obj.has("audioPath") ? obj.optString("audioPath", null) : null;
+        return new ImageItem(path, x, y, width, height, audio);
     }
 }
