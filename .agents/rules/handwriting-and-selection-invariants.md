@@ -13,3 +13,6 @@
 3. **Lasso Selection Handle Placement**:
    - In direct-manipulation selection tools (e.g. Lasso), the rotation and tilt handle must NEVER be positioned at the top where it is obscured by the top floating contextual action bar (`lassoFloatingActionBar`).
    - Position the rotation stalk and knob on the **right side** of the selection bounding box (`rotKnobX = selectionBounds.right + stalkLength; rotKnobY = selectionBounds.centerY()`), with touch hit-testing centered on the right-side knob.
+
+4. **APK Build Artifact Naming**:
+   - Whenever building the debug APK, always copy the output APK to `Desktop/starnote/OpenNotes-<commit_id>.apk` using the short git commit hash (`git rev-parse --short HEAD`).
