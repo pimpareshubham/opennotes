@@ -389,11 +389,106 @@ public class SemanticStrokeClusterer {
             if (orderedLineStrokes.isEmpty()) continue;
 
             RectF lineBounds = InkNormalizer.getBounds(orderedLineStrokes);
-            List<StrokeWord> words = Collections.singletonList(
-                    new StrokeWord(new ArrayList<>(orderedLineStrokes), lineBounds, rotAngle));
+            List<StrokeWord> words = segmentLineIntoWords(orderedLineStrokes, medianH, rotAngle);
             result.add(new StrokeLine(orderedLineStrokes, words, lineBounds, rotAngle));
         }
 
         return result;
+    }
+
+    /**
+     * Segments strokes of a single line into coherent word / token clusters.
+     */
+    public static List<StrokeWord> segmentLineIntoWords(List<Stroke> orderedLineStrokes, float medianH, float rotAngle) {
+        List<StrokeWord> words = new ArrayList<>();
+        if (orderedLineStrokes == null || orderedLineStrokes.isEmpty()) return words;
+        if (orderedLineStrokes.size() == 1) {
+            RectF b = InkNormalizer.getBounds(orderedLineStrokes);
+            words.add(new StrokeWord(new ArrayList<>(orderedLineStrokes), b, rotAngle));
+            return words;
+        }
+
+        RectF overallBounds = InkNormalizer.getBounds(orderedLineStrokes);
+        float pivotX = overallBounds != null ? overallBounds.centerX() : 0f;
+        float pivotY = overallBounds != null ? overallBounds.centerY() : 0f;
+
+        List<ProjectedStroke> projected = new ArrayList<>(orderedLineStrokes.size());
+        for (Stroke s : orderedLineStrokes) {
+            if (s != null) {
+                projected.add(new ProjectedStroke(s, rotAngle, pivotX, pivotY));
+            }
+        }
+        if (projected.isEmpty()) return words;
+
+        int n = projected.size();
+        int[] parent = new int[n];
+        for (int i = 0; i < n; i++) parent[i] = i;
+
+        for (int i = 0; i < n; i++) {
+            ProjectedStroke s1 = projected.get(i);
+            for (int j = i + 1; j < n; j++) {
+                ProjectedStroke s2 = projected.get(j);
+
+                float hOverlap = Math.max(0f, Math.min(s1.maxX, s2.maxX) - Math.max(s1.minX, s2.minX));
+                float hGap = Math.max(0f, Math.max(s1.minX, s2.minX) - Math.min(s1.maxX, s2.maxX));
+
+                boolean isShirorekha1 = (s1.width >= 2.0f * s1.height && s1.width >= 0.7f * medianH);
+                boolean isShirorekha2 = (s2.width >= 2.0f * s2.height && s2.width >= 0.7f * medianH);
+
+                boolean sameWord = false;
+                if (hOverlap > 0f) {
+                    sameWord = true;
+                } else if (isShirorekha1 && (s2.minX >= s1.minX - 10f && s2.maxX <= s1.maxX + 10f)) {
+                    sameWord = true;
+                } else if (isShirorekha2 && (s1.minX >= s2.minX - 10f && s1.maxX <= s2.maxX + 10f)) {
+                    sameWord = true;
+                } else if (hGap < 0.48f * medianH) {
+                    sameWord = true;
+                }
+
+                if (sameWord) {
+                    int r1 = dsuFind(parent, i);
+                    int r2 = dsuFind(parent, j);
+                    if (r1 != r2) parent[r1] = r2;
+                }
+            }
+        }
+
+        java.util.Map<Integer, List<ProjectedStroke>> wordClusters = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < n; i++) {
+            int root = dsuFind(parent, i);
+            List<ProjectedStroke> list = wordClusters.get(root);
+            if (list == null) {
+                list = new ArrayList<>();
+                wordClusters.put(root, list);
+            }
+            list.add(projected.get(i));
+        }
+
+        List<List<ProjectedStroke>> wordList = new ArrayList<>(wordClusters.values());
+        Collections.sort(wordList, (w1, w2) -> {
+            float minX1 = Float.MAX_VALUE, minX2 = Float.MAX_VALUE;
+            for (ProjectedStroke s : w1) minX1 = Math.min(minX1, s.minX);
+            for (ProjectedStroke s : w2) minX2 = Math.min(minX2, s.minX);
+            return Float.compare(minX1, minX2);
+        });
+
+        for (List<ProjectedStroke> cluster : wordList) {
+            java.util.Set<Stroke> wordStrokesSet = Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+            for (ProjectedStroke ps : cluster) {
+                wordStrokesSet.add(ps.originalStroke);
+            }
+            List<Stroke> orderedWordStrokes = new ArrayList<>();
+            for (Stroke s : orderedLineStrokes) {
+                if (wordStrokesSet.contains(s)) {
+                    orderedWordStrokes.add(s);
+                }
+            }
+            if (orderedWordStrokes.isEmpty()) continue;
+            RectF wb = InkNormalizer.getBounds(orderedWordStrokes);
+            words.add(new StrokeWord(orderedWordStrokes, wb, rotAngle));
+        }
+
+        return words;
     }
 }

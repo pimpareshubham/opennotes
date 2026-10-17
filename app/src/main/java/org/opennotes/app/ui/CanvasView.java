@@ -1059,14 +1059,12 @@ public class CanvasView extends View {
         final Page requestedPage = currentPage;
         final int textColor = currentColor;
 
-        if (org.opennotes.app.ai.SemanticStrokeClusterer.isMultiLine(requestedStrokes)) {
-            List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> segmentedLines =
-                    org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(requestedStrokes);
-            if (segmentedLines != null && segmentedLines.size() > 1) {
-                recognizeLinesSequentially(requestedPage, requestedStrokes, segmentedLines, 0,
-                        new ArrayList<>(), textColor, letUserChooseCandidate);
-                return;
-            }
+        List<org.opennotes.app.ai.SemanticStrokeClusterer.StrokeLine> segmentedLines =
+                org.opennotes.app.ai.SemanticStrokeClusterer.segmentIntoLines(requestedStrokes);
+        if (segmentedLines != null && !segmentedLines.isEmpty()) {
+            recognizeLinesSequentially(requestedPage, requestedStrokes, segmentedLines, 0,
+                    new ArrayList<>(), textColor, letUserChooseCandidate);
+            return;
         }
 
         recognizeSingleBlock(requestedPage, requestedStrokes, textColor, letUserChooseCandidate);
@@ -1167,11 +1165,11 @@ public class CanvasView extends View {
                 };
 
         if (letUserChooseCandidate) {
-            org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokesWithFilteredSuggestions(
-                    getContext(), lineStrokes, beautifyLanguage, preContext, lineCallback);
+            org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokeLineWithFilteredSuggestions(
+                    getContext(), strokeLine, beautifyLanguage, preContext, lineCallback);
         } else {
-            org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokes(
-                    getContext(), lineStrokes, beautifyLanguage, preContext, lineCallback);
+            org.opennotes.app.util.HandwritingRecognitionEngine.recognizeStrokeLine(
+                    getContext(), strokeLine, beautifyLanguage, preContext, lineCallback);
         }
     }
 
@@ -1420,6 +1418,20 @@ public class CanvasView extends View {
             }
             float baseStartX = (result.startX != 0f || result.startY != 0f) ? result.startX : result.bounds.left;
             float baseStartY = (result.startX != 0f || result.startY != 0f) ? result.startY : result.bounds.bottom - 4f;
+            float itemAngle = (Math.abs(result.angleDegrees) >= 4.0f) ? result.angleDegrees : 0f;
+
+            if (result.wordItems != null && !result.wordItems.isEmpty()) {
+                for (org.opennotes.app.util.HandwritingRecognitionEngine.WordItem wItem : result.wordItems) {
+                    if (wItem == null || wItem.text == null || wItem.text.trim().isEmpty()) continue;
+                    String fKey = (beautifyFontKey != null && !beautifyFontKey.isEmpty())
+                            ? beautifyFontKey
+                            : (wItem.fontKey != null ? wItem.fontKey : fontKey);
+                    float wX = wItem.bounds != null ? wItem.bounds.left : baseStartX;
+                    convertedTexts.add(new TextItem(wItem.text.trim(), wX, baseStartY, textColor, result.fontSize, fKey, itemAngle));
+                }
+                continue;
+            }
+
             if (subLines.length > 1 && (result.startX == 0f && result.startY == 0f || baseStartY >= result.bounds.bottom - 10f)) {
                 baseStartY = result.bounds.top + linePitch * 0.85f;
             }
@@ -1435,7 +1447,6 @@ public class CanvasView extends View {
                 textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
                 float spaceWidth = textPaint.measureText(" ");
 
-                float itemAngle = (Math.abs(result.angleDegrees) >= 4.0f) ? result.angleDegrees : 0f;
                 if (words.length <= 1) {
                     convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, itemAngle));
                 } else {

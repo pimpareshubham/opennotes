@@ -57,6 +57,18 @@ public final class HandwritingRecognitionEngine {
         }
     }
 
+    public static final class WordItem {
+        public final String text;
+        public final RectF bounds;
+        public final String fontKey;
+
+        public WordItem(String text, RectF bounds, String fontKey) {
+            this.text = text;
+            this.bounds = bounds;
+            this.fontKey = fontKey;
+        }
+    }
+
     public static final class RecognitionResult {
         public final String text;
         public final String language;
@@ -66,9 +78,11 @@ public final class HandwritingRecognitionEngine {
         public final float angleDegrees;
         public final float startX;
         public final float startY;
+        public final List<WordItem> wordItems;
 
         public RecognitionResult(String text, String language, RectF bounds, float fontSize,
-                                 List<String> alternatives, float angleDegrees, float startX, float startY) {
+                                 List<String> alternatives, float angleDegrees, float startX, float startY,
+                                 List<WordItem> wordItems) {
             this.text = text;
             this.language = language;
             this.bounds = bounds;
@@ -77,13 +91,21 @@ public final class HandwritingRecognitionEngine {
             this.angleDegrees = angleDegrees;
             this.startX = startX;
             this.startY = startY;
+            this.wordItems = (wordItems != null && !wordItems.isEmpty())
+                    ? Collections.unmodifiableList(new ArrayList<>(wordItems))
+                    : Collections.emptyList();
+        }
+
+        public RecognitionResult(String text, String language, RectF bounds, float fontSize,
+                                 List<String> alternatives, float angleDegrees, float startX, float startY) {
+            this(text, language, bounds, fontSize, alternatives, angleDegrees, startX, startY, null);
         }
 
         public RecognitionResult(String text, String language, RectF bounds, float fontSize,
                                  List<String> alternatives, float angleDegrees) {
             this(text, language, bounds, fontSize, alternatives, angleDegrees,
                     bounds != null ? bounds.left : 0f,
-                    bounds != null ? bounds.bottom - 4f : 0f);
+                    bounds != null ? bounds.bottom - 4f : 0f, null);
         }
 
         public RecognitionResult(String text, String language, RectF bounds, float fontSize,
@@ -324,6 +346,324 @@ public final class HandwritingRecognitionEngine {
                                                                Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
         recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, true, callback);
+    }
+
+    public static void recognizeStrokeLine(Context context,
+                                           SemanticStrokeClusterer.StrokeLine line,
+                                           String preferredLanguage,
+                                           String preContext,
+                                           Callback callback) {
+        if (context == null || line == null || line.strokes == null || line.strokes.isEmpty() || callback == null) return;
+        recognizeStrokeLineInternal(context, line, preferredLanguage, preContext, false, callback);
+    }
+
+    public static void recognizeStrokeLineWithFilteredSuggestions(Context context,
+                                                                 SemanticStrokeClusterer.StrokeLine line,
+                                                                 String preferredLanguage,
+                                                                 String preContext,
+                                                                 Callback callback) {
+        if (context == null || line == null || line.strokes == null || line.strokes.isEmpty() || callback == null) return;
+        recognizeStrokeLineInternal(context, line, preferredLanguage, preContext, true, callback);
+    }
+
+    private static void recognizeStrokeLineInternal(Context context,
+                                                    SemanticStrokeClusterer.StrokeLine line,
+                                                    String preferredLanguage,
+                                                    String preContext,
+                                                    boolean includeReviewSuggestions,
+                                                    Callback callback) {
+        List<SemanticStrokeClusterer.StrokeWord> words = line.words;
+        if (words == null || words.size() <= 1) {
+            recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, includeReviewSuggestions, callback);
+            return;
+        }
+
+        boolean hasSymbolOrMixedScript = false;
+        int shirorekhaCount = 0;
+        int nonShirorekhaCount = 0;
+
+        for (SemanticStrokeClusterer.StrokeWord w : words) {
+            if (isRightArrow(w.strokes) || isLeftArrow(w.strokes) || isDigitOne(w.strokes) || isDash(w.strokes) || isBullet(w.strokes)) {
+                hasSymbolOrMixedScript = true;
+                break;
+            }
+            if (hasShirorekha(w.strokes)) {
+                shirorekhaCount++;
+            } else {
+                nonShirorekhaCount++;
+            }
+        }
+        if (!hasSymbolOrMixedScript && shirorekhaCount > 0 && nonShirorekhaCount > 0) {
+            hasSymbolOrMixedScript = true;
+        }
+
+        if (hasSymbolOrMixedScript) {
+            recognizeWordsSequentially(context, words, 0, new ArrayList<>(), preferredLanguage, preContext,
+                    line.bounds, line.angleDegrees, callback);
+        } else {
+            recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, includeReviewSuggestions, callback);
+        }
+    }
+
+    private static void recognizeWordsSequentially(Context context,
+                                                   List<SemanticStrokeClusterer.StrokeWord> words,
+                                                   int index,
+                                                   List<WordItem> accumulatedItems,
+                                                   String preferredLanguage,
+                                                   String preContext,
+                                                   RectF lineBounds,
+                                                   float angleDegrees,
+                                                   Callback callback) {
+        if (index >= words.size()) {
+            if (accumulatedItems.isEmpty()) {
+                postFailure(callback, new IllegalArgumentException("No text recognized on line."));
+                return;
+            }
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < accumulatedItems.size(); i++) {
+                if (i > 0) sb.append(" ");
+                sb.append(accumulatedItems.get(i).text);
+            }
+            String fullText = sb.toString();
+            float fontSize = Math.max(26f, Math.min(65f, lineBounds.height() * 0.85f));
+            String lineLang = isLatin(preferredLanguage) ? "ENGLISH"
+                    : ("HINDI".equalsIgnoreCase(preferredLanguage) ? "HINDI" : "MARATHI");
+            if (fullText.matches("^[0-9\\s.,\\-+]+$") || fullText.matches("^[a-zA-Z0-9\\s.,\\-+!?'\"()]+$")) {
+                lineLang = "ENGLISH";
+            }
+            RecognitionResult result = new RecognitionResult(fullText, lineLang, lineBounds, fontSize,
+                    Collections.singletonList(fullText), angleDegrees, lineBounds.left, lineBounds.bottom - 4f, accumulatedItems);
+            MAIN.post(() -> callback.onSuccess(result));
+            return;
+        }
+
+        SemanticStrokeClusterer.StrokeWord word = words.get(index);
+        final List<Stroke> wordStrokes = word.strokes;
+
+        if (isRightArrow(wordStrokes)) {
+            accumulatedItems.add(new WordItem("->", word.bounds, TypefaceManager.FONT_CAVEAT));
+            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
+                    preContext, lineBounds, angleDegrees, callback);
+            return;
+        }
+        if (isLeftArrow(wordStrokes)) {
+            accumulatedItems.add(new WordItem("<-", word.bounds, TypefaceManager.FONT_CAVEAT));
+            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
+                    preContext, lineBounds, angleDegrees, callback);
+            return;
+        }
+        if (isDigitOne(wordStrokes)) {
+            accumulatedItems.add(new WordItem("1", word.bounds, TypefaceManager.FONT_CAVEAT));
+            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
+                    preContext, lineBounds, angleDegrees, callback);
+            return;
+        }
+        if (isDash(wordStrokes)) {
+            accumulatedItems.add(new WordItem("-", word.bounds, TypefaceManager.FONT_CAVEAT));
+            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
+                    preContext, lineBounds, angleDegrees, callback);
+            return;
+        }
+        if (isBullet(wordStrokes)) {
+            accumulatedItems.add(new WordItem("•", word.bounds, TypefaceManager.FONT_CAVEAT));
+            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
+                    preContext, lineBounds, angleDegrees, callback);
+            return;
+        }
+
+        final boolean hasSh = hasShirorekha(wordStrokes);
+        String wordLang = preferredLanguage;
+        String defaultFont = TypefaceManager.FONT_KALAM;
+        if (!hasSh && InkNormalizer.isIndicLanguage(preferredLanguage)) {
+            defaultFont = TypefaceManager.FONT_CAVEAT;
+        }
+        final String expectedFont = defaultFont;
+
+        recognizeStrokes(context, wordStrokes, wordLang, preContext, new Callback() {
+            @Override
+            public void onSuccess(RecognitionResult wordRes) {
+                if (wordRes != null && wordRes.text != null && !wordRes.text.trim().isEmpty()) {
+                    String wText = wordRes.text.trim();
+                    String fKey = (!hasSh || "ENGLISH".equalsIgnoreCase(wordRes.language))
+                            ? TypefaceManager.FONT_CAVEAT : expectedFont;
+                    accumulatedItems.add(new WordItem(wText, word.bounds, fKey));
+                }
+                recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
+                        preContext, lineBounds, angleDegrees, callback);
+            }
+
+            @Override
+            public void onFailure(Exception error) {
+                recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
+                        preContext, lineBounds, angleDegrees, callback);
+            }
+        });
+    }
+
+    public static boolean isRightArrow(List<Stroke> strokes) {
+        if (strokes == null || strokes.isEmpty() || strokes.size() > 3) return false;
+        RectF b = boundsOf(strokes);
+        if (b == null || b.width() < 22f || b.height() < 8f) return false;
+        if (b.width() < b.height() * 0.70f) return false;
+
+        for (Stroke s : strokes) {
+            if (s == null) continue;
+            RectF sb = s.getBounds();
+            if (sb != null && sb.width() > b.width() * 0.70f && sb.top <= b.top + b.height() * 0.20f && sb.width() >= sb.height() * 2.5f) {
+                return false;
+            }
+        }
+
+        if (strokes.size() >= 2) {
+            Stroke shaft = null;
+            for (Stroke s : strokes) {
+                if (s == null) continue;
+                RectF sb = s.getBounds();
+                if (sb != null && sb.width() >= sb.height() * 1.8f && sb.width() >= b.width() * 0.45f) {
+                    float relY = (sb.centerY() - b.top) / b.height();
+                    if (relY >= 0.20f && relY <= 0.80f) {
+                        shaft = s;
+                        break;
+                    }
+                }
+            }
+            if (shaft != null) {
+                RectF shaftBounds = shaft.getBounds();
+                boolean hasHeadAtRight = false;
+                for (Stroke s : strokes) {
+                    if (s == shaft || s == null) continue;
+                    RectF hb = s.getBounds();
+                    if (hb != null && hb.right >= shaftBounds.right - shaftBounds.width() * 0.40f
+                            && hb.centerX() > shaftBounds.centerX()
+                            && hb.height() >= b.height() * 0.45f) {
+                        hasHeadAtRight = true;
+                        break;
+                    }
+                }
+                if (hasHeadAtRight) return true;
+            }
+        }
+
+        if (strokes.size() == 1) {
+            Stroke s = strokes.get(0);
+            List<DrawingPoint> pts = s.getRecognitionPoints();
+            if (pts == null || pts.isEmpty()) pts = s.points;
+            if (pts != null && pts.size() >= 4) {
+                float left50X = b.left + b.width() * 0.50f;
+                float right60X = b.left + b.width() * 0.60f;
+                float leftMinY = Float.MAX_VALUE, leftMaxY = -Float.MAX_VALUE;
+                float rightMinY = Float.MAX_VALUE, rightMaxY = -Float.MAX_VALUE;
+                int leftCount = 0, rightCount = 0;
+                float sumLeftY = 0f;
+
+                for (DrawingPoint p : pts) {
+                    if (p == null) continue;
+                    if (p.x <= left50X) {
+                        leftMinY = Math.min(leftMinY, p.y);
+                        leftMaxY = Math.max(leftMaxY, p.y);
+                        sumLeftY += p.y;
+                        leftCount++;
+                    }
+                    if (p.x >= right60X) {
+                        rightMinY = Math.min(rightMinY, p.y);
+                        rightMaxY = Math.max(rightMaxY, p.y);
+                        rightCount++;
+                    }
+                }
+
+                if (leftCount >= 2 && rightCount >= 2) {
+                    float leftH = leftMaxY - leftMinY;
+                    float rightH = rightMaxY - rightMinY;
+                    float leftCenterY = sumLeftY / leftCount;
+                    float relLeftY = (leftCenterY - b.top) / b.height();
+
+                    if (relLeftY >= 0.20f && relLeftY <= 0.80f
+                            && leftH <= b.height() * 0.42f
+                            && rightH >= b.height() * 0.55f
+                            && rightH >= leftH * 1.8f) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    public static boolean isLeftArrow(List<Stroke> strokes) {
+        if (strokes == null || strokes.isEmpty() || strokes.size() > 3) return false;
+        RectF b = boundsOf(strokes);
+        if (b == null || b.width() < 22f || b.height() < 8f) return false;
+        if (b.width() < b.height() * 0.70f) return false;
+
+        if (strokes.size() >= 2) {
+            Stroke shaft = null;
+            for (Stroke s : strokes) {
+                if (s == null) continue;
+                RectF sb = s.getBounds();
+                if (sb != null && sb.width() >= sb.height() * 1.8f && sb.width() >= b.width() * 0.45f) {
+                    float relY = (sb.centerY() - b.top) / b.height();
+                    if (relY >= 0.20f && relY <= 0.80f) {
+                        shaft = s;
+                        break;
+                    }
+                }
+            }
+            if (shaft != null) {
+                RectF shaftBounds = shaft.getBounds();
+                for (Stroke s : strokes) {
+                    if (s == shaft || s == null) continue;
+                    RectF hb = s.getBounds();
+                    if (hb != null && hb.left <= shaftBounds.left + shaftBounds.width() * 0.40f
+                            && hb.centerX() < shaftBounds.centerX()
+                            && hb.height() >= b.height() * 0.45f) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    public static boolean isDigitOne(List<Stroke> strokes) {
+        if (strokes == null || strokes.size() != 1) return false;
+        Stroke s = strokes.get(0);
+        if (s == null) return false;
+        RectF b = s.getBounds();
+        if (b == null) return false;
+        return (b.height() >= 25f && b.width() <= 24f && (b.height() / Math.max(1f, b.width())) >= 2.5f);
+    }
+
+    public static boolean isDash(List<Stroke> strokes) {
+        if (strokes == null || strokes.size() != 1) return false;
+        Stroke s = strokes.get(0);
+        if (s == null) return false;
+        RectF b = s.getBounds();
+        if (b == null) return false;
+        return (b.width() >= 18f && b.width() <= 95f && b.height() <= 18f && (b.width() / Math.max(1f, b.height())) >= 2.6f);
+    }
+
+    public static boolean isBullet(List<Stroke> strokes) {
+        if (strokes == null || strokes.size() != 1) return false;
+        Stroke s = strokes.get(0);
+        if (s == null) return false;
+        RectF b = s.getBounds();
+        if (b == null) return false;
+        return (b.width() <= 18f && b.height() <= 18f && s.points != null && s.points.size() <= 8);
+    }
+
+    public static boolean hasShirorekha(List<Stroke> strokes) {
+        if (strokes == null || strokes.isEmpty()) return false;
+        RectF b = boundsOf(strokes);
+        if (b == null || b.width() < 10f) return false;
+        float totalW = b.width();
+        for (Stroke s : strokes) {
+            if (s == null) continue;
+            RectF sb = s.getBounds();
+            if (sb != null && (sb.width() > totalW * 0.35f && (sb.width() / Math.max(1f, sb.height())) >= 2.0f)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void recognizeMultiHypothesis(Context context,
