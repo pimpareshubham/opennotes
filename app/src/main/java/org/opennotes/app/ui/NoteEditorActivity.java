@@ -15,6 +15,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import android.content.Context;
+import android.content.SharedPreferences;
+import android.view.HapticFeedbackConstants;
 import android.view.MotionEvent;
 import android.view.Gravity;
 import android.view.KeyEvent;
@@ -149,6 +151,22 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private SwitchCompat switchStraightLine;
     private LinearLayout layoutToolQuickColors;
     private Button btnAddToPenBox;
+    private LinearLayout layoutPenBoxDock;
+    private View dividerPenBox;
+    private TextView textStraightLineTitle;
+
+    public static class PenPreset {
+        public DrawingTool tool;
+        public int color;
+        public float strokeWidth;
+
+        public PenPreset(DrawingTool tool, int color, float strokeWidth) {
+            this.tool = tool;
+            this.color = color;
+            this.strokeWidth = strokeWidth;
+        }
+    }
+    private final List<PenPreset> penBoxPresets = new ArrayList<>();
 
     // Floating Contextual Lasso Action Bar
     private HorizontalScrollView lassoFloatingActionBar;
@@ -353,6 +371,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         switchStraightLine = findViewById(R.id.switchStraightLine);
         layoutToolQuickColors = findViewById(R.id.layoutToolQuickColors);
         btnAddToPenBox = findViewById(R.id.btnAddToPenBox);
+        layoutPenBoxDock = findViewById(R.id.layoutPenBoxDock);
+        dividerPenBox = findViewById(R.id.dividerPenBox);
+        textStraightLineTitle = findViewById(R.id.textStraightLineTitle);
+        loadPenBoxPresets();
+        renderPenBoxDock();
 
         lassoFloatingActionBar = findViewById(R.id.lassoFloatingActionBar);
         btnLassoDelete = findViewById(R.id.btnLassoDelete);
@@ -666,17 +689,57 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         toolPencil.setOnClickListener(v -> selectOrToggleTool(DrawingTool.PENCIL, "Pencil Settings"));
         toolEraser.setOnClickListener(v -> {
             closeToolPropertiesCard();
-            canvasView.setTool(DrawingTool.ERASER_STROKE);
-            updateToolUi(DrawingTool.ERASER_STROKE);
-            if (appSettings != null) appSettings.setLastTool(DrawingTool.ERASER_STROKE);
+            if (canvasView.getTool() == DrawingTool.ERASER_STROKE) {
+                // Tapping eraser while already active toggles Erase Highlighter Only filter
+                boolean nextOnlyHighlighter = !canvasView.isEraseOnlyHighlighter();
+                canvasView.setEraseOnlyHighlighter(nextOnlyHighlighter);
+                toolEraser.setColorFilter(nextOnlyHighlighter ? 0xFFF59E0B : 0xFF38BDF8);
+                if (nextOnlyHighlighter) {
+                    Toast.makeText(this, "🧹 Eraser: Highlighter Only Mode (Pen & text preserved)", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "🧹 Eraser: Erase All Strokes & Text", Toast.LENGTH_SHORT).show();
+                }
+            } else {
+                canvasView.setTool(DrawingTool.ERASER_STROKE);
+                updateToolUi(DrawingTool.ERASER_STROKE);
+                if (appSettings != null) appSettings.setLastTool(DrawingTool.ERASER_STROKE);
+                boolean onlyH = canvasView.isEraseOnlyHighlighter();
+                toolEraser.setColorFilter(onlyH ? 0xFFF59E0B : 0xFF38BDF8);
+                Toast.makeText(this, onlyH ? "Eraser: Highlighter Only (tap again to erase all)" : "Eraser active (tap again for highlighter only)", Toast.LENGTH_SHORT).show();
+            }
         });
+        toolEraser.setOnLongClickListener(v -> {
+            showEraserOptionsDialog();
+            return true;
+        });
+
         toolLasso.setOnClickListener(v -> {
             closeToolPropertiesCard();
-            canvasView.setTool(DrawingTool.LASSO);
-            updateToolUi(DrawingTool.LASSO);
-            if (appSettings != null) appSettings.setLastTool(DrawingTool.LASSO);
-            Toast.makeText(this, "Lasso: circle strokes to select, drag to move", Toast.LENGTH_SHORT).show();
+            if (canvasView.getTool() == DrawingTool.LASSO) {
+                // Tapping lasso while already active toggles between Freehand and Rectangular selection
+                boolean isRect = canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE;
+                CanvasView.LassoMode newMode = isRect ? CanvasView.LassoMode.FREEHAND : CanvasView.LassoMode.RECTANGLE;
+                canvasView.setLassoMode(newMode);
+                toolLasso.setColorFilter(newMode == CanvasView.LassoMode.RECTANGLE ? 0xFF10B981 : 0xFF38BDF8);
+                if (newMode == CanvasView.LassoMode.RECTANGLE) {
+                    Toast.makeText(this, "📐 Lasso: Rectangular Marquee Mode (drag box to select)", Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(this, "➰ Lasso: Freehand Mode (circle items to select)", Toast.LENGTH_SHORT).show();
+                }
+            } else {
+                canvasView.setTool(DrawingTool.LASSO);
+                updateToolUi(DrawingTool.LASSO);
+                if (appSettings != null) appSettings.setLastTool(DrawingTool.LASSO);
+                boolean isRect = canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE;
+                toolLasso.setColorFilter(isRect ? 0xFF10B981 : 0xFF38BDF8);
+                Toast.makeText(this, isRect ? "Lasso: Rectangular (tap again for freehand)" : "Lasso active (tap again for rectangle marquee)", Toast.LENGTH_SHORT).show();
+            }
         });
+        toolLasso.setOnLongClickListener(v -> {
+            showLassoOptionsDialog();
+            return true;
+        });
+
 
         if (toolLaser != null) {
             toolLaser.setOnClickListener(v -> selectOrToggleTool(DrawingTool.LASER, "Laser Presentation Pointer"));
@@ -941,6 +1004,26 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (textToolPropertyTitle != null && title != null) {
             textToolPropertyTitle.setText(title);
         }
+        if (switchStraightLine != null) {
+            switchStraightLine.setOnCheckedChangeListener(null);
+            if (canvasView.getTool() == DrawingTool.HIGHLIGHTER) {
+                if (textStraightLineTitle != null) textStraightLineTitle.setText("Lock 0° / 90° (Straight Highlighter)");
+                switchStraightLine.setChecked(canvasView.isStraightHighlighterEnabled());
+            } else {
+                if (textStraightLineTitle != null) textStraightLineTitle.setText("Straight-Line Snapping");
+                switchStraightLine.setChecked(canvasView.isStraightLineAssist());
+            }
+            switchStraightLine.setOnCheckedChangeListener((btn, isChecked) -> {
+                if (canvasView.getTool() == DrawingTool.HIGHLIGHTER) {
+                    canvasView.setStraightHighlighterEnabled(isChecked);
+                    Toast.makeText(this, isChecked ? "Straight Highlighter Lock: ON (0° / 90°)" : "Straight Highlighter Lock: OFF", Toast.LENGTH_SHORT).show();
+                } else {
+                    canvasView.setStraightLineAssist(isChecked);
+                    if (btnRuler != null) btnRuler.setColorFilter(isChecked ? 0xFF38BDF8 : 0xFF94A3B8);
+                    if (appSettings != null) appSettings.setStraightLineAssist(isChecked);
+                }
+            });
+        }
         cardToolProperties.animate().cancel();
         cardToolProperties.setVisibility(View.VISIBLE);
         cardToolProperties.setAlpha(0f);
@@ -948,6 +1031,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         cardToolProperties.animate().alpha(1f).translationY(0f).setDuration(220)
                 .setInterpolator(new android.view.animation.DecelerateInterpolator()).start();
     }
+
 
     private void selectOrToggleTool(DrawingTool tool, String title) {
         long now = SystemClock.uptimeMillis();
@@ -1252,12 +1336,216 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             layoutToolQuickColors.addView(dot);
         }
 
-        btnAddToPenBox.setOnClickListener(v -> {
+        btnAddToPenBox.setOnClickListener(v -> addCurrentToPenBox());
+    }
+
+    private void loadPenBoxPresets() {
+        penBoxPresets.clear();
+        SharedPreferences sp = getSharedPreferences("pen_box_prefs", MODE_PRIVATE);
+        String json = sp.getString("presets", null);
+        if (json != null && !json.isEmpty()) {
+            try {
+                org.json.JSONArray arr = new org.json.JSONArray(json);
+                for (int i = 0; i < arr.length(); i++) {
+                    org.json.JSONObject obj = arr.getJSONObject(i);
+                    DrawingTool tool = DrawingTool.valueOf(obj.getString("tool"));
+                    int color = obj.getInt("color");
+                    float width = (float) obj.getDouble("width");
+                    penBoxPresets.add(new PenPreset(tool, color, width));
+                }
+            } catch (Exception ignored) {}
+        }
+        if (penBoxPresets.isEmpty()) {
+            // Default StarNote pen box presets
+            penBoxPresets.add(new PenPreset(DrawingTool.FOUNTAIN, 0xFFFFFFFF, 6.0f));
+            penBoxPresets.add(new PenPreset(DrawingTool.HIGHLIGHTER, 0xFFFEF08A, 20.0f));
+            penBoxPresets.add(new PenPreset(DrawingTool.PEN, 0xFFF59E0B, 4.0f));
+        }
+    }
+
+    private void savePenBoxPresets() {
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray();
+            for (PenPreset p : penBoxPresets) {
+                org.json.JSONObject obj = new org.json.JSONObject();
+                obj.put("tool", p.tool.name());
+                obj.put("color", p.color);
+                obj.put("width", (double) p.strokeWidth);
+                arr.put(obj);
+            }
+            getSharedPreferences("pen_box_prefs", MODE_PRIVATE)
+                    .edit()
+                    .putString("presets", arr.toString())
+                    .apply();
+        } catch (Exception ignored) {}
+    }
+
+    private void renderPenBoxDock() {
+        if (layoutPenBoxDock == null) return;
+        layoutPenBoxDock.removeAllViews();
+        if (penBoxPresets.isEmpty()) {
+            layoutPenBoxDock.setVisibility(View.GONE);
+            if (dividerPenBox != null) dividerPenBox.setVisibility(View.GONE);
+            return;
+        }
+
+        layoutPenBoxDock.setVisibility(View.VISIBLE);
+        if (dividerPenBox != null) dividerPenBox.setVisibility(View.VISIBLE);
+
+        for (int i = 0; i < penBoxPresets.size(); i++) {
+            final int index = i;
+            final PenPreset preset = penBoxPresets.get(i);
+
+            FrameLayout slot = new FrameLayout(this);
+            int slotSize = (int) (32 * getResources().getDisplayMetrics().density);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(slotSize, slotSize);
+            lp.setMargins((int) (2 * getResources().getDisplayMetrics().density), 0,
+                    (int) (2 * getResources().getDisplayMetrics().density), 0);
+            slot.setLayoutParams(lp);
+
+            GradientDrawable bg = new GradientDrawable();
+            bg.setShape(GradientDrawable.OVAL);
+            bg.setColor(0xFF1E293B);
+            bg.setStroke((int) (1.5f * getResources().getDisplayMetrics().density), preset.color);
+            slot.setBackground(bg);
+
+            ImageView icon = new ImageView(this);
+            int iconPadding = (int) (6 * getResources().getDisplayMetrics().density);
+            icon.setPadding(iconPadding, iconPadding, iconPadding, iconPadding);
+            switch (preset.tool) {
+                case HIGHLIGHTER:
+                    icon.setImageResource(R.drawable.ic_highlighter);
+                    break;
+                case PEN:
+                    icon.setImageResource(R.drawable.ic_pen);
+                    break;
+                case PENCIL:
+                    icon.setImageResource(R.drawable.ic_pencil);
+                    break;
+                default:
+                    icon.setImageResource(R.drawable.ic_fountain_pen);
+                    break;
+            }
+            icon.setColorFilter(preset.color);
+            slot.addView(icon);
+
+            slot.setOnClickListener(v -> {
+                v.animate().scaleX(1.25f).scaleY(1.25f).setDuration(100)
+                        .withEndAction(() -> v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start()).start();
+                canvasView.setTool(preset.tool);
+                canvasView.setColor(preset.color);
+                canvasView.setStrokeWidth(preset.strokeWidth);
+                updateToolUi(preset.tool);
+                updateColorPreview(preset.color);
+                if (seekStrokeThickness != null) {
+                    seekStrokeThickness.setProgress(Math.round(preset.strokeWidth));
+                }
+                if (textThicknessValue != null) {
+                    textThicknessValue.setText(String.format(Locale.US, "%.1f mm", preset.strokeWidth * 0.3f));
+                }
+                try { v.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP); } catch (Exception ignored) {}
+                Toast.makeText(this, "Pen Box: " + preset.tool.name() + " (" + String.format(Locale.US, "%.1fmm", preset.strokeWidth) + ")", Toast.LENGTH_SHORT).show();
+            });
+
+            slot.setOnLongClickListener(v -> {
+                MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                        .setTitle("Pen Box Preset")
+                        .setMessage("Remove this preset (" + preset.tool.name() + ") from the quick dock?")
+                        .setPositiveButton("Remove", (dialog, which) -> {
+                            penBoxPresets.remove(index);
+                            savePenBoxPresets();
+                            renderPenBoxDock();
+                            Toast.makeText(this, "Preset removed", Toast.LENGTH_SHORT).show();
+                        })
+                        .setNegativeButton("Cancel", null);
+                ThemeUtils.showStyledDialog(builder, this);
+                return true;
+            });
+
+            layoutPenBoxDock.addView(slot);
+        }
+    }
+
+    private void addCurrentToPenBox() {
+        DrawingTool tool = canvasView.getTool();
+        if (tool == DrawingTool.ERASER_STROKE || tool == DrawingTool.ERASER_AREA || tool == DrawingTool.LASSO || tool == DrawingTool.HAND) {
+            tool = DrawingTool.FOUNTAIN;
+        }
+        int color = canvasView.getColor();
+        float width = canvasView.getStrokeWidth();
+
+        if (penBoxPresets.size() >= 6) {
+            penBoxPresets.remove(0);
+        }
+        penBoxPresets.add(new PenPreset(tool, color, width));
+        savePenBoxPresets();
+        renderPenBoxDock();
+
+        if (cardToolProperties != null) {
             cardToolProperties.animate().alpha(0f).translationY(-25f).setDuration(180)
                     .withEndAction(() -> cardToolProperties.setVisibility(View.GONE)).start();
-            Toast.makeText(this, "Pen preset saved to dock", Toast.LENGTH_SHORT).show();
-        });
+        }
+        Toast.makeText(this, "Added to Pen Box dock: " + tool.name() + " (" + String.format(Locale.US, "%.1fmm", width) + ")", Toast.LENGTH_SHORT).show();
     }
+
+    private void showEraserOptionsDialog() {
+        boolean onlyHighlighter = canvasView.isEraseOnlyHighlighter();
+        String[] options = {
+                "🧹 Erase All (Handwriting, Text & Highlighter)" + (!onlyHighlighter ? "  ✓" : ""),
+                "🖍️ Erase Highlighter Only (Preserve Pen & Text)" + (onlyHighlighter ? "  ✓" : ""),
+                "🗑️ Clear Entire Page"
+        };
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                .setTitle("Eraser Options")
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) {
+                        canvasView.setEraseOnlyHighlighter(false);
+                        toolEraser.setColorFilter(0xFF38BDF8);
+                        Toast.makeText(this, "Eraser: Erasing all strokes & text", Toast.LENGTH_SHORT).show();
+                    } else if (which == 1) {
+                        canvasView.setEraseOnlyHighlighter(true);
+                        toolEraser.setColorFilter(0xFFF59E0B);
+                        Toast.makeText(this, "Eraser: Highlighter only (Handwriting preserved)", Toast.LENGTH_SHORT).show();
+                    } else if (which == 2) {
+                        showClearCanvasDialog();
+                    }
+                })
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
+    }
+
+    private void showLassoOptionsDialog() {
+        boolean isRect = canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE;
+        String[] options = {
+                "➰ Freehand Lasso Selection (Draw boundary around items)" + (!isRect ? "  ✓" : ""),
+                "📐 Rectangular Marquee Selection (Drag box to select items)" + (isRect ? "  ✓" : "")
+        };
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                .setTitle("Lasso Selection Mode")
+                .setItems(options, (dialog, which) -> {
+                    if (which == 0) {
+                        canvasView.setLassoMode(CanvasView.LassoMode.FREEHAND);
+                        toolLasso.setColorFilter(0xFF38BDF8);
+                        Toast.makeText(this, "Lasso: Freehand outline mode", Toast.LENGTH_SHORT).show();
+                    } else {
+                        canvasView.setLassoMode(CanvasView.LassoMode.RECTANGLE);
+                        toolLasso.setColorFilter(0xFF10B981);
+                        Toast.makeText(this, "Lasso: Rectangular marquee mode", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
+    }
+
+    private void showClearCanvasDialog() {
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                .setTitle("Clear Canvas")
+                .setMessage("Are you sure you want to clear all strokes on this page?")
+                .setPositiveButton("Clear", (d, w) -> canvasView.clearAll())
+                .setNegativeButton("Cancel", null);
+        ThemeUtils.showStyledDialog(builder, this);
+    }
+
 
     private void updateNibButtons(TextView activeBtn) {
         btnNibFine.setBackgroundResource(R.drawable.bg_floating_pill);
@@ -1316,8 +1604,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         if (activeIv != null) {
             activeIv.setBackgroundResource(R.drawable.bg_tool_button_active);
-            activeIv.setColorFilter(0xFF38BDF8);
+            if (activeIv == toolEraser && canvasView != null && canvasView.isEraseOnlyHighlighter()) {
+                activeIv.setColorFilter(0xFFF59E0B);
+            } else if (activeIv == toolLasso && canvasView != null && canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE) {
+                activeIv.setColorFilter(0xFF10B981);
+            } else {
+                activeIv.setColorFilter(0xFF38BDF8);
+            }
         }
+
 
         updateHandToolUi(canvasView != null && canvasView.isFingerMoveCanvasEnabled());
     }
@@ -1719,17 +2014,41 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 ShapeItem.Type.TABLE
         };
 
+        String fillStyleName = canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.SOLID ? "Solid Fill" :
+                (canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.TRANSLUCENT ? "Translucent Tint (20%)" : "Outline Only");
+
+        final String[] options = new String[shapes.length + 3];
+        System.arraycopy(shapes, 0, options, 0, shapes.length);
+        options[shapes.length] = "🎨 Style: Outline Only" + (canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.OUTLINE ? "  ✓" : "");
+        options[shapes.length + 1] = "🎨 Style: Translucent Tint Wash" + (canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.TRANSLUCENT ? "  ✓" : "");
+        options[shapes.length + 2] = "🎨 Style: Solid Opaque Fill" + (canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.SOLID ? "  ✓" : "");
+
         MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
-                .setTitle("Select Shape")
-                .setItems(shapes, (dialog, which) -> {
-                    canvasView.setShapeType(types[which]);
-                    canvasView.setTool(DrawingTool.SHAPE);
-                    updateToolUi(DrawingTool.SHAPE);
-                    Toast.makeText(this, "Drag on canvas to draw " + shapes[which], Toast.LENGTH_SHORT).show();
+                .setTitle("Select Shape (Fill: " + fillStyleName + ")")
+                .setItems(options, (dialog, which) -> {
+                    if (which < shapes.length) {
+                        canvasView.setShapeType(types[which]);
+                        canvasView.setTool(DrawingTool.SHAPE);
+                        updateToolUi(DrawingTool.SHAPE);
+                        Toast.makeText(this, "Draw " + shapes[which] + " (" + fillStyleName + ")", Toast.LENGTH_SHORT).show();
+                    } else if (which == shapes.length) {
+                        canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.OUTLINE);
+                        Toast.makeText(this, "Shape Fill: Outline Only", Toast.LENGTH_SHORT).show();
+                        showShapeSelectorDialog();
+                    } else if (which == shapes.length + 1) {
+                        canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.TRANSLUCENT);
+                        Toast.makeText(this, "Shape Fill: Translucent Tint Wash", Toast.LENGTH_SHORT).show();
+                        showShapeSelectorDialog();
+                    } else if (which == shapes.length + 2) {
+                        canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.SOLID);
+                        Toast.makeText(this, "Shape Fill: Solid Opaque Fill", Toast.LENGTH_SHORT).show();
+                        showShapeSelectorDialog();
+                    }
                 })
                 .setNegativeButton("Cancel", null);
         ThemeUtils.showStyledDialog(builder, this);
     }
+
 
     private void showRulerAngleDialog() {
         final String[] angles = {"0° (Horizontal Snap)", "30° Angle Guide", "45° Diagonal Snap", "60° Angle Guide", "90° (Vertical Snap)", "120° Angle Guide", "150° Angle Guide", "Disable Ruler Assist"};

@@ -123,7 +123,28 @@ public class CanvasView extends View {
     private float predictedInkPressure = 0.5f;
     private final Path predictedInkPath = new Path();
     private final Paint predictedInkPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
+    public enum LassoMode {
+        FREEHAND,
+        RECTANGLE
+    }
+
+    public enum ShapeFillStyle {
+        OUTLINE,
+        TRANSLUCENT,
+        SOLID
+    }
+
     private ShapeItem.Type currentShapeType = ShapeItem.Type.RECTANGLE;
+    private ShapeFillStyle currentShapeFillStyle = ShapeFillStyle.OUTLINE;
+    private Stroke.LineStyle currentShapeLineStyle = Stroke.LineStyle.SOLID;
+    private LassoMode lassoMode = LassoMode.FREEHAND;
+    private float lassoStartX = 0f;
+    private float lassoStartY = 0f;
+    private boolean eraseOnlyHighlighter = false;
+    private boolean straightHighlighterEnabled = false;
+    private int highlighterLockAxis = 0; // 0 = unlocked, 1 = horizontal, 2 = vertical
+    private float highlighterLockStartX = 0f;
+    private float highlighterLockStartY = 0f;
 
     // Laser pointer presentation mode (ephemeral glowing trail)
     public static class LaserPoint {
@@ -1419,6 +1440,61 @@ public class CanvasView extends View {
         this.currentShapeType = type;
     }
 
+    public ShapeItem.Type getShapeType() {
+        return currentShapeType;
+    }
+
+    public ShapeFillStyle getShapeFillStyle() {
+        return currentShapeFillStyle;
+    }
+
+    public void setShapeFillStyle(ShapeFillStyle style) {
+        this.currentShapeFillStyle = style != null ? style : ShapeFillStyle.OUTLINE;
+        invalidate();
+    }
+
+    public Stroke.LineStyle getShapeLineStyle() {
+        return currentShapeLineStyle;
+    }
+
+    public void setShapeLineStyle(Stroke.LineStyle lineStyle) {
+        this.currentShapeLineStyle = lineStyle != null ? lineStyle : Stroke.LineStyle.SOLID;
+        invalidate();
+    }
+
+    public Integer getEffectiveShapeFillColor() {
+        if (currentShapeFillStyle == ShapeFillStyle.TRANSLUCENT) {
+            return (currentColor & 0x00FFFFFF) | 0x33000000;
+        } else if (currentShapeFillStyle == ShapeFillStyle.SOLID) {
+            return currentColor | 0xFF000000;
+        }
+        return null;
+    }
+
+    public LassoMode getLassoMode() {
+        return lassoMode;
+    }
+
+    public void setLassoMode(LassoMode mode) {
+        this.lassoMode = mode != null ? mode : LassoMode.FREEHAND;
+    }
+
+    public boolean isEraseOnlyHighlighter() {
+        return eraseOnlyHighlighter;
+    }
+
+    public void setEraseOnlyHighlighter(boolean eraseOnlyHighlighter) {
+        this.eraseOnlyHighlighter = eraseOnlyHighlighter;
+    }
+
+    public boolean isStraightHighlighterEnabled() {
+        return straightHighlighterEnabled;
+    }
+
+    public void setStraightHighlighterEnabled(boolean enabled) {
+        this.straightHighlighterEnabled = enabled;
+    }
+
     public boolean canUndo() {
         return !undoStack.isEmpty();
     }
@@ -1948,7 +2024,7 @@ public class CanvasView extends View {
 
             // 7. Draw Live Shape Preview
             if (isDrawingShape) {
-                drawShape(canvas, currentShapeType, shapeStartX, shapeStartY, shapeCurrentX, shapeCurrentY, currentColor, currentStrokeWidth);
+                drawShape(canvas, currentShapeType, shapeStartX, shapeStartY, shapeCurrentX, shapeCurrentY, currentColor, currentStrokeWidth, currentShapeLineStyle, getEffectiveShapeFillColor());
             }
 
             // 8. Draw Lasso path & selection
@@ -3857,6 +3933,8 @@ public class CanvasView extends View {
                     } else {
                         clearSelection();
                         isDrawingLasso = true;
+                        lassoStartX = canvasX;
+                        lassoStartY = canvasY;
                         lassoPath.reset();
                         lassoPath.moveTo(canvasX, canvasY);
                         lassoPoints.clear();
@@ -3887,13 +3965,23 @@ public class CanvasView extends View {
                         lassoMoveStartY = canvasY;
                         postInvalidateOnAnimation();
                     } else if (isDrawingLasso) {
-                        for (int i = 0; i < event.getHistorySize(); i++) {
-                            appendLassoPoint(
-                                    (event.getHistoricalX(inputPointerIndex, i) - panOffsetX) / scaleFactor,
-                                    (event.getHistoricalY(inputPointerIndex, i) - panOffsetY) / scaleFactor + viewportOffsetY);
+                        if (lassoMode == LassoMode.RECTANGLE) {
+                            lassoPath.reset();
+                            float l = Math.min(lassoStartX, canvasX);
+                            float t = Math.min(lassoStartY, canvasY);
+                            float r = Math.max(lassoStartX, canvasX);
+                            float b = Math.max(lassoStartY, canvasY);
+                            lassoPath.addRect(l, t, r, b, Path.Direction.CW);
+                            postInvalidateOnAnimation();
+                        } else {
+                            for (int i = 0; i < event.getHistorySize(); i++) {
+                                appendLassoPoint(
+                                        (event.getHistoricalX(inputPointerIndex, i) - panOffsetX) / scaleFactor,
+                                        (event.getHistoricalY(inputPointerIndex, i) - panOffsetY) / scaleFactor + viewportOffsetY);
+                            }
+                            appendLassoPoint(canvasX, canvasY);
+                            postInvalidateOnAnimation();
                         }
-                        appendLassoPoint(canvasX, canvasY);
-                        postInvalidateOnAnimation();
                     }
                     return true;
 
@@ -3919,11 +4007,28 @@ public class CanvasView extends View {
                         notifyLassoSelection();
                     } else if (isDrawingLasso) {
                         isDrawingLasso = false;
-                        appendLassoPoint(canvasX, canvasY);
-                        lassoPath.close();
-                        processLassoSelection();
-                        invalidate();
-                        notifyLassoSelection();
+                        if (lassoMode == LassoMode.RECTANGLE) {
+                            float l = Math.min(lassoStartX, canvasX);
+                            float t = Math.min(lassoStartY, canvasY);
+                            float r = Math.max(lassoStartX, canvasX);
+                            float b = Math.max(lassoStartY, canvasY);
+                            lassoPath.reset();
+                            lassoPath.addRect(l, t, r, b, Path.Direction.CW);
+                            lassoPoints.clear();
+                            lassoPoints.add(new DrawingPoint(l, t, 1f));
+                            lassoPoints.add(new DrawingPoint(r, t, 1f));
+                            lassoPoints.add(new DrawingPoint(r, b, 1f));
+                            lassoPoints.add(new DrawingPoint(l, b, 1f));
+                            processLassoSelection();
+                            invalidate();
+                            notifyLassoSelection();
+                        } else {
+                            appendLassoPoint(canvasX, canvasY);
+                            lassoPath.close();
+                            processLassoSelection();
+                            invalidate();
+                            notifyLassoSelection();
+                        }
                     }
                     return true;
             }
@@ -3963,6 +4068,8 @@ public class CanvasView extends View {
                     shapeCurrentY = canvasY;
                     if (currentPage != null && (Math.abs(shapeCurrentX - shapeStartX) > 10 || Math.abs(shapeCurrentY - shapeStartY) > 10)) {
                         ShapeItem shape = new ShapeItem(currentShapeType, shapeStartX, shapeStartY, shapeCurrentX, shapeCurrentY, currentColor, currentStrokeWidth);
+                        shape.lineStyle = currentShapeLineStyle;
+                        shape.fillColor = getEffectiveShapeFillColor();
                         currentPage.shapes.add(shape);
 
                         ActionRecord rec = new ActionRecord();
@@ -3979,6 +4086,7 @@ public class CanvasView extends View {
             }
             return true;
         }
+
 
         // 6. Stroke Eraser
         if (currentTool == DrawingTool.ERASER_STROKE) {
@@ -4016,6 +4124,11 @@ public class CanvasView extends View {
                 resetStrokeFilter(canvasX, canvasY, event.getEventTime());
                 activeStroke = new Stroke(currentColor, currentStrokeWidth, currentTool);
                 activeInputPointerId = event.getPointerId(inputPointerIndex);
+                if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
+                    highlighterLockAxis = 0;
+                    highlighterLockStartX = canvasX;
+                    highlighterLockStartY = canvasY;
+                }
                 activeStroke.addPoint(canvasX, canvasY, pressure, event.getEventTime());
                 activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
                 lastTouchX = canvasX;
@@ -4025,6 +4138,19 @@ public class CanvasView extends View {
 
             case MotionEvent.ACTION_MOVE:
                 if (activeStroke != null) {
+                    if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
+                        float dx = canvasX - highlighterLockStartX;
+                        float dy = canvasY - highlighterLockStartY;
+                        if (highlighterLockAxis == 0 && (dx * dx + dy * dy >= 49f)) {
+                            highlighterLockAxis = (Math.abs(dx) >= Math.abs(dy)) ? 1 : 2;
+                        }
+                        if (highlighterLockAxis == 1) {
+                            canvasY = highlighterLockStartY;
+                        } else if (highlighterLockAxis == 2) {
+                            canvasX = highlighterLockStartX;
+                        }
+                    }
+
                     float dirtyMinX = lastTouchX;
                     float dirtyMinY = lastTouchY;
                     float dirtyMaxX = lastTouchX;
@@ -4038,6 +4164,10 @@ public class CanvasView extends View {
                         float histRawY = event.getHistoricalY(inputPointerIndex, i);
                         float histX = (histRawX - panOffsetX) / scaleFactor;
                         float histY = (histRawY - panOffsetY) / scaleFactor + viewportOffsetY;
+                        if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
+                            if (highlighterLockAxis == 1) histY = highlighterLockStartY;
+                            else if (highlighterLockAxis == 2) histX = highlighterLockStartX;
+                        }
                         float historicalPressure = normalizeInputPressure(
                                 event.getHistoricalPressure(inputPointerIndex, i), primaryToolType);
                         activeStroke.addRecognitionPoint(histX, histY, historicalPressure,
@@ -4084,6 +4214,11 @@ public class CanvasView extends View {
 
             case MotionEvent.ACTION_UP:
                 if (activeStroke != null) {
+                    if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
+                        if (highlighterLockAxis == 1) canvasY = highlighterLockStartY;
+                        else if (highlighterLockAxis == 2) canvasX = highlighterLockStartX;
+                        highlighterLockAxis = 0;
+                    }
                     // Finish at the real pen-up point. Filtered coordinates are only
                     // for the visible outline; recognition always gets raw samples.
                     smoothedX = canvasX;
@@ -4704,7 +4839,7 @@ public class CanvasView extends View {
         float hitRadius = 35f / scaleFactor;
 
         // Check text erasure first (so user can erase individual converted words)
-        if (currentPage.texts != null && !currentPage.texts.isEmpty()) {
+        if (!eraseOnlyHighlighter && currentPage.texts != null && !currentPage.texts.isEmpty()) {
             for (int i = currentPage.texts.size() - 1; i >= 0; i--) {
                 TextItem item = currentPage.texts.get(i);
                 if (item == null) continue;
@@ -4732,6 +4867,9 @@ public class CanvasView extends View {
         for (int i = visibleStrokeIndices.previousSetBit(currentPage.strokes.size() - 1);
              i >= 0; i = visibleStrokeIndices.previousSetBit(i - 1)) {
             Stroke s = currentPage.strokes.get(i);
+            if (eraseOnlyHighlighter && s.tool != DrawingTool.HIGHLIGHTER) {
+                continue;
+            }
             RectF bounds = s.getBounds();
             if (touchX < bounds.left - hitRadius || touchX > bounds.right + hitRadius
                     || touchY < bounds.top - hitRadius || touchY > bounds.bottom + hitRadius) {

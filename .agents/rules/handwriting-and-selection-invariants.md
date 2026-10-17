@@ -16,3 +16,8 @@
 
 4. **APK Build Artifact Naming**:
    - Whenever building the debug APK, always copy the output APK to `Desktop/starnote/OpenNotes-<commit_id>.apk` using the short git commit hash (`git rev-parse --short HEAD`).
+
+5. **Multi-Line Bounding Ceiling Invariant**:
+   - In hierarchical agglomerative or single-linkage clustering across lines/rows, an unbounded vertical gap allowance causes tall ascenders, low descenders, or diacritics to cascade and collapse distinct lines into a single massive cluster.
+   - Enforce a strict line height ceiling ($H \le 1.85 \times \text{median\_line\_height}$) on candidate line merges, preventing runaway cascading across unlimited lines and rows.
+
