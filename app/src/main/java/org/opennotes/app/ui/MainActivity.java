@@ -130,9 +130,13 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
 
     private void offerHandwritingModelSetup() {
         AppSettings settings = AppSettings.getInstance(this);
+        settings.setAcceptedHandwritingModelDownload("en-US", true);
         settings.setAcceptedHandwritingModelDownload("en-IN", true);
+        settings.setAcceptedHandwritingModelDownload("en", true);
         settings.setAcceptedHandwritingModelDownload("mr-IN", true);
+        settings.setAcceptedHandwritingModelDownload("mr", true);
         settings.setAcceptedHandwritingModelDownload("hi", true);
+        settings.setAcceptedHandwritingModelDownload("hi-IN", true);
 
         org.opennotes.app.util.HandwritingRecognitionEngine.checkModelsDownloaded(
                 getApplicationContext(), (englishReady, marathiReady) -> {

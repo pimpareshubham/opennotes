@@ -17,6 +17,7 @@ import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizer;
 import com.google.mlkit.vision.digitalink.recognition.DigitalInkRecognizerOptions;
 import com.google.mlkit.vision.digitalink.recognition.Ink;
 import com.google.mlkit.vision.digitalink.recognition.RecognitionContext;
+import com.google.mlkit.vision.digitalink.recognition.WritingArea;
 
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.Stroke;
@@ -116,105 +117,97 @@ public final class HandwritingRecognitionEngine {
 
     private HandwritingRecognitionEngine() { }
 
-    /** Check if offline models are already installed on the device. */
-    public static void checkModelsDownloaded(Context context, ModelsStatusCallback callback) {
+    public interface SingleModelStatusCallback {
+        void onStatus(boolean downloaded);
+    }
+
+    public interface ModelResolutionCallback {
+        void onResolved(DigitalInkRecognitionModel model, String tag);
+        void onNoneReady(String preferredTag);
+    }
+
+    public static String[] getCandidateTags(String language) {
+        if ("ENGLISH".equalsIgnoreCase(language)) {
+            return new String[]{"en-US", "en-IN", "en", "en-GB"};
+        } else if ("HINDI".equalsIgnoreCase(language)) {
+            return new String[]{"hi", "hi-IN", "mr-IN", "mr"};
+        } else {
+            // Marathi default
+            return new String[]{"mr-IN", "mr", "hi", "hi-IN"};
+        }
+    }
+
+    /**
+     * Resolve a ready, downloaded model for the language across candidate tags.
+     * If any candidate tag is downloaded, invokes onResolved immediately.
+     */
+    public static void resolveReadyModel(String language, ModelResolutionCallback callback) {
         if (callback == null) return;
         WORKER.execute(() -> {
-            try {
-                RemoteModelManager manager = RemoteModelManager.getInstance();
-                DigitalInkRecognitionModelIdentifier idEn = getModelIdentifier("ENGLISH");
-                DigitalInkRecognitionModelIdentifier idMr = getModelIdentifier("MARATHI");
-                if (idEn == null || idMr == null) {
-                    MAIN.post(() -> callback.onStatus(false, false));
-                    return;
-                }
-                DigitalInkRecognitionModel modelEn = DigitalInkRecognitionModel.builder(idEn).build();
-                DigitalInkRecognitionModel modelMr = DigitalInkRecognitionModel.builder(idMr).build();
+            String[] tags = getCandidateTags(language);
+            RemoteModelManager manager = RemoteModelManager.getInstance();
+            checkCandidateAt(tags, 0, manager, callback);
+        });
+    }
 
-                manager.isModelDownloaded(modelEn).addOnCompleteListener(taskEn -> {
-                    boolean en = taskEn.isSuccessful() && Boolean.TRUE.equals(taskEn.getResult());
-                    manager.isModelDownloaded(modelMr).addOnCompleteListener(taskMr -> {
-                        boolean mr = taskMr.isSuccessful() && Boolean.TRUE.equals(taskMr.getResult());
-                        MAIN.post(() -> callback.onStatus(en, mr));
-                    });
-                });
-            } catch (Exception e) {
-                MAIN.post(() -> callback.onStatus(false, false));
+    private static void checkCandidateAt(String[] tags, int index, RemoteModelManager manager, ModelResolutionCallback callback) {
+        if (index >= tags.length) {
+            String fallbackTag = tags.length > 0 ? tags[0] : "en-US";
+            MAIN.post(() -> callback.onNoneReady(fallbackTag));
+            return;
+        }
+        String tag = tags[index];
+        try {
+            DigitalInkRecognitionModelIdentifier id = DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+            if (id == null) {
+                checkCandidateAt(tags, index + 1, manager, callback);
+                return;
             }
+            DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(id).build();
+            manager.isModelDownloaded(model).addOnCompleteListener(t -> {
+                if (t.isSuccessful() && Boolean.TRUE.equals(t.getResult())) {
+                    MAIN.post(() -> callback.onResolved(model, tag));
+                } else {
+                    WORKER.execute(() -> checkCandidateAt(tags, index + 1, manager, callback));
+                }
+            });
+        } catch (Exception e) {
+            checkCandidateAt(tags, index + 1, manager, callback);
+        }
+    }
+
+    /** Check if offline models are already installed on the device across candidate tags. */
+    public static void checkModelsDownloaded(Context context, ModelsStatusCallback callback) {
+        if (callback == null) return;
+        isModelDownloaded("ENGLISH", enReady -> {
+            isModelDownloaded("MARATHI", mrReady -> {
+                callback.onStatus(enReady, mrReady);
+            });
         });
     }
 
     /** Check offline download status of all supported language models (English, Marathi, Hindi). */
     public static void checkAllModelsDownloaded(Context context, AllModelsStatusCallback callback) {
         if (callback == null) return;
-        WORKER.execute(() -> {
-            try {
-                RemoteModelManager manager = RemoteModelManager.getInstance();
-                DigitalInkRecognitionModelIdentifier idEn = getModelIdentifier("ENGLISH");
-                DigitalInkRecognitionModelIdentifier idMr = getModelIdentifier("MARATHI");
-                DigitalInkRecognitionModelIdentifier idHi = getModelIdentifier("HINDI");
-
-                DigitalInkRecognitionModel modelEn = idEn != null ? DigitalInkRecognitionModel.builder(idEn).build() : null;
-                DigitalInkRecognitionModel modelMr = idMr != null ? DigitalInkRecognitionModel.builder(idMr).build() : null;
-                DigitalInkRecognitionModel modelHi = idHi != null ? DigitalInkRecognitionModel.builder(idHi).build() : null;
-
-                final boolean[] status = new boolean[3]; // [en, mr, hi]
-                final int[] pending = {3};
-
-                Runnable checkDone = () -> {
-                    pending[0]--;
-                    if (pending[0] <= 0) {
-                        MAIN.post(() -> callback.onStatus(status[0], status[1], status[2]));
-                    }
-                };
-
-                if (modelEn != null) {
-                    manager.isModelDownloaded(modelEn).addOnCompleteListener(t -> {
-                        status[0] = t.isSuccessful() && Boolean.TRUE.equals(t.getResult());
-                        checkDone.run();
-                    });
-                } else checkDone.run();
-
-                if (modelMr != null) {
-                    manager.isModelDownloaded(modelMr).addOnCompleteListener(t -> {
-                        status[1] = t.isSuccessful() && Boolean.TRUE.equals(t.getResult());
-                        checkDone.run();
-                    });
-                } else checkDone.run();
-
-                if (modelHi != null) {
-                    manager.isModelDownloaded(modelHi).addOnCompleteListener(t -> {
-                        status[2] = t.isSuccessful() && Boolean.TRUE.equals(t.getResult());
-                        checkDone.run();
-                    });
-                } else checkDone.run();
-
-            } catch (Exception e) {
-                MAIN.post(() -> callback.onStatus(false, false, false));
-            }
+        isModelDownloaded("ENGLISH", enReady -> {
+            isModelDownloaded("MARATHI", mrReady -> {
+                isModelDownloaded("HINDI", hiReady -> {
+                    callback.onStatus(enReady, mrReady, hiReady);
+                });
+            });
         });
-    }
-
-    public interface SingleModelStatusCallback {
-        void onStatus(boolean downloaded);
     }
 
     public static void isModelDownloaded(String language, SingleModelStatusCallback callback) {
         if (callback == null) return;
-        WORKER.execute(() -> {
-            try {
-                DigitalInkRecognitionModelIdentifier id = getModelIdentifier(language);
-                if (id == null) {
-                    MAIN.post(() -> callback.onStatus(false));
-                    return;
-                }
-                DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(id).build();
-                RemoteModelManager.getInstance().isModelDownloaded(model)
-                        .addOnCompleteListener(t -> {
-                            boolean ready = t.isSuccessful() && Boolean.TRUE.equals(t.getResult());
-                            MAIN.post(() -> callback.onStatus(ready));
-                        });
-            } catch (Exception e) {
+        resolveReadyModel(language, new ModelResolutionCallback() {
+            @Override
+            public void onResolved(DigitalInkRecognitionModel model, String tag) {
+                MAIN.post(() -> callback.onStatus(true));
+            }
+
+            @Override
+            public void onNoneReady(String preferredTag) {
                 MAIN.post(() -> callback.onStatus(false));
             }
         });
@@ -222,46 +215,50 @@ public final class HandwritingRecognitionEngine {
 
     public static void downloadModel(String language, ModelDownloadCallback callback) {
         WORKER.execute(() -> {
-            try {
-                String tag = languageTag(language);
-                DigitalInkRecognitionModelIdentifier id = getModelIdentifier(language);
-                if (id == null) {
-                    if (callback != null) MAIN.post(() -> callback.onComplete(new IllegalArgumentException("Model not found: " + language)));
-                    return;
-                }
-                DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(id).build();
-                downloadModelForSetup(RemoteModelManager.getInstance(), model, tag, callback != null ? callback : error -> {});
-            } catch (Exception e) {
-                if (callback != null) MAIN.post(() -> callback.onComplete(e));
-            }
+            String[] tags = getCandidateTags(language);
+            RemoteModelManager manager = RemoteModelManager.getInstance();
+            downloadCandidateWithFallback(manager, tags, 0, language, callback);
         });
     }
 
     /** Pre-download a language model from an explicit setup flow before recognition is used. */
     public static void downloadLanguageModel(Context context, String preferredLanguage,
                                             ModelDownloadCallback callback) {
-        if (context == null || callback == null) return;
-        WORKER.execute(() -> {
-            try {
-                String tag = languageTag(preferredLanguage);
-                DigitalInkRecognitionModelIdentifier identifier = getModelIdentifier(preferredLanguage);
-                if (identifier == null) {
-                    postModelDownloadResult(callback, new IllegalArgumentException(
-                            "Handwriting recognition is not available for " + tag));
-                    return;
-                }
-                DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(identifier).build();
-                RemoteModelManager manager = RemoteModelManager.getInstance();
-                manager.isModelDownloaded(model)
-                        .addOnSuccessListener(isDownloaded -> {
-                            if (isDownloaded) postModelDownloadResult(callback, null);
-                            else downloadModelForSetup(manager, model, tag, callback);
-                        })
-                        .addOnFailureListener(error -> postModelDownloadResult(callback, error));
-            } catch (Exception error) {
-                postModelDownloadResult(callback, error);
+        downloadModel(preferredLanguage, callback);
+    }
+
+    private static void downloadCandidateWithFallback(RemoteModelManager manager,
+                                                      String[] tags,
+                                                      int index,
+                                                      String language,
+                                                      ModelDownloadCallback callback) {
+        if (index >= tags.length) {
+            String langName = languageName(language);
+            if (callback != null) {
+                MAIN.post(() -> callback.onComplete(new IllegalStateException(
+                        "Unable to download " + langName + " handwriting model. Please check internet connection.")));
             }
-        });
+            return;
+        }
+        String tag = tags[index];
+        try {
+            DigitalInkRecognitionModelIdentifier id = DigitalInkRecognitionModelIdentifier.fromLanguageTag(tag);
+            if (id == null) {
+                downloadCandidateWithFallback(manager, tags, index + 1, language, callback);
+                return;
+            }
+            DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(id).build();
+            downloadModelForSetup(manager, model, tag, error -> {
+                if (error == null) {
+                    if (callback != null) callback.onComplete(null);
+                } else {
+                    Log.w(TAG, "Download failed for candidate tag " + tag + ": " + (error != null ? error.getMessage() : "") + ", trying next candidate...");
+                    WORKER.execute(() -> downloadCandidateWithFallback(manager, tags, index + 1, language, callback));
+                }
+            });
+        } catch (Exception e) {
+            downloadCandidateWithFallback(manager, tags, index + 1, language, callback);
+        }
     }
 
     private static void downloadModelForSetup(RemoteModelManager manager,
@@ -360,7 +357,7 @@ public final class HandwritingRecognitionEngine {
 
             @Override
             public void onFailure(Exception error) {
-                if (isModelDownloadCancellation(error)) {
+                if (isFatalError(error)) {
                     callback.onFailure(error);
                     return;
                 }
@@ -432,21 +429,19 @@ public final class HandwritingRecognitionEngine {
             } else if ((preContext == null || preContext.isEmpty()) && !queue.isEmpty()) {
                 // Cross-language fallback (Devanagari <-> English) if primary language produced no candidates
                 String fallbackLang = "ENGLISH".equalsIgnoreCase(language) ? "MARATHI" : "ENGLISH";
-                DigitalInkRecognitionModelIdentifier fbId = getModelIdentifier(fallbackLang);
-                if (fbId != null) {
-                    DigitalInkRecognitionModel fbModel = DigitalInkRecognitionModel.builder(fbId).build();
-                    RemoteModelManager.getInstance().isModelDownloaded(fbModel).addOnCompleteListener(t -> {
-                        if (t.isSuccessful() && Boolean.TRUE.equals(t.getResult())) {
-                            executeSingleRecognitionPass(context, originalStrokes, originalStrokes, 0f, fallbackLang, "", callback);
-                        } else {
-                            callback.onFailure(new IllegalArgumentException(
-                                    "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
-                        }
-                    });
-                    return;
-                }
-                callback.onFailure(new IllegalArgumentException(
-                        "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
+                resolveReadyModel(fallbackLang, new ModelResolutionCallback() {
+                    @Override
+                    public void onResolved(DigitalInkRecognitionModel model, String tag) {
+                        executeSingleRecognitionPass(context, originalStrokes, originalStrokes, 0f, fallbackLang, "", callback);
+                    }
+
+                    @Override
+                    public void onNoneReady(String preferredTag) {
+                        callback.onFailure(new IllegalArgumentException(
+                                "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
+                    }
+                });
+                return;
             } else {
                 callback.onFailure(new IllegalArgumentException(
                         "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
@@ -474,7 +469,7 @@ public final class HandwritingRecognitionEngine {
 
             @Override
             public void onFailure(Exception error) {
-                if (isModelDownloadCancellation(error)) {
+                if (isFatalError(error)) {
                     callback.onFailure(error);
                     return;
                 }
@@ -504,28 +499,77 @@ public final class HandwritingRecognitionEngine {
                     "No usable handwriting points were found. Your ink was kept."));
             return;
         }
-        try {
-            DigitalInkRecognitionModelIdentifier identifier = getModelIdentifier(preferredLanguage);
-            if (identifier == null) {
-                postFailure(callback, new IllegalArgumentException("Handwriting recognition is not available for " + preferredLanguage));
-                return;
+
+        resolveReadyModel(preferredLanguage, new ModelResolutionCallback() {
+            @Override
+            public void onResolved(DigitalInkRecognitionModel model, String tag) {
+                runRecognition(context, model, strokesToRecognize, originalStrokes, angleDegrees,
+                        preferredLanguage, preContext, bounds, callback);
             }
-            String tag = identifier.getLanguageSubtag();
-            DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(identifier).build();
-            RemoteModelManager manager = RemoteModelManager.getInstance();
-            manager.isModelDownloaded(model).addOnSuccessListener(isDownloaded -> {
-                if (isDownloaded) {
-                    runRecognition(context, model, strokesToRecognize, originalStrokes, angleDegrees,
-                            preferredLanguage, preContext, bounds, callback);
-                } else {
-                    requestModelDownloadApproval(context, manager, model, tag,
-                            strokesToRecognize, originalStrokes, angleDegrees,
-                            preferredLanguage, preContext, bounds, callback);
+
+            @Override
+            public void onNoneReady(String preferredTag) {
+                DigitalInkRecognitionModelIdentifier identifier = getModelIdentifier(preferredLanguage);
+                if (identifier == null) {
+                    postFailure(callback, new IllegalArgumentException(
+                            "Handwriting recognition is not available for " + preferredLanguage));
+                    return;
                 }
-            }).addOnFailureListener(error -> postFailure(callback, error));
-        } catch (Exception error) {
-            postFailure(callback, error);
+                DigitalInkRecognitionModel model = DigitalInkRecognitionModel.builder(identifier).build();
+                RemoteModelManager manager = RemoteModelManager.getInstance();
+                String tag = preferredTag != null ? preferredTag : identifier.getLanguageSubtag();
+
+                MAIN.post(() -> {
+                    if (context != null) {
+                        android.widget.Toast.makeText(context,
+                                "Downloading " + languageName(preferredLanguage) + " handwriting model (~18 MB). Please wait a moment...",
+                                android.widget.Toast.LENGTH_LONG).show();
+                    }
+                });
+
+                downloadThenRecognize(context, manager, model, tag,
+                        strokesToRecognize, originalStrokes, angleDegrees,
+                        preferredLanguage, preContext, bounds, callback);
+            }
+        });
+    }
+
+    public static boolean isFatalError(Throwable error) {
+        if (error == null) return false;
+        for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ModelDownloadCancellationException) return true;
+            String msg = cause.getMessage();
+            if (msg != null) {
+                String lower = msg.toLowerCase();
+                if (lower.contains("download")
+                        || lower.contains("network")
+                        || lower.contains("connection")
+                        || lower.contains("offline")
+                        || lower.contains("internet")
+                        || lower.contains("not installed")
+                        || lower.contains("model not found")
+                        || lower.contains("not downloaded")
+                        || lower.contains("failed to schedule")
+                        || lower.contains("play services")
+                        || lower.contains("google play")
+                        || lower.contains("api exception")
+                        || lower.contains("cancelled")
+                        || lower.contains("canceled")
+                        || lower.contains("storage")
+                        || lower.contains("space")) {
+                    return true;
+                }
+            }
+            String className = cause.getClass().getName();
+            if (className.contains("MlKitException")
+                    || className.contains("ApiException")
+                    || className.contains("UnavailableException")) {
+                if (!isEmptyRecognitionFailure(cause)) {
+                    return true;
+                }
+            }
         }
+        return false;
     }
 
     public static boolean isEmptyRecognitionFailure(Throwable error) {
@@ -737,7 +781,7 @@ public final class HandwritingRecognitionEngine {
                                     language, preContext, bounds, callback);
                         } else {
                             postFailure(callback, new IllegalStateException(
-                                     "The language model download finished but the model is not installed yet. Please try again."));
+                                     "The " + languageName(language) + " handwriting model download finished but the model is not installed yet. Please try again."));
                         }
                     })
                     .addOnFailureListener(error -> {
@@ -746,7 +790,10 @@ public final class HandwritingRecognitionEngine {
                     });
         }).addOnFailureListener(error -> {
             removeCompletedDownload(tag, downloadTask);
-            postFailure(callback, error);
+            String langName = languageName(language);
+            String detail = (error != null && error.getMessage() != null) ? error.getMessage() : "Network error";
+            postFailure(callback, new IllegalStateException(
+                    "Failed to download " + langName + " handwriting model: " + detail + ". Please connect to internet to download the offline model."));
         });
     }
 
@@ -809,72 +856,128 @@ public final class HandwritingRecognitionEngine {
             float padY = Math.max(24f, scaledH * 0.10f);
 
             Ink.Builder inkBuilder = Ink.builder();
-            long lastInkTime = -1L;
+            long currentTime = 0L;
             int addedStrokes = 0;
-            for (Stroke source : strokesToRecognize) {
+
+            for (int sIdx = 0; sIdx < strokesToRecognize.size(); sIdx++) {
+                Stroke source = strokesToRecognize.get(sIdx);
                 if (source == null) continue;
                 List<DrawingPoint> inputPoints = source.getRecognitionPoints();
+                if (inputPoints == null || inputPoints.isEmpty()) inputPoints = source.points;
                 if (inputPoints == null || inputPoints.isEmpty()) continue;
+
+                // Natural inter-stroke pen-lift delay between separate strokes (120ms to 200ms)
+                if (addedStrokes > 0) {
+                    currentTime += 130L;
+                }
+
                 Ink.Stroke.Builder strokeBuilder = Ink.Stroke.builder();
                 int addedPoints = 0;
                 float lastAddedX = 0f;
                 float lastAddedY = 0f;
+                long lastPointRawTime = -1L;
+
                 for (DrawingPoint point : inputPoints) {
                     if (point == null || !isFinite(point.x) || !isFinite(point.y)) continue;
-                    long pointTime = point.timeMillis >= 0L
-                            ? point.timeMillis
-                            : (lastInkTime < 0L ? 0L : lastInkTime + 8L);
-                    if (lastInkTime >= 0L && pointTime <= lastInkTime) {
-                        pointTime = lastInkTime + 1L;
+
+                    long stepDelta = 12L; // Default ~80Hz sampling
+                    if (point.timeMillis > 0L && lastPointRawTime > 0L) {
+                        long rawDelta = point.timeMillis - lastPointRawTime;
+                        if (rawDelta > 0L && rawDelta <= 150L) {
+                            stepDelta = Math.max(6L, Math.min(40L, rawDelta));
+                        }
                     }
+                    if (addedPoints > 0) {
+                        currentTime += stepDelta;
+                    }
+                    lastPointRawTime = point.timeMillis;
+
                     float normX = (point.x - bounds.left) * scale + padX;
                     float normY = (point.y - bounds.top) * scale + padY;
-                    strokeBuilder.addPoint(Ink.Point.create(normX, normY, pointTime));
+
+                    strokeBuilder.addPoint(Ink.Point.create(normX, normY, currentTime));
                     lastAddedX = normX;
                     lastAddedY = normY;
-                    lastInkTime = pointTime;
                     addedPoints++;
                 }
+
                 if (addedPoints == 1) {
+                    // For single-tap dots (like anusvar or i-dot), create a micro-offset second point
+                    currentTime += 15L;
                     strokeBuilder.addPoint(Ink.Point.create(
-                            lastAddedX + 2.5f, lastAddedY + 2.5f, lastInkTime + 15L));
+                            lastAddedX + 2.0f, lastAddedY + 2.0f, currentTime));
                     addedPoints++;
                 }
+
                 if (addedPoints > 0) {
                     inkBuilder.addStroke(strokeBuilder.build());
                     addedStrokes++;
                 }
             }
+
             if (addedStrokes == 0) {
                 postFailure(callback, new IllegalArgumentException(
                         "No usable handwriting points were found. Your ink was kept."));
                 return;
             }
+
             Ink ink = inkBuilder.build();
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(16).build());
 
-            // Unconstrained recognition: ML Kit natively handles handwriting at any slope or aspect
+            // Primary pass: RecognitionContext with WritingArea and preContext
             RecognitionContext.Builder contextBuilder = RecognitionContext.builder();
             if (!preContext.isEmpty()) {
                 contextBuilder.setPreContext(preContext);
             }
+            float writingAreaW = Math.max(200f, scaledW + padX * 2.0f);
+            float writingAreaH = Math.max(120f, scaledH + padY * 2.0f);
+            contextBuilder.setWritingArea(new WritingArea(writingAreaW, writingAreaH));
             RecognitionContext recognitionContext = contextBuilder.build();
+
             recognizer.recognize(ink, recognitionContext)
                     .addOnSuccessListener(result -> {
                         String text = firstCandidate(result);
                         if (text.trim().isEmpty()) {
-                            recognizer.close();
-                            postFailure(callback, new IllegalArgumentException(
-                                     "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
+                            // Secondary fallback pass: unconstrained recognition without WritingArea
+                            recognizer.recognize(ink)
+                                    .addOnSuccessListener(fallbackResult -> {
+                                        String fallbackText = firstCandidate(fallbackResult);
+                                        if (fallbackText.trim().isEmpty()) {
+                                            recognizer.close();
+                                            postFailure(callback, new IllegalArgumentException(
+                                                    "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
+                                        } else {
+                                            completeRecognition(context, strokesToRecognize, originalStrokes, angleDegrees,
+                                                    recognizer, fallbackResult, language, preContext, bounds, callback);
+                                        }
+                                    })
+                                    .addOnFailureListener(fallbackError -> {
+                                        recognizer.close();
+                                        postFailure(callback, fallbackError);
+                                    });
                         } else {
                             completeRecognition(context, strokesToRecognize, originalStrokes, angleDegrees,
                                     recognizer, result, language, preContext, bounds, callback);
                         }
                     })
                     .addOnFailureListener(error -> {
-                        recognizer.close();
-                        postFailure(callback, error);
+                        // Unconstrained fallback if contextual pass encountered error
+                        recognizer.recognize(ink)
+                                .addOnSuccessListener(fallbackResult -> {
+                                    String fallbackText = firstCandidate(fallbackResult);
+                                    if (!fallbackText.trim().isEmpty()) {
+                                        completeRecognition(context, strokesToRecognize, originalStrokes, angleDegrees,
+                                                recognizer, fallbackResult, language, preContext, bounds, callback);
+                                    } else {
+                                        recognizer.close();
+                                        postFailure(callback, error);
+                                    }
+                                })
+                                .addOnFailureListener(unconstrainedErr -> {
+                                    recognizer.close();
+                                    postFailure(callback, error);
+                                });
                     });
         } catch (Exception error) {
             postFailure(callback, error);
@@ -1612,15 +1715,7 @@ public final class HandwritingRecognitionEngine {
     }
 
     public static DigitalInkRecognitionModelIdentifier getModelIdentifier(String language) {
-        String[] tags;
-        if ("ENGLISH".equalsIgnoreCase(language)) {
-            tags = new String[]{"en-IN", "en", "en-US", "en-GB"};
-        } else if ("HINDI".equalsIgnoreCase(language)) {
-            tags = new String[]{"hi", "hi-IN", "mr-IN", "mr"};
-        } else {
-            // Marathi default
-            tags = new String[]{"mr-IN", "mr", "hi", "hi-IN"};
-        }
+        String[] tags = getCandidateTags(language);
         for (String tag : tags) {
             try {
                 DigitalInkRecognitionModelIdentifier id =
@@ -1632,11 +1727,7 @@ public final class HandwritingRecognitionEngine {
     }
 
     public static String languageTag(String language) {
-        // The app and its target devices are used in India; ML Kit has a
-        // dedicated English (India) handwriting model as well as Marathi.
-        if ("ENGLISH".equalsIgnoreCase(language)) return "en-IN";
-        // ML Kit's base-model catalog lists Hindi as "hi" (unlike Marathi's
-        // regional model "mr-IN"). Requesting hi-IN can yield no identifier.
+        if ("ENGLISH".equalsIgnoreCase(language)) return "en-US";
         if ("HINDI".equalsIgnoreCase(language)) return "hi";
         return "mr-IN";
     }

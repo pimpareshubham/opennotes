@@ -3130,7 +3130,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         root.addView(listLayout);
 
         String[] langs = {"ENGLISH", "MARATHI", "HINDI"};
-        String[] langTitles = {"English (en-US)", "Marathi (मराठी - mr)", "Hindi (हिन्दी - hi)"};
+        String[] langTitles = {"English (en-US / en-IN)", "Marathi (मराठी - mr-IN / mr)", "Hindi (हिन्दी - hi)"};
         String[] langSubtitles = {"Latin script & cursive ligature models", "Devanagari script with Shirorekha priors", "Devanagari script & joint compound glyphs"};
 
         TextView[] statusViews = new TextView[langs.length];
