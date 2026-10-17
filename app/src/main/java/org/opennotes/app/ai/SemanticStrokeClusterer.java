@@ -149,20 +149,6 @@ public class SemanticStrokeClusterer {
      */
     public static boolean isMultiLine(List<Stroke> strokes) {
         if (strokes == null || strokes.size() < 2) return false;
-        RectF b = InkNormalizer.getBounds(strokes);
-        if (b == null) return false;
-        List<Float> heights = new ArrayList<>();
-        for (Stroke s : strokes) {
-            if (s != null && s.getBounds() != null && s.getBounds().height() > 6f) {
-                heights.add(s.getBounds().height());
-            }
-        }
-        if (heights.isEmpty()) return false;
-        Collections.sort(heights);
-        float medianH = heights.get(heights.size() / 2);
-        // A block cannot be multi-line unless total height is at least 1.9x the median stroke height
-        if (b.height() < 1.9f * medianH) return false;
-
         List<StrokeLine> lines = segmentIntoLines(strokes);
         return lines != null && lines.size() > 1;
     }
@@ -220,15 +206,6 @@ public class SemanticStrokeClusterer {
         float medianH = !heights.isEmpty() ? heights.get(heights.size() / 2) : 30f;
         medianH = Math.max(15f, medianH);
 
-        // FAST EXIT: If overall bounding box height is less than 1.9 * medianH,
-        // it cannot contain multiple stacked lines of text. Return as a single line!
-        if (overallBounds != null && overallBounds.height() < 1.9f * medianH) {
-            RectF b = InkNormalizer.getBounds(strokes);
-            List<StrokeWord> words = Collections.singletonList(new StrokeWord(new ArrayList<>(strokes), b, rotAngle));
-            result.add(new StrokeLine(new ArrayList<>(strokes), words, b, rotAngle));
-            return result;
-        }
-
         int n = projected.size();
         int[] parent = new int[n];
         for (int i = 0; i < n; i++) parent[i] = i;
@@ -249,26 +226,27 @@ public class SemanticStrokeClusterer {
                 float hGap = Math.max(0f, Math.max(s1.minX, s2.minX) - Math.min(s1.maxX, s2.maxX));
                 float cyDist = Math.abs(s1.cy - s2.cy);
 
+                boolean isDiacritic = (minH < 0.45f * medianH)
+                        || (minH < 0.35f * Math.max(s1.height, s2.height));
+
                 boolean isSameLine = false;
 
-                // Condition 1: Substantial vertical overlap between strokes
-                if (vOverlap >= 0.25f * minH || vOverlap >= 0.20f * medianH) {
-                    if (cyDist <= 0.65f * medianH || vOverlap >= 0.40f * minH) {
-                        isSameLine = true;
+                if (isDiacritic) {
+                    // Vertical diacritic / accent / matra / shirorekha attached to character body
+                    if (hOverlap >= 0.20f * minW
+                            || (s1.minX >= s2.minX - 15f && s1.maxX <= s2.maxX + 15f)
+                            || (s2.minX >= s1.minX - 15f && s2.maxX <= s1.maxX + 15f)) {
+                        if (vGap <= 0.55f * medianH || cyDist <= 0.85f * medianH) {
+                            isSameLine = true;
+                        }
                     }
-                }
-                // Condition 2: Vertical diacritic / Shirorekha / upper matra / lower matra
-                // Strong horizontal overlap with character body and small vertical gap
-                else if (hOverlap >= 0.25f * minW
-                        || (s1.minX >= s2.minX - 15f && s1.maxX <= s2.maxX + 15f)
-                        || (s2.minX >= s1.minX - 15f && s2.maxX <= s1.maxX + 15f)) {
-                    if (vGap <= 0.45f * medianH || cyDist <= 0.90f * medianH) {
-                        isSameLine = true;
+                } else {
+                    // Both are main character strokes: they must be on the same horizontal baseline!
+                    if (cyDist <= 0.42f * medianH) {
+                        if (vOverlap >= 0.20f * minH || vGap <= 0.25f * medianH) {
+                            isSameLine = true;
+                        }
                     }
-                }
-                // Condition 3: Same line continuation (words side-by-side on same baseline)
-                else if (cyDist <= 0.45f * medianH && (vOverlap > 0f || vGap <= 0.35f * medianH)) {
-                    isSameLine = true;
                 }
 
                 if (isSameLine) {
@@ -321,12 +299,11 @@ public class SemanticStrokeClusterer {
                         float c2Cy = sumCy2 / c2.size();
                         float c2H = Math.max(1f, c2Bottom - c2Top);
 
+                        float cyDiff = Math.abs(c1Cy - c2Cy);
                         float vOverlap = Math.max(0f, Math.min(c1Bottom, c2Bottom) - Math.max(c1Top, c2Top));
                         float minClusterH = Math.min(c1H, c2H);
-                        float cyDiff = Math.abs(c1Cy - c2Cy);
 
-                        if ((vOverlap >= 0.30f * minClusterH || cyDiff <= 0.40f * medianH)
-                                && cyDiff <= 0.55f * Math.max(c1H, c2H)) {
+                        if (cyDiff <= 0.40f * medianH && (vOverlap >= 0.25f * minClusterH || cyDiff <= 0.30f * medianH)) {
                             c1.addAll(c2);
                             clusterList.remove(j);
                             merged = true;
@@ -365,7 +342,7 @@ public class SemanticStrokeClusterer {
                             bestIdx = k;
                         }
                     }
-                    if (bestIdx != -1) {
+                    if (bestIdx != -1 && minDistance <= 1.0f * medianH) {
                         clusterList.get(bestIdx).addAll(cluster);
                         clusterList.remove(i);
                     }

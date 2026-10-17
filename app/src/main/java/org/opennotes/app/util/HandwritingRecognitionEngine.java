@@ -1019,15 +1019,6 @@ public final class HandwritingRecognitionEngine {
                 return;
             }
 
-            // Ensure single-line handwriting is never artificially split onto multiple lines
-            boolean genuinelyMultiLine = hasDistinctMultipleLines(strokesToRecognize);
-            if (!genuinelyMultiLine && text.contains("\n")) {
-                text = text.replace("\r\n", " ").replace("\n", " ").replaceAll("\\s+", " ").trim();
-                for (int i = 0; i < rerankedAlternatives.size(); i++) {
-                    rerankedAlternatives.set(i, rerankedAlternatives.get(i).replace("\r\n", " ").replace("\n", " ").replaceAll("\\s+", " ").trim());
-                }
-            }
-
             String lang = isLatin(language) ? "ENGLISH"
                     : ("HINDI".equalsIgnoreCase(language) ? "HINDI" : "MARATHI");
 
@@ -1067,14 +1058,10 @@ public final class HandwritingRecognitionEngine {
 
             MAIN.post(() -> callback.onSuccess(
                     new RecognitionResult(finalText, finalLang, finalBounds, finalFontSize,
-                            rerankedAlternatives, 0f, finalStartX, finalStartY)));
+                            rerankedAlternatives, angleDegrees, finalStartX, finalStartY)));
         } finally {
             recognizer.close();
         }
-    }
-
-    private static boolean hasDistinctMultipleLines(List<Stroke> strokes) {
-        return org.opennotes.app.ai.SemanticStrokeClusterer.isMultiLine(strokes);
     }
 
     private static List<String> rerankDevanagariCandidates(List<Stroke> strokes, List<String> candidates) {

@@ -123,13 +123,20 @@ public class InkNormalizer {
                 ? (float) Math.toDegrees(Math.atan2(progDy, progDx))
                 : 0f;
 
-        // 2. Minimum Area Bounding Box / Aspect Ratio Sweep across angles [-85°, +90°]
-        // Text lines have maximum width-to-height aspect ratio along the baseline!
+        RectF bounds = getBounds(strokes);
+        if (bounds != null && bounds.height() >= bounds.width() * 1.02f) {
+            // Multi-line paragraphs or vertical columns of numbers/words are stacked vertically.
+            // Individual lines are written horizontally (0°). Never rotate by 90°!
+            return 0f;
+        }
+
+        // 2. Minimum Area Bounding Box / Aspect Ratio Sweep across angles [-40°, +40°]
+        // Human handwriting slopes naturally between -40° and +40°.
         float bestAngle = 0f;
         float maxScore = -1f;
         float bestAspectRatio = 1f;
 
-        for (float deg = -85f; deg <= 90f; deg += 2.5f) {
+        for (float deg = -40f; deg <= 40f; deg += 2.0f) {
             double rad = Math.toRadians(-deg);
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);
@@ -177,7 +184,7 @@ public class InkNormalizer {
         // 3. Fine-tuning pass in steps of 0.5° around bestAngle
         float refinedAngle = bestAngle;
         float fineMaxScore = maxScore;
-        for (float deg = bestAngle - 2.5f; deg <= bestAngle + 2.5f; deg += 0.5f) {
+        for (float deg = bestAngle - 2.0f; deg <= bestAngle + 2.0f; deg += 0.5f) {
             double rad = Math.toRadians(-deg);
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);

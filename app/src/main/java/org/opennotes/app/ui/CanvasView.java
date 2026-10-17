@@ -1003,29 +1003,17 @@ public class CanvasView extends View {
         }
     };
 
-    /** Checks if strokes contain sufficient handwriting ink for conversion (handles single words, short words, or long cursive lines). */
+    /** Checks if strokes contain sufficient handwriting ink for conversion. */
     private boolean hasEnoughInkForAutoConversion(List<Stroke> strokes) {
         if (strokes == null || strokes.isEmpty()) return false;
         int pointCount = 0;
-        float minX = Float.MAX_VALUE, minY = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
         for (Stroke stroke : strokes) {
             if (stroke == null) continue;
             List<DrawingPoint> points = stroke.getRecognitionPoints();
             if (points == null || points.isEmpty()) points = stroke.points;
-            if (points == null) continue;
-            pointCount += points.size();
-            for (DrawingPoint point : points) {
-                minX = Math.min(minX, point.x);
-                minY = Math.min(minY, point.y);
-                maxX = Math.max(maxX, point.x);
-                maxY = Math.max(maxY, point.y);
-            }
+            if (points != null) pointCount += points.size();
         }
-        if (pointCount < 2 || minX == Float.MAX_VALUE) return false;
-        float width = maxX - minX;
-        float height = maxY - minY;
-        return (width >= 3f || height >= 4f);
+        return pointCount >= 2;
     }
 
     public void cancelPendingAutoConversion() {
@@ -1447,8 +1435,9 @@ public class CanvasView extends View {
                 textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
                 float spaceWidth = textPaint.measureText(" ");
 
+                float itemAngle = (Math.abs(result.angleDegrees) >= 4.0f) ? result.angleDegrees : 0f;
                 if (words.length <= 1) {
-                    convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, 0f));
+                    convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, itemAngle));
                 } else {
                     float totalWordsWidth = 0f;
                     float[] wordWidths = new float[words.length];
@@ -1462,7 +1451,7 @@ public class CanvasView extends View {
 
                     float curX = lineStartX;
                     for (int w = 0; w < words.length; w++) {
-                        convertedTexts.add(new TextItem(words[w], curX, lineBaselineY, textColor, result.fontSize, fontKey, 0f));
+                        convertedTexts.add(new TextItem(words[w], curX, lineBaselineY, textColor, result.fontSize, fontKey, itemAngle));
                         curX += wordWidths[w] + computedSpace;
                     }
                 }
@@ -4548,20 +4537,6 @@ public class CanvasView extends View {
                 // User is actively writing: pause/reset any pending auto-convert timer immediately
                 if (isAutoConvertTextEnabled && isAutoBeautifyEnabled) {
                     autoConvertHandler.removeCallbacks(autoConvertRunnable);
-                    // Continuous Writing Flow at any angle:
-                    // Keep strokes together while writing nearby (whether horizontal, diagonal, or multi-word).
-                    // Only trigger intermediate conversion if the user makes a distant spatial jump across the page.
-                    if (!pendingAutoConvertStrokes.isEmpty()) {
-                        RectF lastBounds = getStrokesBounds(pendingAutoConvertStrokes);
-                        if (!lastBounds.isEmpty() && hasEnoughInkForAutoConversion(pendingAutoConvertStrokes)) {
-                            float distFromLast = (float) Math.hypot(canvasX - lastBounds.centerX(), canvasY - lastBounds.centerY());
-                            if (distFromLast > 450f) {
-                                List<Stroke> completed = new ArrayList<>(pendingAutoConvertStrokes);
-                                pendingAutoConvertStrokes.clear();
-                                convertStrokesToText(completed);
-                            }
-                        }
-                    }
                 }
 
                 smoothedX = canvasX;
