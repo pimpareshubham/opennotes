@@ -336,9 +336,40 @@ public final class HandwritingRecognitionEngine {
                                                  Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
         final String contextText = preContext == null ? "" : preContext;
-        // Direct recognition: ML Kit natively understands inclined, tilted, and natural handwriting.
-        // We pass the raw strokes without imposing any horizontal reference frame or artificial rotation.
-        executeSingleRecognitionPass(context, strokes, preferredLanguage, contextText, callback);
+
+        final float writingAngle = InkNormalizer.detectWritingAngleDegrees(strokes);
+        final boolean isSlanted = Math.abs(writingAngle) >= 3.5f;
+
+        List<Stroke> primaryStrokes = isSlanted
+                ? transformedStrokeCopies(strokes, writingAngle, false, false)
+                : strokes;
+
+        executeSingleRecognitionPass(context, primaryStrokes, strokes, 0f, preferredLanguage, contextText, new Callback() {
+            @Override
+            public void onSuccess(RecognitionResult primaryResult) {
+                if (primaryResult != null && !primaryResult.text.trim().isEmpty()) {
+                    if (includeReviewSuggestions && primaryResult.alternatives.size() <= 1) {
+                        tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
+                                primaryResult, isSlanted, writingAngle, callback);
+                    } else {
+                        callback.onSuccess(primaryResult);
+                    }
+                } else {
+                    tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
+                            null, isSlanted, writingAngle, callback);
+                }
+            }
+
+            @Override
+            public void onFailure(Exception error) {
+                if (isModelDownloadCancellation(error)) {
+                    callback.onFailure(error);
+                    return;
+                }
+                tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
+                        null, isSlanted, writingAngle, callback);
+            }
+        });
     }
 
     private static void recognizeMultiLineStatements(Context context,
@@ -433,8 +464,21 @@ public final class HandwritingRecognitionEngine {
                     transformedStrokeCopies(originalStrokes, writingAngle + 25f, false, false), writingAngle + 25f));
             hypotheses.add(new AngleHypothesis(
                     transformedStrokeCopies(originalStrokes, writingAngle - 25f, false, false), writingAngle - 25f));
+            hypotheses.add(new AngleHypothesis(
+                    transformedStrokeCopies(originalStrokes, writingAngle + 180f, false, false), writingAngle + 180f));
+            float[] commonAngles = new float[]{-15f, 15f, -30f, 30f, -45f, 45f};
+            for (float ca : commonAngles) {
+                if (Math.abs(ca - writingAngle) > 10f) {
+                    hypotheses.add(new AngleHypothesis(
+                            transformedStrokeCopies(originalStrokes, ca, false, false), ca));
+                }
+            }
         } else {
-            // Test common tilt variations: +15°, -15°, +30°, -30°, +90°, -90°
+            if (Math.abs(writingAngle) > 0.5f) {
+                hypotheses.add(new AngleHypothesis(
+                        transformedStrokeCopies(originalStrokes, writingAngle, false, false), writingAngle));
+            }
+            // Test common tilt variations: +15°, -15°, +30°, -30°, +45°, -45°, +90°, -90°
             hypotheses.add(new AngleHypothesis(
                     transformedStrokeCopies(originalStrokes, 15f, false, false), 15f));
             hypotheses.add(new AngleHypothesis(
@@ -443,6 +487,10 @@ public final class HandwritingRecognitionEngine {
                     transformedStrokeCopies(originalStrokes, 30f, false, false), 30f));
             hypotheses.add(new AngleHypothesis(
                     transformedStrokeCopies(originalStrokes, -30f, false, false), -30f));
+            hypotheses.add(new AngleHypothesis(
+                    transformedStrokeCopies(originalStrokes, 45f, false, false), 45f));
+            hypotheses.add(new AngleHypothesis(
+                    transformedStrokeCopies(originalStrokes, -45f, false, false), -45f));
             RectF bounds = boundsOf(originalStrokes);
             if (bounds != null && bounds.height() > bounds.width() * 1.5f) {
                 hypotheses.add(new AngleHypothesis(
@@ -466,7 +514,7 @@ public final class HandwritingRecognitionEngine {
         if (index >= queue.size()) {
             if (accumulatedResult != null) {
                 callback.onSuccess(accumulatedResult);
-            } else if (preContext == null && !queue.isEmpty()) {
+            } else if ((preContext == null || preContext.isEmpty()) && !queue.isEmpty()) {
                 // Cross-language fallback (Devanagari <-> English) if primary language produced no candidates
                 String fallbackLang = "ENGLISH".equalsIgnoreCase(language) ? "MARATHI" : "ENGLISH";
                 DigitalInkRecognitionModelIdentifier fbId = getModelIdentifier(fallbackLang);
@@ -474,7 +522,11 @@ public final class HandwritingRecognitionEngine {
                     DigitalInkRecognitionModel fbModel = DigitalInkRecognitionModel.builder(fbId).build();
                     RemoteModelManager.getInstance().isModelDownloaded(fbModel).addOnCompleteListener(t -> {
                         if (t.isSuccessful() && Boolean.TRUE.equals(t.getResult())) {
-                            executeSingleRecognitionPass(context, originalStrokes, originalStrokes, 0f, fallbackLang, "", callback);
+                            float fallbackAngle = InkNormalizer.detectWritingAngleDegrees(originalStrokes);
+                            List<Stroke> fbStrokes = Math.abs(fallbackAngle) >= 3.5f
+                                    ? transformedStrokeCopies(originalStrokes, fallbackAngle, false, false)
+                                    : originalStrokes;
+                            executeSingleRecognitionPass(context, fbStrokes, originalStrokes, fallbackAngle, fallbackLang, "", callback);
                         } else {
                             callback.onFailure(new IllegalArgumentException(
                                     "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
@@ -501,11 +553,11 @@ public final class HandwritingRecognitionEngine {
                 language, preContext, new Callback() {
             @Override
             public void onSuccess(RecognitionResult candidateResult) {
-                RecognitionResult merged = mergeCandidates(accumulatedResult, candidateResult);
-                if (merged.alternatives.size() >= 3) {
+                if (candidateResult != null && !candidateResult.text.trim().isEmpty()) {
+                    RecognitionResult merged = mergeCandidates(accumulatedResult, candidateResult);
                     callback.onSuccess(merged);
                 } else {
-                    runWaterfall(context, queue, originalStrokes, index + 1, language, preContext, merged, callback);
+                    runWaterfall(context, queue, originalStrokes, index + 1, language, preContext, accumulatedResult, callback);
                 }
             }
 
@@ -891,8 +943,17 @@ public final class HandwritingRecognitionEngine {
             DigitalInkRecognizer recognizer = DigitalInkRecognition.getClient(
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(16).build());
 
-            // Unconstrained recognition: ML Kit natively handles handwriting at any slope or angle
-            RecognitionContext.Builder contextBuilder = RecognitionContext.builder();
+            float areaW = scaledW + padX * 2f;
+            float areaH = scaledH + padY * 2f;
+            boolean isBigLine = bounds.width() > 400f || bounds.width() > bounds.height() * 2.8f;
+            if (isBigLine) {
+                recognizeWithoutWritingArea(context, strokesToRecognize, originalStrokes, angleDegrees,
+                        recognizer, ink, language, preContext, bounds, callback, null);
+                return;
+            }
+
+            RecognitionContext.Builder contextBuilder = RecognitionContext.builder()
+                    .setWritingArea(new WritingArea(areaW, areaH));
             if (!preContext.isEmpty()) {
                 contextBuilder.setPreContext(preContext);
             }
@@ -988,6 +1049,16 @@ public final class HandwritingRecognitionEngine {
                 postFailure(callback, new IllegalArgumentException("The model returned no readable text."));
                 return;
             }
+
+            // Ensure single-line handwriting is never artificially split onto multiple lines
+            boolean genuinelyMultiLine = hasDistinctMultipleLines(strokesToRecognize);
+            if (!genuinelyMultiLine && text.contains("\n")) {
+                text = text.replace("\r\n", " ").replace("\n", " ").replaceAll("\\s+", " ").trim();
+                for (int i = 0; i < rerankedAlternatives.size(); i++) {
+                    rerankedAlternatives.set(i, rerankedAlternatives.get(i).replace("\r\n", " ").replace("\n", " ").replaceAll("\\s+", " ").trim());
+                }
+            }
+
             String lang = isLatin(language) ? "ENGLISH"
                     : ("HINDI".equalsIgnoreCase(language) ? "HINDI" : "MARATHI");
 
@@ -1031,6 +1102,70 @@ public final class HandwritingRecognitionEngine {
         } finally {
             recognizer.close();
         }
+    }
+
+    private static boolean hasDistinctMultipleLines(List<Stroke> strokes) {
+        if (strokes == null || strokes.size() < 2) return false;
+
+        class ProjectedLineStroke {
+            final float minX, maxX, cy, height;
+            ProjectedLineStroke(Stroke s) {
+                float pMinX = Float.MAX_VALUE, pMaxX = -Float.MAX_VALUE;
+                float pMinY = Float.MAX_VALUE, pMaxY = -Float.MAX_VALUE;
+                List<DrawingPoint> pts = s.getRecognitionPoints();
+                if (pts == null || pts.isEmpty()) pts = s.points;
+                if (pts != null) {
+                    for (DrawingPoint p : pts) {
+                        if (p == null || !isFinite(p.x) || !isFinite(p.y)) continue;
+                        pMinX = Math.min(pMinX, p.x);
+                        pMaxX = Math.max(pMaxX, p.x);
+                        pMinY = Math.min(pMinY, p.y);
+                        pMaxY = Math.max(pMaxY, p.y);
+                    }
+                }
+                if (pMinX != Float.MAX_VALUE) {
+                    this.minX = pMinX;
+                    this.maxX = pMaxX;
+                    this.height = Math.max(1f, pMaxY - pMinY);
+                    this.cy = (pMinY + pMaxY) * 0.5f;
+                } else {
+                    RectF b = s.getBounds();
+                    this.minX = b != null ? b.left : 0f;
+                    this.maxX = b != null ? b.right : 0f;
+                    this.height = Math.max(1f, b != null ? b.height() : 0f);
+                    this.cy = b != null ? b.centerY() : 0f;
+                }
+            }
+        }
+
+        List<ProjectedLineStroke> list = new ArrayList<>(strokes.size());
+        List<Float> heights = new ArrayList<>(strokes.size());
+        for (Stroke s : strokes) {
+            if (s == null) continue;
+            ProjectedLineStroke pls = new ProjectedLineStroke(s);
+            list.add(pls);
+            heights.add(pls.height);
+        }
+        if (list.size() < 2) return false;
+
+        Collections.sort(heights);
+        float medianH = heights.get(heights.size() / 2);
+        if (medianH <= 4f) return false;
+
+        for (int i = 0; i < list.size(); i++) {
+            ProjectedLineStroke s1 = list.get(i);
+            for (int j = i + 1; j < list.size(); j++) {
+                ProjectedLineStroke s2 = list.get(j);
+                boolean xOverlap = !(s1.maxX < s2.minX - medianH * 0.5f || s2.maxX < s1.minX - medianH * 0.5f);
+                if (xOverlap) {
+                    float verticalGap = Math.abs(s1.cy - s2.cy);
+                    if (verticalGap >= medianH * 1.75f) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
     }
 
     private static List<String> rerankDevanagariCandidates(List<Stroke> strokes, List<String> candidates) {

@@ -55,13 +55,176 @@ public class InkNormalizer {
      * coupled with Temporal Kinematic Progression to determine baseline slope across all directions.
      */
     public static float detectWritingAngleDegrees(List<Stroke> strokes) {
-        // Natural ink coordinates: ML Kit natively understands inclined and angled handwriting.
-        // We do not impose an artificial horizontal angle reference.
-        return 0f;
+        if (strokes == null || strokes.isEmpty()) return 0f;
+
+        List<DrawingPoint> allPoints = new ArrayList<>();
+        float sumX = 0f, sumY = 0f;
+        for (Stroke s : strokes) {
+            if (s == null) continue;
+            List<DrawingPoint> pts = s.getRecognitionPoints();
+            if (pts == null || pts.isEmpty()) pts = s.points;
+            if (pts == null) continue;
+            for (DrawingPoint p : pts) {
+                if (p != null && Float.isFinite(p.x) && Float.isFinite(p.y)) {
+                    allPoints.add(p);
+                    sumX += p.x;
+                    sumY += p.y;
+                }
+            }
+        }
+        if (allPoints.size() < 4) return 0f;
+
+        final int pointCount = allPoints.size();
+        final float cx = sumX / pointCount;
+        final float cy = sumY / pointCount;
+
+        // 1. Calculate temporal progression vector from early strokes/points to late strokes/points
+        float progDx = 0f, progDy = 0f;
+        boolean hasProgression = false;
+        if (strokes.size() >= 2) {
+            float earlyX = 0f, earlyY = 0f; int earlyCount = 0;
+            float lateX = 0f, lateY = 0f; int lateCount = 0;
+            int nStrokes = strokes.size();
+            int split = Math.max(1, nStrokes / 3);
+            for (int i = 0; i < split; i++) {
+                RectF b = strokes.get(i).getBounds();
+                if (b != null && !b.isEmpty()) {
+                    earlyX += b.centerX(); earlyY += b.centerY(); earlyCount++;
+                }
+            }
+            for (int i = nStrokes - split; i < nStrokes; i++) {
+                RectF b = strokes.get(i).getBounds();
+                if (b != null && !b.isEmpty()) {
+                    lateX += b.centerX(); lateY += b.centerY(); lateCount++;
+                }
+            }
+            if (earlyCount > 0 && lateCount > 0) {
+                progDx = (lateX / lateCount) - (earlyX / earlyCount);
+                progDy = (lateY / lateCount) - (earlyY / earlyCount);
+                hasProgression = true;
+            }
+        } else if (allPoints.size() >= 8) {
+            int k = Math.max(2, allPoints.size() / 5);
+            float earlyX = 0f, earlyY = 0f;
+            float lateX = 0f, lateY = 0f;
+            for (int i = 0; i < k; i++) {
+                earlyX += allPoints.get(i).x; earlyY += allPoints.get(i).y;
+            }
+            for (int i = allPoints.size() - k; i < allPoints.size(); i++) {
+                lateX += allPoints.get(i).x; lateY += allPoints.get(i).y;
+            }
+            progDx = (lateX / k) - (earlyX / k);
+            progDy = (lateY / k) - (earlyY / k);
+            hasProgression = true;
+        }
+
+        float progDist = (float) Math.hypot(progDx, progDy);
+        float progAngle = hasProgression && progDist > 5f
+                ? (float) Math.toDegrees(Math.atan2(progDy, progDx))
+                : 0f;
+
+        // 2. Minimum Area Bounding Box / Aspect Ratio Sweep across angles [-85°, +90°]
+        // Text lines have maximum width-to-height aspect ratio along the baseline!
+        float bestAngle = 0f;
+        float maxScore = -1f;
+        float bestAspectRatio = 1f;
+
+        for (float deg = -85f; deg <= 90f; deg += 2.5f) {
+            double rad = Math.toRadians(-deg);
+            float cos = (float) Math.cos(rad);
+            float sin = (float) Math.sin(rad);
+
+            float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+            float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+
+            for (DrawingPoint p : allPoints) {
+                float dx = p.x - cx;
+                float dy = p.y - cy;
+                float rx = dx * cos - dy * sin;
+                float ry = dx * sin + dy * cos;
+                if (rx < minX) minX = rx;
+                if (rx > maxX) maxX = rx;
+                if (ry < minY) minY = ry;
+                if (ry > maxY) maxY = ry;
+            }
+
+            float w = Math.max(1f, maxX - minX);
+            float h = Math.max(1f, maxY - minY);
+            float ar = w / h;
+            float area = w * h;
+
+            // Score favors high aspect ratio (elongated baseline) and compact bounding area
+            float score = (w * w) / (h * (float) Math.sqrt(area));
+
+            // Temporal progression alignment bonus if the user wrote multiple strokes/points along a direction
+            if (hasProgression && progDist >= 18f) {
+                float diff = Math.abs(normalizeAngleDiff(deg, progAngle));
+                if (diff < 45f) {
+                    score *= (1.0f + (1.0f - diff / 45f) * 0.4f);
+                } else if (diff > 135f) {
+                    // Suppress 180-degree inverted direction
+                    score *= 0.5f;
+                }
+            }
+
+            if (score > maxScore) {
+                maxScore = score;
+                bestAngle = deg;
+                bestAspectRatio = ar;
+            }
+        }
+
+        // 3. Fine-tuning pass in steps of 0.5° around bestAngle
+        float refinedAngle = bestAngle;
+        float fineMaxScore = maxScore;
+        for (float deg = bestAngle - 2.5f; deg <= bestAngle + 2.5f; deg += 0.5f) {
+            double rad = Math.toRadians(-deg);
+            float cos = (float) Math.cos(rad);
+            float sin = (float) Math.sin(rad);
+
+            float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+            float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+
+            for (DrawingPoint p : allPoints) {
+                float dx = p.x - cx;
+                float dy = p.y - cy;
+                float rx = dx * cos - dy * sin;
+                float ry = dx * sin + dy * cos;
+                if (rx < minX) minX = rx;
+                if (rx > maxX) maxX = rx;
+                if (ry < minY) minY = ry;
+                if (ry > maxY) maxY = ry;
+            }
+
+            float w = Math.max(1f, maxX - minX);
+            float h = Math.max(1f, maxY - minY);
+            float score = (w * w) / (h * (float) Math.sqrt(w * h));
+            if (hasProgression && progDist >= 18f) {
+                float diff = Math.abs(normalizeAngleDiff(deg, progAngle));
+                if (diff < 45f) score *= (1.0f + (1.0f - diff / 45f) * 0.4f);
+            }
+            if (score > fineMaxScore) {
+                fineMaxScore = score;
+                refinedAngle = deg;
+            }
+        }
+
+        // 4. Stability guards
+        // If angle is close to horizontal (+/- 3.5°), snap to 0° to avoid jitter on normal horizontal writing.
+        if (Math.abs(refinedAngle) < 3.5f) return 0f;
+
+        // If stroke is approximately square (aspect ratio < 1.30) and has low progression distance,
+        // it is a single upright character or symbol (e.g. "क", "म", "O", "A"). Do not rotate!
+        if (bestAspectRatio < 1.30f && progDist < 25f) return 0f;
+
+        return refinedAngle;
     }
 
-    public static float detectSlantAngleDegrees(List<Stroke> strokes) {
-        return 0f;
+    private static float normalizeAngleDiff(float a, float b) {
+        float diff = a - b;
+        while (diff > 180f) diff -= 360f;
+        while (diff < -180f) diff += 360f;
+        return diff;
     }
 
     public static boolean isIndicLanguage(String language) {

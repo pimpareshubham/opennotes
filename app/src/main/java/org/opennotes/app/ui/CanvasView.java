@@ -1820,21 +1820,21 @@ public class CanvasView extends View {
                 canvas.drawCircle(selectionBounds.left, selectionBounds.bottom, handleRadius, selectionHandlePaint);
                 canvas.drawCircle(selectionBounds.right, selectionBounds.bottom, handleRadius, selectionHandlePaint);
 
-                // Draw Rotation Stalk and Handle Knob
-                float cx = selectionBounds.centerX();
+                // Draw Rotation Stalk and Handle Knob on Right Side of Selection
                 float stalkLength = 46f / Math.max(0.5f, scaleFactor);
-                float rotKnobY = selectionBounds.top - stalkLength;
+                float rotKnobX = selectionBounds.right + stalkLength;
+                float rotKnobY = selectionBounds.centerY();
                 float rotKnobRadius = 18f / Math.max(0.5f, scaleFactor);
 
-                canvas.drawLine(cx, selectionBounds.top, cx, rotKnobY, selectionBoxPaint);
-                canvas.drawCircle(cx, rotKnobY, rotKnobRadius, selectionRotateHandlePaint);
+                canvas.drawLine(selectionBounds.right, rotKnobY, rotKnobX, rotKnobY, selectionBoxPaint);
+                canvas.drawCircle(rotKnobX, rotKnobY, rotKnobRadius, selectionRotateHandlePaint);
                 selectionRotateBorderPaint.setStrokeWidth(2.5f / Math.max(0.5f, scaleFactor));
-                canvas.drawCircle(cx, rotKnobY, rotKnobRadius, selectionRotateBorderPaint);
+                canvas.drawCircle(rotKnobX, rotKnobY, rotKnobRadius, selectionRotateBorderPaint);
 
-                drawRotationIcon(canvas, cx, rotKnobY, rotKnobRadius * 0.58f);
+                drawRotationIcon(canvas, rotKnobX, rotKnobY, rotKnobRadius * 0.58f);
 
                 if (isRotatingSelection) {
-                    drawRotationAngleBadge(canvas, cx, rotKnobY - rotKnobRadius - 12f / Math.max(0.5f, scaleFactor));
+                    drawRotationAngleBadge(canvas, rotKnobX, rotKnobY - rotKnobRadius - 12f / Math.max(0.5f, scaleFactor));
                 }
             }
 
@@ -3306,15 +3306,15 @@ public class CanvasView extends View {
             switch (action) {
                 case MotionEvent.ACTION_DOWN:
                     if (hasLassoSelection && !selectionBounds.isEmpty()) {
-                        float cx = selectionBounds.centerX();
                         float stalkLength = 46f / Math.max(0.5f, scaleFactor);
-                        float rotKnobY = selectionBounds.top - stalkLength;
+                        float rotKnobX = selectionBounds.right + stalkLength;
+                        float rotKnobY = selectionBounds.centerY();
                         float hitRadius = 56f / Math.max(0.5f, scaleFactor);
-                        float hdx = canvasX - cx;
+                        float hdx = canvasX - rotKnobX;
                         float hdy = canvasY - rotKnobY;
                         if (hdx * hdx + hdy * hdy <= hitRadius * hitRadius) {
                             isRotatingSelection = true;
-                            rotationCenterX = cx;
+                            rotationCenterX = selectionBounds.centerX();
                             rotationCenterY = selectionBounds.centerY();
                             lastRotationTouchAngle = (float) Math.toDegrees(Math.atan2(canvasY - rotationCenterY, canvasX - rotationCenterX));
                             beginLiveRotation();
