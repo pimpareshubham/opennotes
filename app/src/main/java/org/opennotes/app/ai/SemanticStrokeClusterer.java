@@ -159,20 +159,69 @@ public class SemanticStrokeClusterer {
      * and horizontal baseline cluster merging.
      */
     public static List<StrokeLine> segmentIntoLines(List<Stroke> strokes) {
-        List<StrokeLine> result = new ArrayList<>();
-        if (strokes == null || strokes.isEmpty()) return result;
+        if (strokes == null || strokes.isEmpty()) return new ArrayList<>();
 
         if (strokes.size() == 1) {
             RectF b = InkNormalizer.getBounds(strokes);
             List<StrokeWord> words = Collections.singletonList(new StrokeWord(new ArrayList<>(strokes), b, 0f));
+            List<StrokeLine> result = new ArrayList<>();
             result.add(new StrokeLine(new ArrayList<>(strokes), words, b, 0f));
             return result;
         }
 
         RectF overallBounds = InkNormalizer.getBounds(strokes);
+
+        // First attempt: horizontal line segmentation at 0° (preserves natural multi-line rows without shearing)
+        List<StrokeLine> horizontalLines = segmentIntoLinesAtAngle(strokes, 0f, overallBounds);
+        if (isCleanHorizontalMultiLine(horizontalLines)) {
+            return horizontalLines;
+        }
+
+        // If strokes do not form multiple horizontal rows at 0° (e.g. single line at an angle,
+        // or paper tilted at a slant), detect writing angle and rotate to deskew.
         float angleDegrees = InkNormalizer.detectWritingAngleDegrees(strokes);
         boolean isRotated = Math.abs(angleDegrees) >= 3.5f;
-        float rotAngle = isRotated ? angleDegrees : 0f;
+        if (!isRotated) {
+            return horizontalLines;
+        }
+
+        return segmentIntoLinesAtAngle(strokes, angleDegrees, overallBounds);
+    }
+
+    private static boolean isCleanHorizontalMultiLine(List<StrokeLine> lines) {
+        if (lines == null || lines.size() < 2) return false;
+        int substantialLines = 0;
+        float prevCy = -Float.MAX_VALUE;
+
+        for (int i = 0; i < lines.size(); i++) {
+            StrokeLine line = lines.get(i);
+            if (line == null || line.bounds == null || line.strokes == null) continue;
+            float w = line.bounds.width();
+            float h = line.bounds.height();
+            if (line.strokes.size() >= 2 && w >= 1.25f * h) {
+                substantialLines++;
+            }
+            float cy = line.bounds.centerY();
+            if (i > 0 && cy <= prevCy) {
+                return false;
+            }
+            prevCy = cy;
+        }
+
+        return substantialLines >= 2;
+    }
+
+    public static List<StrokeLine> segmentIntoLinesAtAngle(List<Stroke> strokes, float rotAngle, RectF overallBounds) {
+        List<StrokeLine> result = new ArrayList<>();
+        if (strokes == null || strokes.isEmpty()) return result;
+
+        if (strokes.size() == 1) {
+            RectF b = InkNormalizer.getBounds(strokes);
+            List<StrokeWord> words = Collections.singletonList(new StrokeWord(new ArrayList<>(strokes), b, rotAngle));
+            result.add(new StrokeLine(new ArrayList<>(strokes), words, b, rotAngle));
+            return result;
+        }
+
         float pivotX = overallBounds != null ? overallBounds.centerX() : 0f;
         float pivotY = overallBounds != null ? overallBounds.centerY() : 0f;
 
@@ -208,13 +257,8 @@ public class SemanticStrokeClusterer {
 
         int n = projected.size();
         int[] parent = new int[n];
-        float[] componentTop = new float[n];
-        float[] componentBottom = new float[n];
-        final float maxLineClusterHeight = 1.85f * medianH;
         for (int i = 0; i < n; i++) {
             parent[i] = i;
-            componentTop[i] = projected.get(i).minY;
-            componentBottom[i] = projected.get(i).maxY;
         }
 
         // Form connected components of strokes on the same line
@@ -233,27 +277,27 @@ public class SemanticStrokeClusterer {
                 float hGap = Math.max(0f, Math.max(s1.minX, s2.minX) - Math.min(s1.maxX, s2.maxX));
                 float cyDist = Math.abs(s1.cy - s2.cy);
 
-                boolean isDiacritic = (minH < 0.45f * medianH)
-                        || (minH < 0.35f * Math.max(s1.height, s2.height));
+                boolean isDiacritic = (minH < 0.50f * medianH)
+                        || (minH < 0.40f * Math.max(s1.height, s2.height));
 
                 boolean isSameLine = false;
 
                 if (isDiacritic) {
                     // Vertical diacritic / accent / matra / shirorekha attached to character body
-                    if (hOverlap >= 0.15f * minW
-                            || (s1.minX >= s2.minX - 15f && s1.maxX <= s2.maxX + 15f)
-                            || (s2.minX >= s1.minX - 15f && s2.maxX <= s1.maxX + 15f)) {
-                        if (vGap <= 0.35f * medianH && cyDist <= 0.70f * medianH) {
+                    if (hOverlap >= 0.10f * minW
+                            || (s1.minX >= s2.minX - 25f && s1.maxX <= s2.maxX + 25f)
+                            || (s2.minX >= s1.minX - 25f && s2.maxX <= s1.maxX + 25f)) {
+                        if (vGap <= 0.85f * medianH && cyDist <= 1.35f * medianH) {
                             isSameLine = true;
                         }
                     }
                 } else {
                     // Main character strokes on the same line:
                     // Consecutive characters in words have substantial vertical overlap and horizontal proximity
-                    if (hGap <= 1.25f * medianH) {
-                        if (vOverlap >= 0.15f * minH && cyDist <= 0.85f * medianH) {
+                    if (hGap <= 1.8f * medianH) {
+                        if (vOverlap >= 0.10f * minH && cyDist <= 0.85f * medianH) {
                             isSameLine = true;
-                        } else if (hGap <= 0.85f * medianH && cyDist <= 0.75f * medianH) {
+                        } else if (hGap <= 0.95f * medianH && cyDist <= 0.75f * medianH) {
                             isSameLine = true;
                         }
                     }
@@ -263,15 +307,7 @@ public class SemanticStrokeClusterer {
                     int rootI = dsuFind(parent, i);
                     int rootJ = dsuFind(parent, j);
                     if (rootI != rootJ) {
-                        float mergedTop = Math.min(componentTop[rootI], componentTop[rootJ]);
-                        float mergedBottom = Math.max(componentBottom[rootI], componentBottom[rootJ]);
-                        // Bound single-linkage growth: a tall ascender or detached
-                        // accent must not bridge otherwise distinct writing rows.
-                        if (mergedBottom - mergedTop <= maxLineClusterHeight) {
-                            parent[rootJ] = rootI;
-                            componentTop[rootI] = mergedTop;
-                            componentBottom[rootI] = mergedBottom;
-                        }
+                        parent[rootJ] = rootI;
                     }
                 }
             }
@@ -328,10 +364,8 @@ public class SemanticStrokeClusterer {
                         float minClusterH = Math.min(c1H, c2H);
                         float cHGap = Math.max(0f, Math.max(c1Left, c2Left) - Math.min(c1Right, c2Right));
 
-                        float mergedHeight = Math.max(c1Bottom, c2Bottom) - Math.min(c1Top, c2Top);
-                        if (mergedHeight <= maxLineClusterHeight
-                                && cHGap <= 4.5f * medianH && cyDiff <= 0.60f * medianH
-                                && (vOverlap >= 0.12f * minClusterH || cyDiff <= 0.38f * medianH)) {
+                        if (cHGap <= 5.0f * medianH && cyDiff <= 0.65f * medianH
+                                && (vOverlap >= 0.10f * minClusterH || cyDiff <= 0.45f * medianH)) {
                             c1.addAll(c2);
                             clusterList.remove(j);
                             merged = true;
@@ -355,30 +389,24 @@ public class SemanticStrokeClusterer {
                 }
                 cCy /= cluster.size();
                 float cH = cBottom - cTop;
-                if (cluster.size() <= 2 && cH < 0.45f * medianH && clusterList.size() > 1) {
+                if (cluster.size() <= 2 && cH < 0.80f * medianH && clusterList.size() > 1) {
                     int bestIdx = -1;
                     float minDistance = Float.MAX_VALUE;
                     for (int k = 0; k < clusterList.size(); k++) {
                         if (k == i) continue;
                         List<ProjectedStroke> target = clusterList.get(k);
                         float targetCy = 0f;
-                        float targetTop = Float.MAX_VALUE;
-                        float targetBottom = -Float.MAX_VALUE;
                         for (ProjectedStroke s : target) {
                             targetCy += s.cy;
-                            targetTop = Math.min(targetTop, s.minY);
-                            targetBottom = Math.max(targetBottom, s.maxY);
                         }
                         targetCy /= target.size();
                         float dist = Math.abs(cCy - targetCy);
-                        float mergedHeight = Math.max(cBottom, targetBottom)
-                                - Math.min(cTop, targetTop);
-                        if (mergedHeight <= maxLineClusterHeight && dist < minDistance) {
+                        if (dist < minDistance) {
                             minDistance = dist;
                             bestIdx = k;
                         }
                     }
-                    if (bestIdx != -1 && minDistance <= 1.2f * medianH) {
+                    if (bestIdx != -1 && minDistance <= 1.6f * medianH) {
                         clusterList.get(bestIdx).addAll(cluster);
                         clusterList.remove(i);
                     }

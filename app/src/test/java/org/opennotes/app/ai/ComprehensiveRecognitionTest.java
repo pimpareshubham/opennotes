@@ -312,4 +312,84 @@ public class ComprehensiveRecognitionTest {
                 LinguisticDictionary.getInstance(null).suggestMarathiOrthographicVariants("किवा", 4)
                         .contains("किंवा"));
     }
+
+    @Test
+    public void testSixLineMixedLanguageNoteWithTallMatrasAndUkars() {
+        // Simulates the exact layout of the user's 6-line handwritten note:
+        // Line 1: "हे पाहा नीट काम नाही" (Devanagari with top matras: हे, नाही)
+        // Line 2: "करत जरा चांगल काहीतरी" (Devanagari with anusvara and matras)
+        // Line 3: "implement कर साधा" (Mixed English + Marathi)
+        // Line 4: "लहानसा issue तुला" (Mixed Marathi + English + ukar below baseline: तुला)
+        // Line 5: "solve कराय नाही समजत" (Mixed English + Marathi)
+        // Line 6: "लाज वाटली पाहिजे तुला" (Marathi with top matra and lower ukar: पाहिजे, तुला)
+        List<Stroke> pageStrokes = new ArrayList<>();
+
+        float lineSpacing = 120f;
+        float charW = 25f;
+        float charH = 45f;
+
+        // Line 1 at y = 0
+        float y1 = 0f;
+        pageStrokes.addAll(createWordStrokes(0, y1, 2, charW, charH));   // हे
+        pageStrokes.add(createSyntheticStroke(10f, y1 - 25f, 25f, y1, 8)); // upper matra
+        pageStrokes.addAll(createWordStrokes(75, y1, 4, charW, charH));  // पाहा
+        pageStrokes.addAll(createWordStrokes(200, y1, 3, charW, charH)); // नीट
+        pageStrokes.addAll(createWordStrokes(300, y1, 3, charW, charH)); // काम
+        pageStrokes.addAll(createWordStrokes(400, y1, 4, charW, charH)); // नाही
+
+        // Line 2 at y = 120
+        float y2 = y1 + lineSpacing;
+        pageStrokes.addAll(createWordStrokes(0, y2, 3, charW, charH));   // करत
+        pageStrokes.addAll(createWordStrokes(100, y2, 3, charW, charH)); // जरा
+        pageStrokes.addAll(createWordStrokes(200, y2, 4, charW, charH)); // चांगल
+        pageStrokes.add(createSyntheticStroke(240f, y2 - 15f, 242f, y2 - 15f, 3)); // anusvara dot
+        pageStrokes.addAll(createWordStrokes(330, y2, 6, charW, charH)); // काहीतरी
+
+        // Line 3 at y = 240
+        float y3 = y2 + lineSpacing;
+        pageStrokes.addAll(createWordStrokes(0, y3, 9, 20f, charH));     // implement (English)
+        pageStrokes.addAll(createWordStrokes(220, y3, 2, charW, charH)); // कर
+        pageStrokes.addAll(createWordStrokes(300, y3, 4, charW, charH)); // साधा
+
+        // Line 4 at y = 360
+        float y4 = y3 + lineSpacing;
+        pageStrokes.addAll(createWordStrokes(0, y4, 5, charW, charH));   // लहानसा
+        pageStrokes.addAll(createWordStrokes(160, y4, 5, 20f, charH));   // issue (English)
+        pageStrokes.addAll(createWordStrokes(300, y4, 4, charW, charH)); // तुला
+        pageStrokes.add(createSyntheticStroke(320f, y4 + charH, 325f, y4 + charH + 25f, 8)); // lower ukar
+
+        // Line 5 at y = 480
+        float y5 = y4 + lineSpacing;
+        pageStrokes.addAll(createWordStrokes(0, y5, 5, 20f, charH));     // solve (English)
+        pageStrokes.addAll(createWordStrokes(140, y5, 4, charW, charH)); // कराय
+        pageStrokes.addAll(createWordStrokes(270, y5, 4, charW, charH)); // नाही
+        pageStrokes.addAll(createWordStrokes(400, y5, 4, charW, charH)); // समजत
+
+        // Line 6 at y = 600
+        float y6 = y5 + lineSpacing;
+        pageStrokes.addAll(createWordStrokes(0, y6, 3, charW, charH));   // लाज
+        pageStrokes.addAll(createWordStrokes(100, y6, 5, charW, charH)); // वाटली
+        pageStrokes.addAll(createWordStrokes(250, y6, 5, charW, charH)); // पाहिजे
+        pageStrokes.add(createSyntheticStroke(310f, y6 - 25f, 325f, y6, 8)); // upper matra
+        pageStrokes.addAll(createWordStrokes(400, y6, 4, charW, charH)); // तुला
+        pageStrokes.add(createSyntheticStroke(420f, y6 + charH, 425f, y6 + charH + 25f, 8)); // lower ukar
+
+        List<SemanticStrokeClusterer.StrokeLine> lines = SemanticStrokeClusterer.segmentIntoLines(pageStrokes);
+        Assert.assertNotNull("Segmented lines should not be null", lines);
+        Assert.assertEquals("The 6-line handwritten note must be segmented into EXACTLY 6 distinct lines",
+                6, lines.size());
+
+        int totalStrokesPreserved = 0;
+        for (SemanticStrokeClusterer.StrokeLine line : lines) {
+            totalStrokesPreserved += line.strokes.size();
+        }
+        Assert.assertEquals("Every single stroke across all 6 lines must be preserved without trimming",
+                pageStrokes.size(), totalStrokesPreserved);
+
+        // Verify top-to-bottom vertical line progression
+        for (int i = 0; i < lines.size() - 1; i++) {
+            Assert.assertTrue("Line " + i + " must be positioned strictly above line " + (i + 1),
+                    lines.get(i).bounds.top < lines.get(i + 1).bounds.top);
+        }
+    }
 }

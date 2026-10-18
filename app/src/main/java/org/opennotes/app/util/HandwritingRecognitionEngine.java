@@ -1144,8 +1144,7 @@ public final class HandwritingRecognitionEngine {
                 primaryWasDeskewed, writingAngle, new Callback() {
                     @Override
                     public void onSuccess(RecognitionResult angleResult) {
-                        trySpatialReviewHypothesis(context, strokes, language, preContext,
-                                angleResult != null ? angleResult : primary, callback);
+                        callback.onSuccess(angleResult != null ? angleResult : primary);
                     }
 
                     @Override

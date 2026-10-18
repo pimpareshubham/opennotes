@@ -1476,21 +1476,6 @@ public class CanvasView extends View {
                 }
             }
 
-            if (result.wordItems != null && !result.wordItems.isEmpty() && Math.abs(itemAngle) < 4.0f) {
-                String spacingGroupId = UUID.randomUUID().toString();
-                int spacingOrder = 0;
-                for (org.opennotes.app.util.HandwritingRecognitionEngine.WordItem wItem : result.wordItems) {
-                    if (wItem == null || wItem.text == null || wItem.text.trim().isEmpty()) continue;
-                    String fKey = (beautifyFontKey != null && !beautifyFontKey.isEmpty())
-                            ? beautifyFontKey
-                            : (wItem.fontKey != null ? wItem.fontKey : fontKey);
-                    float wX = wItem.bounds != null ? wItem.bounds.left : baseStartX;
-                    convertedTexts.add(new TextItem(wItem.text.trim(), wX, baseStartY, textColor,
-                            result.fontSize, fKey, itemAngle, 0f, 0f, spacingGroupId, spacingOrder++));
-                }
-                continue;
-            }
-
             if (subLines.length > 1 && (result.startX == 0f && result.startY == 0f || baseStartY >= result.bounds.bottom - 10f)) {
                 baseStartY = result.bounds.top + linePitch * 0.85f;
             }
@@ -1500,33 +1485,8 @@ public class CanvasView extends View {
                 if (subLine.isEmpty()) continue;
                 float lineBaselineY = baseStartY + sIdx * linePitch;
                 float lineStartX = baseStartX;
-
-                String[] words = subLine.split("\\s+");
-                textPaint.setTextSize(result.fontSize);
-                textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
-                TextSpacingCompat.configure(textPaint, 0f, 0f);
-                float spaceWidth = textPaint.measureText(" ");
-
-                if (words.length <= 1 || Math.abs(itemAngle) >= 4.0f) {
-                    convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, itemAngle));
-                } else {
-                    String spacingGroupId = UUID.randomUUID().toString();
-                    float totalWordsWidth = 0f;
-                    float[] wordWidths = new float[words.length];
-                    for (int w = 0; w < words.length; w++) {
-                        wordWidths[w] = textPaint.measureText(words[w]);
-                        totalWordsWidth += wordWidths[w];
-                    }
-                    float availableWidth = Math.max(result.bounds.width(), totalWordsWidth + (words.length - 1) * spaceWidth);
-                    float computedSpace = Math.max(spaceWidth, (availableWidth - totalWordsWidth) / (words.length - 1));
-
-                    float curX = lineStartX;
-                    for (int w = 0; w < words.length; w++) {
-                        convertedTexts.add(new TextItem(words[w], curX, lineBaselineY, textColor,
-                                result.fontSize, fontKey, itemAngle, 0f, 0f, spacingGroupId, w));
-                        curX += wordWidths[w] + computedSpace;
-                    }
-                }
+                convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor,
+                        result.fontSize, fontKey, itemAngle));
             }
         }
         if (requestedSet.isEmpty()) return;
