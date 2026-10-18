@@ -11,6 +11,12 @@ public class TextItem {
     public float fontSize;
     public String fontKey;
     public float rotationAngle;
+    /** Letter spacing as an em fraction and word spacing as an em addition. */
+    public float letterSpacingEm;
+    public float wordSpacingEm;
+    /** Generated words share an id so spacing adjustments can preserve phrase layout. */
+    public String spacingGroupId;
+    public int spacingOrder;
 
     public TextItem(String text, float x, float y, int color, float fontSize) {
         this(text, x, y, color, fontSize, "KALAM", 0f);
@@ -21,6 +27,12 @@ public class TextItem {
     }
 
     public TextItem(String text, float x, float y, int color, float fontSize, String fontKey, float rotationAngle) {
+        this(text, x, y, color, fontSize, fontKey, rotationAngle, 0f, 0f, null, 0);
+    }
+
+    public TextItem(String text, float x, float y, int color, float fontSize, String fontKey,
+                    float rotationAngle, float letterSpacingEm, float wordSpacingEm,
+                    String spacingGroupId, int spacingOrder) {
         this.text = text;
         this.x = x;
         this.y = y;
@@ -28,6 +40,10 @@ public class TextItem {
         this.fontSize = fontSize;
         this.fontKey = (fontKey != null && !fontKey.isEmpty()) ? fontKey : "KALAM";
         this.rotationAngle = rotationAngle;
+        this.letterSpacingEm = letterSpacingEm;
+        this.wordSpacingEm = wordSpacingEm;
+        this.spacingGroupId = spacingGroupId;
+        this.spacingOrder = spacingOrder;
     }
 
     private transient android.graphics.RectF cachedBounds;
@@ -42,6 +58,10 @@ public class TextItem {
             float width;
             synchronized (MEASURE_PAINT) {
                 MEASURE_PAINT.setTextSize(fontSize);
+                if (android.os.Build.VERSION.SDK_INT >= 21) {
+                    MEASURE_PAINT.setLetterSpacing(letterSpacingEm);
+                    MEASURE_PAINT.setWordSpacing(wordSpacingEm * fontSize);
+                }
                 width = MEASURE_PAINT.measureText(text != null ? text : "");
             }
             android.graphics.RectF unrotated = new android.graphics.RectF(x - 4f, y - fontSize - 4f, x + width + 4f, y + 6f);
@@ -66,6 +86,10 @@ public class TextItem {
         obj.put("fontSize", (double) fontSize);
         obj.put("fontKey", fontKey);
         obj.put("rotationAngle", (double) rotationAngle);
+        obj.put("letterSpacingEm", (double) letterSpacingEm);
+        obj.put("wordSpacingEm", (double) wordSpacingEm);
+        if (spacingGroupId != null && !spacingGroupId.isEmpty()) obj.put("spacingGroupId", spacingGroupId);
+        obj.put("spacingOrder", spacingOrder);
         return obj;
     }
 
@@ -77,6 +101,11 @@ public class TextItem {
         float size = (float) obj.optDouble("fontSize", 18.0);
         String font = obj.optString("fontKey", "KALAM");
         float rotation = (float) obj.optDouble("rotationAngle", 0.0);
-        return new TextItem(text, x, y, color, size, font, rotation);
+        float letterSpacing = (float) obj.optDouble("letterSpacingEm", 0.0);
+        float wordSpacing = (float) obj.optDouble("wordSpacingEm", 0.0);
+        String group = obj.optString("spacingGroupId", null);
+        int order = obj.optInt("spacingOrder", 0);
+        return new TextItem(text, x, y, color, size, font, rotation,
+                letterSpacing, wordSpacing, group, order);
     }
 }

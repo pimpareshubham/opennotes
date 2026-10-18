@@ -56,6 +56,7 @@ import org.opennotes.app.R;
 import org.opennotes.app.db.AppSettings;
 import org.opennotes.app.db.NotesDbHelper;
 import org.opennotes.app.export.ImageExporter;
+import org.opennotes.app.export.NativeNoteArchive;
 import org.opennotes.app.export.PdfExporter;
 import org.opennotes.app.model.DrawingTool;
 import org.opennotes.app.model.ImageItem;
@@ -193,6 +194,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private ActivityResultLauncher<Uri> takePictureLauncher;
     private Uri tempCameraPhotoUri;
     private MediaPlayer audioMemoPlayer;
+    private ActivityResultLauncher<String> exportNativeNotebookLauncher;
+    private ActivityResultLauncher<String[]> importNativeNotebookLauncher;
     private MediaRecorder voiceRecorder;
     private MediaPlayer voicePlayer;
     private File currentAudioFile;
@@ -255,6 +258,46 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 }
             }
         });
+
+        exportNativeNotebookLauncher = registerForActivityResult(
+                new ActivityResultContracts.CreateDocument(NativeNoteArchive.MIME_TYPE), uri -> {
+                    if (uri == null) return;
+                    List<Page> pageSnapshots = new ArrayList<>();
+                    if (pages != null) for (Page page : pages) pageSnapshots.add(page.createSnapshot());
+                    Notebook notebookSnapshot = snapshotNotebook(currentNotebook);
+                    if (notebookSnapshot == null) {
+                        Toast.makeText(this, "The open notebook is unavailable.", Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    saveExecutor.execute(() -> {
+                        try (OutputStream output = getContentResolver().openOutputStream(uri, "w")) {
+                            if (output == null) throw new java.io.IOException("The selected destination could not be opened.");
+                            NativeNoteArchive.writeNotebook(this, notebookSnapshot, pageSnapshots, output);
+                            runOnUiThread(() -> {
+                                Toast.makeText(this, "Editable notebook saved. Sharing the original file…", Toast.LENGTH_LONG).show();
+                                shareUri(uri, NativeNoteArchive.MIME_TYPE, notebookSnapshot.title + NativeNoteArchive.FILE_EXTENSION);
+                            });
+                        } catch (Exception error) {
+                            runOnUiThread(() -> ErrorDialog.show(this, "Original notebook export failed", error));
+                        }
+                    });
+                });
+
+        importNativeNotebookLauncher = registerForActivityResult(
+                new ActivityResultContracts.OpenDocument(), uri -> {
+                    if (uri == null) return;
+                    saveExecutor.execute(() -> {
+                        try (InputStream input = getContentResolver().openInputStream(uri)) {
+                            long importedId = NativeNoteArchive.importNotebook(this, dbHelper, input);
+                            runOnUiThread(() -> {
+                                Toast.makeText(this, "Editable notebook restored to your library.", Toast.LENGTH_LONG).show();
+                                finish();
+                            });
+                        } catch (Exception error) {
+                            runOnUiThread(() -> ErrorDialog.show(this, "Original notebook import failed", error));
+                        }
+                    });
+                });
 
         dbHelper = NotesDbHelper.getInstance(this);
         appSettings = AppSettings.getInstance(this);
@@ -2202,11 +2245,23 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 "🚀 Direct Share as PDF (WhatsApp, Drive, Gmail…)",
                 "🚀 Direct Share Page as PNG Image (WhatsApp, Drive…)",
                 "📄 Save Notebook as PDF to Device",
-                "🖼️ Save Page as PNG Image to Device"
+                "🖼️ Save Page as PNG Image to Device",
+                "📦 Save and share editable original notebook (.opennote)",
+                "📥 Restore editable original notebook (.opennote)"
         };
         MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Export & Share Note")
                 .setItems(options, (dialog, which) -> {
+                    if (which == 4) {
+                        saveCurrentPage();
+                        exportNativeNotebookLauncher.launch(safeArchiveName(
+                                currentNotebook != null ? currentNotebook.title : "OpenNotes notebook"));
+                        return;
+                    }
+                    if (which == 5) {
+                        importNativeNotebookLauncher.launch(new String[]{"*/*"});
+                        return;
+                    }
                     saveCurrentPage();
                     boolean directShare = (which == 0 || which == 1);
                     boolean isPdf = (which == 0 || which == 2);
@@ -2281,6 +2336,27 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         ThemeUtils.showStyledDialog(builder, this);
     }
 
+    private Notebook snapshotNotebook(Notebook source) {
+        if (source == null) return null;
+        Notebook copy = new Notebook(source.title, source.coverColor, source.defaultTemplate);
+        copy.folder = source.folder;
+        copy.defaultBgColor = source.defaultBgColor;
+        copy.defaultIsInfinite = source.defaultIsInfinite;
+        copy.pageCount = source.pageCount;
+        copy.isFavorite = source.isFavorite;
+        copy.createdAt = source.createdAt;
+        copy.updatedAt = source.updatedAt;
+        return copy;
+    }
+
+    private String safeArchiveName(String title) {
+        String base = title == null ? "OpenNotes notebook" : title.trim();
+        base = base.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]", "_").trim();
+        if (base.isEmpty()) base = "OpenNotes notebook";
+        if (base.toLowerCase(Locale.ROOT).endsWith(NativeNoteArchive.FILE_EXTENSION)) return base;
+        return base + NativeNoteArchive.FILE_EXTENSION;
+    }
+
     private void openFile(File file, String mimeType) {
         try {
             Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", file);
@@ -2324,6 +2400,21 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             startActivity(chooser);
         } catch (Exception ex) {
             ErrorDialog.show(this, "Could not share exported file", ex);
+        }
+    }
+
+    private void shareUri(Uri uri, String mimeType, String subject) {
+        try {
+            Intent intent = new Intent(Intent.ACTION_SEND);
+            intent.setType(mimeType);
+            intent.putExtra(Intent.EXTRA_STREAM, uri);
+            intent.putExtra(Intent.EXTRA_SUBJECT, subject);
+            intent.putExtra(Intent.EXTRA_TEXT, "Editable OpenNotes notebook archive");
+            intent.setClipData(android.content.ClipData.newRawUri("OpenNotes notebook", uri));
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(intent, "Share original notebook with…"));
+        } catch (Exception error) {
+            ErrorDialog.show(this, "Could not share original notebook", error);
         }
     }
 
@@ -2392,7 +2483,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         popup.getMenu().add(0, 11, 10, "🎓 Train My Handwriting Style");
         popup.getMenu().add(0, 12, 11, "📤 Export Handwriting Profile (.onhw)");
         popup.getMenu().add(0, 13, 12, "📥 Import Handwriting Profile (.onhw)");
+        popup.getMenu().add(0, 14, 13, "↔ Adjust selected text spacing");
         popup.getMenu().findItem(9).setEnabled(canvasView.hasClipboardContents());
+        popup.getMenu().findItem(14).setEnabled(canvasView.hasSelectedText());
 
         popup.setOnMenuItemClickListener(item -> {
             switch (item.getItemId()) {
@@ -2455,10 +2548,79 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 case 13:
                     importProfileLauncher.launch("*/*");
                     return true;
+                case 14:
+                    showTextSpacingDialog();
+                    return true;
             }
             return false;
         });
         popup.show();
+    }
+
+    private void showTextSpacingDialog() {
+        List<TextItem> selected = canvasView.getSelectedTexts();
+        if (selected.isEmpty()) {
+            Toast.makeText(this, "Select converted text first", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        TextItem first = selected.get(0);
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        int padding = dp(20);
+        layout.setPadding(padding, dp(8), padding, dp(4));
+
+        TextView letterLabel = new TextView(this);
+        TextView wordLabel = new TextView(this);
+        SeekBar letterSeek = new SeekBar(this);
+        SeekBar wordSeek = new SeekBar(this);
+        letterSeek.setMax(100);
+        wordSeek.setMax(100);
+        float[] letterValue = {Math.max(-0.12f, Math.min(0.40f, first.letterSpacingEm))};
+        float[] wordValue = {Math.max(0f, Math.min(2f, first.wordSpacingEm))};
+        letterSeek.setProgress(Math.round((letterValue[0] + 0.12f) / 0.52f * 100f));
+        wordSeek.setProgress(Math.round(wordValue[0] / 2f * 100f));
+        Runnable updateLabels = () -> {
+            letterLabel.setText(String.format(Locale.getDefault(), "Letter spacing: %+.2f em", letterValue[0]));
+            wordLabel.setText(String.format(Locale.getDefault(), "Word spacing: %.2f em", wordValue[0]));
+        };
+        letterSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                letterValue[0] = -0.12f + progress / 100f * 0.52f;
+                updateLabels.run();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        wordSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                wordValue[0] = progress / 100f * 2f;
+                updateLabels.run();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+        updateLabels.run();
+        layout.addView(letterLabel);
+        layout.addView(letterSeek);
+        layout.addView(wordLabel);
+        layout.addView(wordSeek);
+        TextView hint = new TextView(this);
+        hint.setText("Adjust spacing for the selected text. Words recognized as one phrase move together.");
+        hint.setTextSize(12f);
+        hint.setPadding(0, dp(8), 0, 0);
+        layout.addView(hint);
+
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                .setTitle("Text spacing")
+                .setView(layout)
+                .setNegativeButton("Cancel", null)
+                .setNeutralButton("Reset", (dialog, which) -> canvasView.adjustSelectedTextSpacing(0f, 0f))
+                .setPositiveButton("Apply", (dialog, which) -> {
+                    if (!canvasView.adjustSelectedTextSpacing(letterValue[0], wordValue[0])) {
+                        Toast.makeText(this, "Select converted text first", Toast.LENGTH_SHORT).show();
+                    }
+                });
+        ThemeUtils.showStyledDialog(builder, this);
     }
 
     private void showHandwritingProfileDialog() {

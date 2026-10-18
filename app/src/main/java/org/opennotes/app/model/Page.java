@@ -2,6 +2,8 @@ package org.opennotes.app.model;
 
 import org.json.JSONArray;
 import org.json.JSONException;
+import android.graphics.RectF;
+import org.opennotes.app.ai.PageWritingContext;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,6 +22,10 @@ public class Page {
     public List<ImageItem> images;
     public long createdAt;
     public long updatedAt;
+    /** Revision for derived full-page geometry and writing context. */
+    public long contentRevision;
+    private transient PageWritingContext cachedWritingContext;
+    private transient long cachedWritingContextRevision = -1L;
 
     public Page(long notebookId, int pageIndex, PaperTemplate template) {
         this(notebookId, pageIndex, template, 0xFFFFFFFF, false);
@@ -46,7 +52,8 @@ public class Page {
         snapshot.id = this.id;
         snapshot.canvasHeight = this.canvasHeight;
         snapshot.createdAt = this.createdAt;
-        snapshot.updatedAt = System.currentTimeMillis();
+        snapshot.updatedAt = this.updatedAt;
+        snapshot.contentRevision = this.contentRevision;
         synchronized (this.strokes) {
             snapshot.strokes = new ArrayList<>(this.strokes);
         }
@@ -60,6 +67,27 @@ public class Page {
             snapshot.images = new ArrayList<>(this.images);
         }
         return snapshot;
+    }
+
+    public synchronized void markContentChanged() {
+        contentRevision++;
+        updatedAt = System.currentTimeMillis();
+        cachedWritingContext = null;
+        cachedWritingContextRevision = -1L;
+    }
+
+    /** All content bounds are derived from current page items, never a fixed paper size. */
+    public synchronized RectF getContentBounds() {
+        return new RectF(getWritingContext().contentBounds);
+    }
+
+    /** Full-page writing profile, recalculated only after a recorded page mutation. */
+    public synchronized PageWritingContext getWritingContext() {
+        if (cachedWritingContext == null || cachedWritingContextRevision != contentRevision) {
+            cachedWritingContext = PageWritingContext.from(this);
+            cachedWritingContextRevision = contentRevision;
+        }
+        return cachedWritingContext;
     }
 
     public String strokesToJson() {

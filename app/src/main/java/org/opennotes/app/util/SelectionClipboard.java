@@ -11,6 +11,7 @@ import org.json.JSONObject;
 import org.opennotes.app.model.ShapeItem;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
+import org.opennotes.app.model.ImageItem;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -27,7 +28,7 @@ import java.util.concurrent.Executors;
 public final class SelectionClipboard {
     private static final String TAG = "SelectionClipboard";
     private static final String FILE_NAME = "selection_clipboard.json";
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private static final ExecutorService IO = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final Object CACHE_LOCK = new Object();
@@ -42,20 +43,27 @@ public final class SelectionClipboard {
         public final List<Stroke> strokes;
         public final List<ShapeItem> shapes;
         public final List<TextItem> texts;
+        public final List<ImageItem> images;
         public final float centerX;
         public final float centerY;
 
         public Payload(List<Stroke> strokes, List<ShapeItem> shapes, List<TextItem> texts,
-                       float centerX, float centerY) {
+                       List<ImageItem> images, float centerX, float centerY) {
             this.strokes = Collections.unmodifiableList(new ArrayList<>(strokes));
             this.shapes = Collections.unmodifiableList(new ArrayList<>(shapes));
             this.texts = Collections.unmodifiableList(new ArrayList<>(texts));
+            this.images = Collections.unmodifiableList(new ArrayList<>(images));
             this.centerX = centerX;
             this.centerY = centerY;
         }
 
+        public Payload(List<Stroke> strokes, List<ShapeItem> shapes, List<TextItem> texts,
+                       float centerX, float centerY) {
+            this(strokes, shapes, texts, Collections.<ImageItem>emptyList(), centerX, centerY);
+        }
+
         public boolean hasContents() {
-            return !strokes.isEmpty() || !shapes.isEmpty() || !texts.isEmpty();
+            return !strokes.isEmpty() || !shapes.isEmpty() || !texts.isEmpty() || !images.isEmpty();
         }
     }
 
@@ -133,6 +141,11 @@ public final class SelectionClipboard {
                 if (text != null) texts.put(text.toJson());
             }
             root.put("texts", texts);
+            JSONArray images = new JSONArray();
+            for (ImageItem image : payload.images) {
+                if (image != null) images.put(image.toJson());
+            }
+            root.put("images", images);
 
             stream = atomicFile.startWrite();
             stream.write(root.toString().getBytes(StandardCharsets.UTF_8));
@@ -151,7 +164,8 @@ public final class SelectionClipboard {
             int count;
             while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
             JSONObject root = new JSONObject(new String(output.toByteArray(), StandardCharsets.UTF_8));
-            if (root.optInt("version", -1) != VERSION) {
+            int version = root.optInt("version", -1);
+            if (version != 1 && version != VERSION) {
                 atomicFile.delete();
                 return null;
             }
@@ -180,7 +194,15 @@ public final class SelectionClipboard {
                     if (item != null) texts.add(TextItem.fromJson(item));
                 }
             }
-            Payload payload = new Payload(strokes, shapes, texts,
+            List<ImageItem> images = new ArrayList<>();
+            JSONArray imageArray = root.optJSONArray("images");
+            if (imageArray != null) {
+                for (int i = 0; i < imageArray.length(); i++) {
+                    JSONObject item = imageArray.optJSONObject(i);
+                    if (item != null) images.add(ImageItem.fromJson(item));
+                }
+            }
+            Payload payload = new Payload(strokes, shapes, texts, images,
                     (float) root.optDouble("centerX", 0d),
                     (float) root.optDouble("centerY", 0d));
             if (!payload.hasContents()) atomicFile.delete();

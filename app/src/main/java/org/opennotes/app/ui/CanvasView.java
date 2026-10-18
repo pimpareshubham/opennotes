@@ -40,6 +40,7 @@ import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
+import org.opennotes.app.ai.PageWritingContext;
 import org.opennotes.app.util.SelectionClipboard;
 
 import java.io.File;
@@ -55,6 +56,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -321,12 +323,30 @@ public class CanvasView extends View {
         final float size;
         final Stroke.LineStyle lineStyle;
         final Integer fillColor;
+        final float x;
+        final float y;
+        final float letterSpacingEm;
+        final float wordSpacingEm;
 
         ItemStyleSnapshot(int color, float size, Stroke.LineStyle lineStyle, Integer fillColor) {
+            this(color, size, lineStyle, fillColor, Float.NaN, Float.NaN, 0f, 0f);
+        }
+
+        ItemStyleSnapshot(int color, float size, float x, float y,
+                          float letterSpacingEm, float wordSpacingEm) {
+            this(color, size, Stroke.LineStyle.SOLID, null, x, y, letterSpacingEm, wordSpacingEm);
+        }
+
+        private ItemStyleSnapshot(int color, float size, Stroke.LineStyle lineStyle, Integer fillColor,
+                                  float x, float y, float letterSpacingEm, float wordSpacingEm) {
             this.color = color;
             this.size = size;
             this.lineStyle = lineStyle;
             this.fillColor = fillColor;
+            this.x = x;
+            this.y = y;
+            this.letterSpacingEm = letterSpacingEm;
+            this.wordSpacingEm = wordSpacingEm;
         }
     }
 
@@ -1317,14 +1337,38 @@ public class CanvasView extends View {
         }
         if (!found) return "";
 
+        // Derive line grouping from the page's actual writing scale. Fixed
+        // thresholds break when users zoom, write larger, or use another tablet.
+        float writingUnit = page != null ? page.getWritingContext().typicalStrokeHeight : 0f;
+        if (!(writingUnit > 0f) || Float.isNaN(writingUnit) || Float.isInfinite(writingUnit)) {
+            List<Float> localStrokeHeights = new ArrayList<>(strokes.size());
+            for (Stroke stroke : strokes) {
+                if (stroke == null) continue;
+                RectF strokeBounds = stroke.getBounds();
+                if (strokeBounds == null) continue;
+                float height = strokeBounds.height();
+                if (height > 0f && !Float.isNaN(height) && !Float.isInfinite(height)) {
+                    localStrokeHeights.add(height);
+                }
+            }
+            if (!localStrokeHeights.isEmpty()) {
+                Collections.sort(localStrokeHeights);
+                writingUnit = localStrokeHeights.get(localStrokeHeights.size() / 2);
+            }
+        }
+        if (!(writingUnit > 0f) || Float.isNaN(writingUnit) || Float.isInfinite(writingUnit)) {
+            writingUnit = inkBounds.height();
+        }
+        writingUnit = Math.max(1f, writingUnit);
+
         List<TextItem> preceding = new ArrayList<>();
-        float baseline = inkBounds.bottom - 4f;
-        float lineTolerance = Math.max(24f, inkBounds.height() * 0.65f);
+        float baseline = inkBounds.bottom - writingUnit * 0.12f;
+        float lineTolerance = Math.max(1f, writingUnit * 0.65f);
         if (page.texts != null) {
             for (TextItem item : page.texts) {
                 if (item == null || item.text == null || item.text.isEmpty()) continue;
                 if (item.x >= inkBounds.left || Math.abs(item.y - baseline) > lineTolerance) continue;
-                if (item.getBounds().right > inkBounds.left + Math.max(8f, item.fontSize * 0.15f)) continue;
+                if (item.getBounds().right > inkBounds.left + Math.max(1f, writingUnit * 0.15f)) continue;
                 preceding.add(item);
             }
         }
@@ -1334,9 +1378,9 @@ public class CanvasView extends View {
         // baseline. Restrict the fallback to the nearest line in the same
         // writing column so a distant heading or neighboring column is not
         // fed to the recognizer.
-        if (preceding.isEmpty() && page.texts != null) {
-            float maxPreviousLineGap = Math.max(48f, inkBounds.height() * 1.8f);
-            float columnTolerance = Math.max(32f, inkBounds.height() * 1.25f);
+        if (preceding.isEmpty() && page != null && page.texts != null) {
+            float maxPreviousLineGap = writingUnit * 2.8f;
+            float columnTolerance = writingUnit * 1.5f;
             float nearestBaseline = Float.NEGATIVE_INFINITY;
             for (TextItem item : page.texts) {
                 if (item == null || item.text == null || item.text.isEmpty()) continue;
@@ -1350,7 +1394,7 @@ public class CanvasView extends View {
                     if (item == null || item.text == null || item.text.isEmpty()) continue;
                     float verticalGap = baseline - item.y;
                     if (verticalGap > lineTolerance && verticalGap <= maxPreviousLineGap
-                            && Math.abs(item.y - nearestBaseline) <= Math.max(8f, item.fontSize * 0.35f)
+                            && Math.abs(item.y - nearestBaseline) <= Math.max(1f, item.fontSize * 0.35f)
                             && Math.abs(item.x - inkBounds.left) <= columnTolerance) {
                         preceding.add(item);
                     }
@@ -1360,15 +1404,19 @@ public class CanvasView extends View {
         Collections.sort(preceding, (left, right) -> Float.compare(left.x, right.x));
         StringBuilder context = new StringBuilder();
         if (precedingRecognizedLines != null) {
-            for (RecognizedStrokeLine line : precedingRecognizedLines) {
+            // One neighboring recognized line supplies language context while
+            // avoiding repeatedly resending all prior lines on long pages.
+            for (int i = precedingRecognizedLines.size() - 1; i >= 0; i--) {
+                RecognizedStrokeLine line = precedingRecognizedLines.get(i);
                 if (line == null || line.result == null || line.result.text == null) continue;
                 appendContextPart(context, line.result.text);
+                break;
             }
         }
         for (TextItem item : preceding) {
             appendContextPart(context, item.text);
         }
-        return lastCodePoints(context.toString(), 20);
+        return context.toString();
     }
 
     private static void appendContextPart(StringBuilder context, String part) {
@@ -1377,16 +1425,6 @@ public class CanvasView extends View {
         if (trimmed.isEmpty()) return;
         if (context.length() > 0) context.append(' ');
         context.append(trimmed);
-    }
-
-    private static String lastCodePoints(String text, int maxCodePoints) {
-        if (text == null || text.isEmpty()) return "";
-        int codePointCount = text.codePointCount(0, text.length());
-        if (codePointCount > maxCodePoints) {
-            int start = text.offsetByCodePoints(0, codePointCount - maxCodePoints);
-            return text.substring(start);
-        }
-        return text;
     }
 
     private void applyRecognizedText(Page requestedPage, List<RecognizedStrokeLine> lines,
@@ -1430,13 +1468,16 @@ public class CanvasView extends View {
             }
 
             if (result.wordItems != null && !result.wordItems.isEmpty() && Math.abs(itemAngle) < 4.0f) {
+                String spacingGroupId = UUID.randomUUID().toString();
+                int spacingOrder = 0;
                 for (org.opennotes.app.util.HandwritingRecognitionEngine.WordItem wItem : result.wordItems) {
                     if (wItem == null || wItem.text == null || wItem.text.trim().isEmpty()) continue;
                     String fKey = (beautifyFontKey != null && !beautifyFontKey.isEmpty())
                             ? beautifyFontKey
                             : (wItem.fontKey != null ? wItem.fontKey : fontKey);
                     float wX = wItem.bounds != null ? wItem.bounds.left : baseStartX;
-                    convertedTexts.add(new TextItem(wItem.text.trim(), wX, baseStartY, textColor, result.fontSize, fKey, itemAngle));
+                    convertedTexts.add(new TextItem(wItem.text.trim(), wX, baseStartY, textColor,
+                            result.fontSize, fKey, itemAngle, 0f, 0f, spacingGroupId, spacingOrder++));
                 }
                 continue;
             }
@@ -1454,11 +1495,16 @@ public class CanvasView extends View {
                 String[] words = subLine.split("\\s+");
                 textPaint.setTextSize(result.fontSize);
                 textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
+                if (Build.VERSION.SDK_INT >= 21) {
+                    textPaint.setLetterSpacing(0f);
+                    textPaint.setWordSpacing(0f);
+                }
                 float spaceWidth = textPaint.measureText(" ");
 
                 if (words.length <= 1 || Math.abs(itemAngle) >= 4.0f) {
                     convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, itemAngle));
                 } else {
+                    String spacingGroupId = UUID.randomUUID().toString();
                     float totalWordsWidth = 0f;
                     float[] wordWidths = new float[words.length];
                     for (int w = 0; w < words.length; w++) {
@@ -1467,11 +1513,11 @@ public class CanvasView extends View {
                     }
                     float availableWidth = Math.max(result.bounds.width(), totalWordsWidth + (words.length - 1) * spaceWidth);
                     float computedSpace = Math.max(spaceWidth, (availableWidth - totalWordsWidth) / (words.length - 1));
-                    computedSpace = Math.min(computedSpace, spaceWidth * 2.5f);
 
                     float curX = lineStartX;
                     for (int w = 0; w < words.length; w++) {
-                        convertedTexts.add(new TextItem(words[w], curX, lineBaselineY, textColor, result.fontSize, fontKey, itemAngle));
+                        convertedTexts.add(new TextItem(words[w], curX, lineBaselineY, textColor,
+                                result.fontSize, fontKey, itemAngle, 0f, 0f, spacingGroupId, w));
                         curX += wordWidths[w] + computedSpace;
                     }
                 }
@@ -2043,7 +2089,9 @@ public class CanvasView extends View {
 
     private void ensureContentHeight(float targetY) {
         if (isInfinite) {
-            float minHeight = targetY + 800f;
+            float viewHeight = Math.max(1f, getHeight());
+            float worldViewportHeight = viewHeight / Math.max(0.05f, scaleFactor);
+            float minHeight = targetY + worldViewportHeight;
             if (minHeight > contentHeight) {
                 contentHeight = minHeight;
                 if (currentPage != null) {
@@ -2244,8 +2292,7 @@ public class CanvasView extends View {
                 if (!RectF.intersects(item.getBounds(), visibleViewport)) continue;
                 if (isTransformingSelection() && selectedTexts.contains(item)) continue;
                 textPaint.setColor(item.color);
-                textPaint.setTextSize(item.fontSize);
-                textPaint.setTypeface(getCachedTypeface(item.fontKey));
+                configureTextPaint(item);
                 if (Math.abs(item.rotationAngle) > 0.5f) {
                     canvas.save();
                     canvas.rotate(item.rotationAngle, item.x, item.y);
@@ -3298,10 +3345,10 @@ public class CanvasView extends View {
         }
         for (TextItem item : selectedTexts) clipboardTexts.add(cloneText(item, 0f, 0f));
         for (ImageItem img : selectedImages) {
-            clipboardImages.add(new ImageItem(img.imagePath, img.x, img.y, img.width, img.height));
+            clipboardImages.add(new ImageItem(img.imagePath, img.x, img.y, img.width, img.height, img.audioPath));
         }
         SelectionClipboard.set(getContext(), new SelectionClipboard.Payload(
-                clipboardStrokes, clipboardShapes, clipboardTexts,
+                clipboardStrokes, clipboardShapes, clipboardTexts, clipboardImages,
                 clipboardCenterX, clipboardCenterY));
         syncAccessibilityActions();
     }
@@ -3355,9 +3402,17 @@ public class CanvasView extends View {
             pastedShapes.add(cloneShape(sh, offsetX, offsetY));
         }
         List<TextItem> pastedTexts = new ArrayList<>();
-        for (TextItem item : payload.texts) pastedTexts.add(cloneText(item, offsetX, offsetY));
-        addSelectionToPage(pastedStrokes, pastedShapes, pastedTexts);
-        recordAddedSelection(pastedStrokes, pastedShapes, pastedTexts);
+        Map<String, String> pastedTextGroups = new HashMap<>();
+        for (TextItem item : payload.texts) {
+            pastedTexts.add(cloneText(item, offsetX, offsetY, pastedTextGroups));
+        }
+        List<ImageItem> pastedImages = new ArrayList<>();
+        for (ImageItem image : payload.images) {
+            pastedImages.add(new ImageItem(image.imagePath, image.x + offsetX, image.y + offsetY,
+                    image.width, image.height, image.audioPath));
+        }
+        addSelectionToPage(pastedStrokes, pastedShapes, pastedTexts, pastedImages);
+        recordAddedSelection(pastedStrokes, pastedShapes, pastedTexts, pastedImages);
     }
 
     public void duplicateSelection() {
@@ -3368,7 +3423,10 @@ public class CanvasView extends View {
         List<ShapeItem> newShapes = new ArrayList<>();
         for (ShapeItem sh : selectedShapes) newShapes.add(cloneShape(sh, offset, offset));
         List<TextItem> newTexts = new ArrayList<>();
-        for (TextItem item : selectedTexts) newTexts.add(cloneText(item, offset, offset));
+        Map<String, String> duplicatedTextGroups = new HashMap<>();
+        for (TextItem item : selectedTexts) {
+            newTexts.add(cloneText(item, offset, offset, duplicatedTextGroups));
+        }
         List<ImageItem> newImages = new ArrayList<>();
         for (ImageItem img : selectedImages) newImages.add(new ImageItem(img.imagePath, img.x + offset, img.y + offset, img.width, img.height));
         addSelectionToPage(newStrokes, newShapes, newTexts, newImages);
@@ -3498,8 +3556,105 @@ public class CanvasView extends View {
     }
 
     private TextItem cloneText(TextItem source, float dx, float dy) {
+        return cloneText(source, dx, dy, null);
+    }
+
+    private TextItem cloneText(TextItem source, float dx, float dy,
+                               Map<String, String> groupIdRemapping) {
+        String spacingGroupId = source.spacingGroupId;
+        if (spacingGroupId != null && groupIdRemapping != null) {
+            if (!groupIdRemapping.containsKey(spacingGroupId)) {
+                groupIdRemapping.put(spacingGroupId, UUID.randomUUID().toString());
+            }
+            spacingGroupId = groupIdRemapping.get(spacingGroupId);
+        }
         return new TextItem(source.text, source.x + dx, source.y + dy,
-                source.color, source.fontSize, source.fontKey, source.rotationAngle);
+                source.color, source.fontSize, source.fontKey, source.rotationAngle,
+                source.letterSpacingEm, source.wordSpacingEm,
+                spacingGroupId, source.spacingOrder);
+    }
+
+    private void configureTextPaint(TextItem item) {
+        textPaint.setTextSize(item.fontSize);
+        textPaint.setTypeface(getCachedTypeface(item.fontKey));
+        if (Build.VERSION.SDK_INT >= 21) {
+            textPaint.setLetterSpacing(item.letterSpacingEm);
+            textPaint.setWordSpacing(item.wordSpacingEm * item.fontSize);
+        }
+    }
+
+    /** Adjust selected text and keep the positions of later generated words aligned. */
+    public boolean adjustSelectedTextSpacing(float letterSpacingEm, float wordSpacingEm) {
+        if (currentPage == null || selectedTexts.isEmpty()) return false;
+        float letter = Math.max(-0.12f, Math.min(0.40f, letterSpacingEm));
+        float word = Math.max(0f, Math.min(2f, wordSpacingEm));
+        Map<String, List<TextItem>> groups = new HashMap<>();
+        List<TextItem> affected = new ArrayList<>();
+
+        for (TextItem item : selectedTexts) {
+            if (item.spacingGroupId == null || item.spacingGroupId.isEmpty()) {
+                if (!affected.contains(item)) affected.add(item);
+                continue;
+            }
+            if (!groups.containsKey(item.spacingGroupId)) {
+                List<TextItem> group = new ArrayList<>();
+                for (TextItem candidate : currentPage.texts) {
+                    if (candidate != null && item.spacingGroupId.equals(candidate.spacingGroupId)) group.add(candidate);
+                }
+                Collections.sort(group, (a, b) -> Integer.compare(a.spacingOrder, b.spacingOrder));
+                groups.put(item.spacingGroupId, group);
+            }
+            for (TextItem member : groups.get(item.spacingGroupId)) {
+                if (!affected.contains(member)) affected.add(member);
+            }
+        }
+        if (affected.isEmpty()) return false;
+
+        ActionRecord record = new ActionRecord();
+        record.type = ActionRecord.Type.STYLE_CHANGE;
+        record.styleTargetsStrokes = new ArrayList<>();
+        record.styleTargetsShapes = new ArrayList<>();
+        record.styleTargetsTexts = affected;
+        record.previousStrokeStyles = new ArrayList<>();
+        record.previousShapeStyles = new ArrayList<>();
+        record.previousTextStyles = snapshotTextStyles(affected);
+
+        for (TextItem item : selectedTexts) {
+            if (item.spacingGroupId == null || item.spacingGroupId.isEmpty()) {
+                item.letterSpacingEm = letter;
+                item.wordSpacingEm = word;
+                item.markDirty();
+            }
+        }
+        for (List<TextItem> group : groups.values()) {
+            float accumulatedShift = 0f;
+            for (int i = 0; i < group.size(); i++) {
+                TextItem item = group.get(i);
+                float oldWidth = measureTextItemWidth(item);
+                float oldWordSpacing = item.wordSpacingEm;
+                item.letterSpacingEm = letter;
+                item.wordSpacingEm = word;
+                item.markDirty();
+                if (accumulatedShift != 0f) {
+                    double angle = Math.toRadians(item.rotationAngle);
+                    item.x += (float) (Math.cos(angle) * accumulatedShift);
+                    item.y += (float) (Math.sin(angle) * accumulatedShift);
+                    item.markDirty();
+                }
+                float newWidth = measureTextItemWidth(item);
+                accumulatedShift += newWidth - oldWidth;
+                if (i < group.size() - 1) {
+                    accumulatedShift += (word - oldWordSpacing) * item.fontSize;
+                }
+            }
+        }
+        finishSelectionStyleChange(record);
+        return true;
+    }
+
+    private float measureTextItemWidth(TextItem item) {
+        configureTextPaint(item);
+        return textPaint.measureText(item.text != null ? item.text : "");
     }
 
     private ActionRecord beginSelectionStyleChange() {
@@ -3517,7 +3672,9 @@ public class CanvasView extends View {
     private void finishSelectionStyleChange(ActionRecord record) {
         record.nextStrokeStyles = snapshotStrokeStyles(selectedStrokes);
         record.nextShapeStyles = snapshotShapeStyles(selectedShapes);
-        record.nextTextStyles = snapshotTextStyles(selectedTexts);
+        List<TextItem> textTargets = record.styleTargetsTexts != null
+                ? record.styleTargetsTexts : selectedTexts;
+        record.nextTextStyles = snapshotTextStyles(textTargets);
         undoStack.push(record);
         redoStack.clear();
         strokeSpatialIndexDirty = true;
@@ -3541,7 +3698,8 @@ public class CanvasView extends View {
 
     private List<ItemStyleSnapshot> snapshotTextStyles(List<TextItem> items) {
         List<ItemStyleSnapshot> snapshots = new ArrayList<>(items.size());
-        for (TextItem item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.fontSize, Stroke.LineStyle.SOLID, null));
+        for (TextItem item : items) snapshots.add(new ItemStyleSnapshot(item.color, item.fontSize,
+                item.x, item.y, item.letterSpacingEm, item.wordSpacingEm));
         return snapshots;
     }
 
@@ -3586,6 +3744,10 @@ public class CanvasView extends View {
                 ItemStyleSnapshot snapshot = textSnapshots.get(i);
                 target.color = snapshot.color;
                 target.fontSize = snapshot.size;
+                if (!Float.isNaN(snapshot.x)) target.x = snapshot.x;
+                if (!Float.isNaN(snapshot.y)) target.y = snapshot.y;
+                target.letterSpacingEm = snapshot.letterSpacingEm;
+                target.wordSpacingEm = snapshot.wordSpacingEm;
                 target.markDirty();
             }
         }
@@ -5340,10 +5502,17 @@ public class CanvasView extends View {
     }
 
     private void notifyChange() {
+        if (currentPage != null) currentPage.markContentChanged();
         syncAccessibilityActions();
         if (changeListener != null) {
             changeListener.onCanvasChanged();
         }
+    }
+
+    /** Returns a cached full-page profile combined with the live stroke, if one is in progress. */
+    public PageWritingContext getLiveWritingContext() {
+        if (currentPage == null) return null;
+        return currentPage.getWritingContext().withActiveStroke(activeStroke);
     }
 
     public RectF getPageContentBounds() {
@@ -5351,104 +5520,25 @@ public class CanvasView extends View {
     }
 
     public RectF getPageContentBounds(Page page) {
-        if (page == null) {
-            float fallbackW = Math.max(1080f, (float) Math.max(1, getWidth()));
-            float fallbackH = Math.max(1528f, (float) Math.max(1, getHeight()));
-            return new RectF(0f, 0f, fallbackW, fallbackH);
+        float worldWidth = Math.max(1f, getWidth()) / Math.max(0.05f, scaleFactor);
+        float worldHeight = Math.max(1f, getHeight()) / Math.max(0.05f, scaleFactor);
+        if (page == null) return new RectF(0f, 0f, worldWidth, worldHeight);
+
+        PageWritingContext context = page == currentPage
+                ? page.getWritingContext().withActiveStroke(activeStroke)
+                : page.getWritingContext();
+        RectF bounds = new RectF(context.contentBounds);
+        if (bounds.isEmpty()) {
+            float bottom = page.isInfinite && page.canvasHeight > 0f
+                    ? page.canvasHeight : worldHeight;
+            return new RectF(0f, 0f, worldWidth, Math.max(1f, bottom));
         }
 
-        float minX = Float.MAX_VALUE;
-        float minY = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE;
-        float maxY = -Float.MAX_VALUE;
-        boolean hasContent = false;
-
-        if (page.strokes != null) {
-            for (Stroke s : page.strokes) {
-                if (s == null) continue;
-                RectF b = s.getBounds();
-                if (b != null && !b.isEmpty()) {
-                    minX = Math.min(minX, b.left);
-                    minY = Math.min(minY, b.top);
-                    maxX = Math.max(maxX, b.right);
-                    maxY = Math.max(maxY, b.bottom);
-                    hasContent = true;
-                }
-            }
-        }
-
-        if (page.shapes != null) {
-            for (ShapeItem sh : page.shapes) {
-                if (sh == null) continue;
-                RectF b = sh.getBounds();
-                if (b != null && !b.isEmpty()) {
-                    minX = Math.min(minX, b.left);
-                    minY = Math.min(minY, b.top);
-                    maxX = Math.max(maxX, b.right);
-                    maxY = Math.max(maxY, b.bottom);
-                    hasContent = true;
-                }
-            }
-        }
-
-        if (page.texts != null) {
-            for (TextItem t : page.texts) {
-                if (t == null) continue;
-                RectF b = t.getBounds();
-                if (b != null && !b.isEmpty()) {
-                    minX = Math.min(minX, b.left);
-                    minY = Math.min(minY, b.top);
-                    maxX = Math.max(maxX, b.right);
-                    maxY = Math.max(maxY, b.bottom);
-                    hasContent = true;
-                }
-            }
-        }
-
-        if (page.images != null) {
-            for (ImageItem img : page.images) {
-                if (img == null) continue;
-                RectF b = img.getBounds();
-                if (b != null && !b.isEmpty()) {
-                    minX = Math.min(minX, b.left);
-                    minY = Math.min(minY, b.top);
-                    maxX = Math.max(maxX, b.right);
-                    maxY = Math.max(maxY, b.bottom);
-                    hasContent = true;
-                }
-            }
-        }
-
-        if (!hasContent) {
-            float fallbackW = Math.max(1080f, (float) Math.max(1, getWidth()));
-            float fallbackH = Math.max(1528f, (float) Math.max(1, getHeight()));
-            return new RectF(0f, 0f, fallbackW, fallbackH);
-        }
-
-        float pad = 90f;
-        float left = minX - pad;
-        float top = minY - pad;
-        float right = maxX + pad;
-        float bottom = maxY + pad;
-
-        float width = right - left;
-        float height = bottom - top;
-
-        float minWidth = Math.max(1080f, (float) Math.max(1, getWidth()));
-        if (width < minWidth) {
-            float diff = minWidth - width;
-            left -= diff / 2f;
-            right += diff / 2f;
-            width = minWidth;
-        }
-
-        float minHeight = (height >= width) ? Math.max(1528f, width * 1.35f) : Math.max(800f, minWidth * 0.70f);
-        if (height < minHeight) {
-            float diff = minHeight - height;
-            bottom += diff;
-        }
-
-        return new RectF(left, top, right, bottom);
+        float writingUnit = context.typicalStrokeHeight > 0f ? context.typicalStrokeHeight
+                : Math.max(1f, Math.min(bounds.width(), bounds.height()));
+        float padding = Math.max(1f, writingUnit * 0.35f);
+        bounds.inset(-padding, -padding);
+        return bounds;
     }
 
     public float getActualContentBottom() {
@@ -5527,8 +5617,7 @@ public class CanvasView extends View {
             if (currentPage.texts != null) {
                 for (TextItem item : currentPage.texts) {
                     textPaint.setColor(item.color);
-                    textPaint.setTextSize(item.fontSize);
-                    textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), item.fontKey));
+                    configureTextPaint(item);
                     if (Math.abs(item.rotationAngle) > 0.5f) {
                         canvas.save();
                         canvas.rotate(item.rotationAngle, item.x, item.y);

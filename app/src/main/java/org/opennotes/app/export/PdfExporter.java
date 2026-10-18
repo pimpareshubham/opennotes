@@ -10,6 +10,7 @@ import android.graphics.RectF;
 import android.graphics.pdf.PdfDocument;
 
 import org.opennotes.app.db.NotesDbHelper;
+import org.opennotes.app.ai.PageWritingContext;
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.DrawingTool;
 import org.opennotes.app.model.ImageItem;
@@ -160,6 +161,10 @@ public class PdfExporter {
                     tp.setColor(t.color);
                     tp.setTextSize(t.fontSize);
                     tp.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(context, t.fontKey));
+                    if (android.os.Build.VERSION.SDK_INT >= 21) {
+                        tp.setLetterSpacing(t.letterSpacingEm);
+                        tp.setWordSpacing(t.wordSpacingEm * t.fontSize);
+                    }
                     if (Math.abs(t.rotationAngle) > 0.5f) {
                         canvas.save();
                         canvas.rotate(t.rotationAngle, t.x, t.y);
@@ -390,103 +395,21 @@ public class PdfExporter {
     }
 
     public static RectF calculatePageContentBounds(Page page) {
-        if (page == null) {
-            return new RectF(0f, 0f, 1080f, 1528f);
+        if (page == null) return new RectF(0f, 0f, 1f, 1f);
+        PageWritingContext context = PageWritingContext.from(page);
+        RectF bounds = new RectF(context.contentBounds);
+        if (bounds.isEmpty()) {
+            // Empty pages still need a printable paper aspect ratio. Once ink
+            // exists, bounds below are entirely content-driven.
+            float emptyHeight = page.canvasHeight > 0f ? page.canvasHeight : 1528f;
+            emptyHeight = Math.max(1f, emptyHeight);
+            return new RectF(0f, 0f, emptyHeight * 0.707f, emptyHeight);
         }
-
-        float minX = Float.MAX_VALUE;
-        float minY = Float.MAX_VALUE;
-        float maxX = -Float.MAX_VALUE;
-        float maxY = -Float.MAX_VALUE;
-        boolean hasContent = false;
-
-        if (page.strokes != null) {
-            for (Stroke s : page.strokes) {
-                if (s == null) continue;
-                RectF b = s.getBounds();
-                if (b != null && !b.isEmpty()) {
-                    minX = Math.min(minX, b.left);
-                    minY = Math.min(minY, b.top);
-                    maxX = Math.max(maxX, b.right);
-                    maxY = Math.max(maxY, b.bottom);
-                    hasContent = true;
-                }
-            }
-        }
-
-        if (page.shapes != null) {
-            for (ShapeItem sh : page.shapes) {
-                if (sh == null) continue;
-                RectF b = sh.getBounds();
-                if (b != null && !b.isEmpty()) {
-                    minX = Math.min(minX, b.left);
-                    minY = Math.min(minY, b.top);
-                    maxX = Math.max(maxX, b.right);
-                    maxY = Math.max(maxY, b.bottom);
-                    hasContent = true;
-                }
-            }
-        }
-
-        if (page.texts != null) {
-            for (TextItem t : page.texts) {
-                if (t == null) continue;
-                RectF b = t.getBounds();
-                if (b != null && !b.isEmpty()) {
-                    minX = Math.min(minX, b.left);
-                    minY = Math.min(minY, b.top);
-                    maxX = Math.max(maxX, b.right);
-                    maxY = Math.max(maxY, b.bottom);
-                    hasContent = true;
-                }
-            }
-        }
-
-        if (page.images != null) {
-            for (ImageItem img : page.images) {
-                if (img == null) continue;
-                RectF b = img.getBounds();
-                if (b != null && !b.isEmpty()) {
-                    minX = Math.min(minX, b.left);
-                    minY = Math.min(minY, b.top);
-                    maxX = Math.max(maxX, b.right);
-                    maxY = Math.max(maxY, b.bottom);
-                    hasContent = true;
-                }
-            }
-        }
-
-        if (!hasContent) {
-            float fallbackH = page.canvasHeight > 0 ? page.canvasHeight : 1528f;
-            return new RectF(0f, 0f, 1080f, fallbackH);
-        }
-
-        // Add generous 90px margin/breathing room all around the content
-        float pad = 90f;
-        float left = minX - pad;
-        float top = minY - pad;
-        float right = maxX + pad;
-        float bottom = maxY + pad;
-
-        float width = right - left;
-        float height = bottom - top;
-
-        // Ensure minimum standard page dimensions
-        float minWidth = 1080f;
-        if (width < minWidth) {
-            float diff = minWidth - width;
-            left -= diff / 2f;
-            right += diff / 2f;
-            width = minWidth;
-        }
-
-        float minHeight = (height >= width) ? Math.max(1528f, width * 1.35f) : Math.max(800f, minWidth * 0.70f);
-        if (height < minHeight) {
-            float diff = minHeight - height;
-            bottom += diff;
-        }
-
-        return new RectF(left, top, right, bottom);
+        float writingUnit = context.typicalStrokeHeight > 0f
+                ? context.typicalStrokeHeight : Math.max(1f, Math.min(bounds.width(), bounds.height()));
+        float padding = Math.max(1f, writingUnit * 0.35f);
+        bounds.inset(-padding, -padding);
+        return bounds;
     }
 
     public static float calculatePageContentBottom(Page page) {

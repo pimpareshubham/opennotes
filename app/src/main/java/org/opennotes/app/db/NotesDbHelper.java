@@ -200,6 +200,53 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         return id;
     }
 
+    /** Inserts a portable notebook and every archived page atomically, without adding a seed page. */
+    public synchronized long importNotebookWithPages(Notebook notebook, List<Page> pages) {
+        if (notebook == null) throw new IllegalArgumentException("Notebook metadata is missing.");
+        SQLiteDatabase db = getWritableDatabase();
+        long id = -1L;
+        db.beginTransaction();
+        try {
+            ContentValues values = new ContentValues();
+            values.put(COL_NB_TITLE, notebook.title != null ? notebook.title : "Imported Notebook");
+            values.put(COL_NB_FOLDER, notebook.folder != null ? notebook.folder : "Default");
+            values.put(COL_NB_COVER_COLOR, notebook.coverColor);
+            values.put(COL_NB_TEMPLATE, (notebook.defaultTemplate != null
+                    ? notebook.defaultTemplate : PaperTemplate.BLANK).name());
+            values.put(COL_NB_DEFAULT_BG_COLOR, notebook.defaultBgColor);
+            values.put(COL_NB_DEFAULT_IS_INFINITE, notebook.defaultIsInfinite ? 1 : 0);
+            values.put(COL_NB_PAGE_COUNT, Math.max(1, pages == null ? 0 : pages.size()));
+            values.put(COL_NB_FAVORITE, notebook.isFavorite ? 1 : 0);
+            long now = System.currentTimeMillis();
+            values.put(COL_NB_CREATED_AT, notebook.createdAt > 0L ? notebook.createdAt : now);
+            values.put(COL_NB_UPDATED_AT, notebook.updatedAt > 0L ? notebook.updatedAt : now);
+            id = db.insertOrThrow(TABLE_NOTEBOOKS, null, values);
+            notebook.id = id;
+
+            if (pages == null || pages.isEmpty()) {
+                insertPage(new Page(id, 0,
+                        notebook.defaultTemplate != null ? notebook.defaultTemplate : PaperTemplate.BLANK,
+                        notebook.defaultBgColor, notebook.defaultIsInfinite));
+            } else {
+                int index = 0;
+                for (Page page : pages) {
+                    if (page == null) continue;
+                    page.notebookId = id;
+                    page.pageIndex = index++;
+                    insertPage(page);
+                }
+                notebook.pageCount = Math.max(1, index);
+                ContentValues count = new ContentValues();
+                count.put(COL_NB_PAGE_COUNT, notebook.pageCount);
+                db.update(TABLE_NOTEBOOKS, count, COL_NB_ID + "=?", new String[]{String.valueOf(id)});
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+        return id;
+    }
+
     public synchronized void updateNotebook(Notebook nb) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues cv = new ContentValues();
@@ -357,8 +404,8 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_PAGE_TEXTS, page.textsToJson());
         cv.put(COL_PAGE_IMAGES, page.imagesToJson());
         long now = System.currentTimeMillis();
-        cv.put(COL_PAGE_CREATED_AT, now);
-        cv.put(COL_PAGE_UPDATED_AT, now);
+        cv.put(COL_PAGE_CREATED_AT, page.createdAt > 0L ? page.createdAt : now);
+        cv.put(COL_PAGE_UPDATED_AT, page.updatedAt > 0L ? page.updatedAt : now);
         long id = db.insert(TABLE_PAGES, null, cv);
         page.id = id;
         return id;
