@@ -2683,14 +2683,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         letterSeek.setMax(100);
         wordSeek.setMax(700);
         float[] letterValue = {Math.max(-0.12f, Math.min(0.40f, first.letterSpacingEm))};
-        final float minWordSpacing = -5.0f;
-        final float maxWordSpacing = 2.0f;
+        final float minWordSpacing = -0.5f;
+        final float maxWordSpacing = 1.0f;
         float[] wordValue = {Math.max(minWordSpacing, Math.min(maxWordSpacing, first.wordSpacingEm))};
         letterSeek.setProgress(Math.round((letterValue[0] + 0.12f) / 0.52f * 100f));
         wordSeek.setProgress(Math.round((wordValue[0] - minWordSpacing)
                 / (maxWordSpacing - minWordSpacing) * 700f));
         letterSeek.setContentDescription("Letter spacing");
-        wordSeek.setContentDescription("Word spacing from minus 5 em to plus 2 em; drag left to tighten, right to loosen");
+        wordSeek.setContentDescription("Word spacing from minus 0.5 em to plus 1 em; drag left to tighten, right to loosen");
         Runnable updateLabels = () -> {
             letterLabel.setText(String.format(Locale.getDefault(), "Letter spacing: %+.2f em", letterValue[0]));
             wordLabel.setText(String.format(Locale.getDefault(), "Word spacing: %+.2f em", wordValue[0]));
@@ -2720,7 +2720,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         layout.addView(wordLabel);
         layout.addView(wordSeek);
         TextView hint = new TextView(this);
-        hint.setText("Drag left to tighten words or right to spread them. The canvas previews changes as you move the sliders.");
+        hint.setText("Drag left to tighten word gaps or right to spread them. The canvas previews changes as you move the sliders.");
         hint.setTextColor(0xFFB9B7C0);
         hint.setTextSize(12f);
         hint.setPadding(0, dp(6), 0, dp(8));

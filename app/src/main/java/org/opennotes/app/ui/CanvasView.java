@@ -42,6 +42,7 @@ import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
 import org.opennotes.app.ai.PageWritingContext;
 import org.opennotes.app.util.SelectionClipboard;
+import org.opennotes.app.util.TextSpacingCompat;
 
 import java.io.File;
 import java.util.ArrayDeque;
@@ -1503,10 +1504,7 @@ public class CanvasView extends View {
                 String[] words = subLine.split("\\s+");
                 textPaint.setTextSize(result.fontSize);
                 textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
-                if (Build.VERSION.SDK_INT >= 21) {
-                    textPaint.setLetterSpacing(0f);
-                    textPaint.setWordSpacing(0f);
-                }
+                TextSpacingCompat.configure(textPaint, 0f, 0f);
                 float spaceWidth = textPaint.measureText(" ");
 
                 if (words.length <= 1 || Math.abs(itemAngle) >= 4.0f) {
@@ -1781,10 +1779,12 @@ public class CanvasView extends View {
                         if (Math.abs(txt.rotationAngle) > 0.5f) {
                             c.save();
                             c.rotate(txt.rotationAngle, txt.x, txt.y);
-                            c.drawText(txt.text, txt.x, txt.y, textPaint);
+                            TextSpacingCompat.drawText(c, txt.text, txt.x, txt.y, textPaint,
+                                    txt.wordSpacingEm * txt.fontSize);
                             c.restore();
                         } else {
-                            c.drawText(txt.text, txt.x, txt.y, textPaint);
+                            TextSpacingCompat.drawText(c, txt.text, txt.x, txt.y, textPaint,
+                                    txt.wordSpacingEm * txt.fontSize);
                         }
                     }
                 }
@@ -2304,10 +2304,12 @@ public class CanvasView extends View {
                 if (Math.abs(item.rotationAngle) > 0.5f) {
                     canvas.save();
                     canvas.rotate(item.rotationAngle, item.x, item.y);
-                    canvas.drawText(item.text, item.x, item.y, textPaint);
+                    TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
+                            item.wordSpacingEm * item.fontSize);
                     canvas.restore();
                 } else {
-                    canvas.drawText(item.text, item.x, item.y, textPaint);
+                    TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
+                            item.wordSpacingEm * item.fontSize);
                 }
             }
 
@@ -3015,15 +3017,16 @@ public class CanvasView extends View {
             for (TextItem item : selectedTexts) {
                 if (item != null) {
                     textPaint.setColor(item.color);
-                    textPaint.setTextSize(item.fontSize);
-                    textPaint.setTypeface(getCachedTypeface(item.fontKey));
+                    configureTextPaint(item);
                     if (Math.abs(item.rotationAngle) > 0.5f) {
                         canvas.save();
                         canvas.rotate(item.rotationAngle, item.x, item.y);
-                        canvas.drawText(item.text, item.x, item.y, textPaint);
+                        TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
+                                item.wordSpacingEm * item.fontSize);
                         canvas.restore();
                     } else {
-                        canvas.drawText(item.text, item.x, item.y, textPaint);
+                        TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
+                                item.wordSpacingEm * item.fontSize);
                     }
                 }
             }
@@ -3588,10 +3591,8 @@ public class CanvasView extends View {
     private void configureTextPaint(TextItem item) {
         textPaint.setTextSize(item.fontSize);
         textPaint.setTypeface(getCachedTypeface(item.fontKey));
-        if (Build.VERSION.SDK_INT >= 21) {
-            textPaint.setLetterSpacing(item.letterSpacingEm);
-            textPaint.setWordSpacing(item.wordSpacingEm * item.fontSize);
-        }
+        TextSpacingCompat.configure(textPaint, item.letterSpacingEm,
+                item.wordSpacingEm * item.fontSize);
     }
 
     /** Begin a live spacing preview. Cancel restores the exact original layout. */
@@ -3694,7 +3695,7 @@ public class CanvasView extends View {
                                   Map<String, List<TextItem>> groups) {
         float letter = Math.max(-0.12f, Math.min(0.40f, letterSpacingEm));
         // Negative word spacing tightens the natural gap; positive spacing loosens it.
-        float word = Math.max(-5.0f, Math.min(2f, wordSpacingEm));
+        float word = Math.max(-0.5f, Math.min(1f, wordSpacingEm));
         for (TextItem item : selectedTexts) {
             if (item.spacingGroupId == null || item.spacingGroupId.isEmpty()) {
                 item.letterSpacingEm = letter;
@@ -3742,7 +3743,8 @@ public class CanvasView extends View {
 
     private float measureTextItemWidth(TextItem item) {
         configureTextPaint(item);
-        return textPaint.measureText(item.text != null ? item.text : "");
+        return TextSpacingCompat.measureText(textPaint, item.text,
+                item.wordSpacingEm * item.fontSize);
     }
 
     private ActionRecord beginSelectionStyleChange() {
@@ -5709,10 +5711,12 @@ public class CanvasView extends View {
                     if (Math.abs(item.rotationAngle) > 0.5f) {
                         canvas.save();
                         canvas.rotate(item.rotationAngle, item.x, item.y);
-                        canvas.drawText(item.text, item.x, item.y, textPaint);
+                        TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
+                                item.wordSpacingEm * item.fontSize);
                         canvas.restore();
                     } else {
-                        canvas.drawText(item.text, item.x, item.y, textPaint);
+                        TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
+                                item.wordSpacingEm * item.fontSize);
                     }
                 }
             }

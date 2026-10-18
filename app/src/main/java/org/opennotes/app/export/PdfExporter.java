@@ -20,6 +20,7 @@ import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
+import org.opennotes.app.util.TextSpacingCompat;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -161,17 +162,17 @@ public class PdfExporter {
                     tp.setColor(t.color);
                     tp.setTextSize(t.fontSize);
                     tp.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(context, t.fontKey));
-                    if (android.os.Build.VERSION.SDK_INT >= 21) {
-                        tp.setLetterSpacing(t.letterSpacingEm);
-                        tp.setWordSpacing(t.wordSpacingEm * t.fontSize);
-                    }
+                    TextSpacingCompat.configure(tp, t.letterSpacingEm,
+                            t.wordSpacingEm * t.fontSize);
                     if (Math.abs(t.rotationAngle) > 0.5f) {
                         canvas.save();
                         canvas.rotate(t.rotationAngle, t.x, t.y);
-                        canvas.drawText(t.text, t.x, t.y, tp);
+                        TextSpacingCompat.drawText(canvas, t.text, t.x, t.y, tp,
+                                t.wordSpacingEm * t.fontSize);
                         canvas.restore();
                     } else {
-                        canvas.drawText(t.text, t.x, t.y, tp);
+                        TextSpacingCompat.drawText(canvas, t.text, t.x, t.y, tp,
+                                t.wordSpacingEm * t.fontSize);
                     }
                 }
             }

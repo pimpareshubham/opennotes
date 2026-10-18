@@ -455,20 +455,67 @@ public final class HandwritingRecognitionEngine {
                 String selectedLanguage = result.language != null ? result.language : language;
                 HandwritingImageOcr.recognize(context, strokes, selectedLanguage, candidate -> {
                     String clean = candidate == null ? "" : candidate.trim().replaceAll("\\s+", " ");
-                    if (clean.isEmpty() || clean.equalsIgnoreCase(result.text.trim())
-                            || result.alternatives.contains(clean)) {
+                    if (clean.isEmpty() || clean.equalsIgnoreCase(result.text.trim())) {
                         downstream.onSuccess(result);
                         return;
                     }
                     List<String> alternatives = new ArrayList<>(result.alternatives);
-                    if (alternatives.size() < MAX_REVIEW_CANDIDATES) alternatives.add(clean);
-                    downstream.onSuccess(new RecognitionResult(result.text, result.language,
+                    String selectedText = result.text;
+                    String resultLanguage = result.language != null ? result.language : language;
+                    LinguisticDictionary dictionary = context != null
+                            ? LinguisticDictionary.getInstance(context) : null;
+                    boolean promoteOcr = dictionary != null && isCandidateInScript(clean, resultLanguage)
+                            && dictionary.scoreLine(clean, resultLanguage)
+                            >= dictionary.scoreLine(result.text, resultLanguage) + 12;
+                    if (promoteOcr) {
+                        selectedText = clean;
+                        alternatives.remove(clean);
+                        if (alternatives.size() >= MAX_REVIEW_CANDIDATES) {
+                            alternatives.remove(alternatives.size() - 1);
+                        }
+                        alternatives.add(0, clean);
+                        if (!alternatives.contains(result.text)
+                                && alternatives.size() < MAX_REVIEW_CANDIDATES) alternatives.add(result.text);
+                    } else if (!alternatives.contains(clean)
+                            && alternatives.size() < MAX_REVIEW_CANDIDATES) {
+                        alternatives.add(clean);
+                    }
+                    downstream.onSuccess(new RecognitionResult(selectedText, resultLanguage,
                             result.bounds, result.fontSize, alternatives, result.angleDegrees,
                             result.startX, result.startY, result.wordItems));
                 });
             }
-            @Override public void onFailure(Exception error) { downstream.onFailure(error); }
+            @Override public void onFailure(Exception error) {
+                String ocrLanguage = language;
+                if (isAutoLanguage(ocrLanguage)) ocrLanguage = "MARATHI";
+                final String fallbackLanguage = ocrLanguage;
+                HandwritingImageOcr.recognize(context, strokes, fallbackLanguage, candidate -> {
+                    String clean = candidate == null ? "" : candidate.trim().replaceAll("\\s+", " ");
+                    if (clean.isEmpty()) {
+                        downstream.onFailure(error);
+                        return;
+                    }
+                    RectF bounds = boundsOf(strokes);
+                    if (bounds == null) {
+                        downstream.onFailure(error);
+                        return;
+                    }
+                    float fontSize = Math.max(26f, Math.min(65f, bounds.height() * 0.85f));
+                    String resultLanguage = containsDevanagari(clean) ? fallbackLanguage : "ENGLISH";
+                    MAIN.post(() -> downstream.onSuccess(new RecognitionResult(clean,
+                            resultLanguage, bounds, fontSize, Collections.singletonList(clean),
+                            0f, bounds.left, bounds.bottom - 4f)));
+                });
+            }
         };
+    }
+
+    private static boolean isCandidateInScript(String candidate, String language) {
+        if (candidate == null || candidate.isEmpty()) return false;
+        if ("MARATHI".equalsIgnoreCase(language) || "HINDI".equalsIgnoreCase(language)) {
+            return containsDevanagari(candidate) || !containsLatinLetters(candidate);
+        }
+        return containsLatinLetters(candidate) || !containsDevanagari(candidate);
     }
 
     private static String recentPreContext(String preContext, int maxCodePoints) {
@@ -554,8 +601,9 @@ public final class HandwritingRecognitionEngine {
                         return;
                     }
                     if (isAutoLanguage(preferredLanguage) && containsDevanagari(reconciled.text)) {
-                        tryHindiAutoPass(context, primaryStrokes, strokes, primaryPassAngle,
-                                writingAngle, contextText, reconciled, includeReviewSuggestions, callback);
+                        tryEnglishCrossScriptAutoPass(context, primaryStrokes, strokes,
+                                primaryPassAngle, writingAngle, contextText, reconciled,
+                                includeReviewSuggestions, callback);
                         return;
                     }
                     // Review mode should gather alternative views of the ink even when ML Kit
@@ -783,6 +831,52 @@ public final class HandwritingRecognitionEngine {
         });
     }
 
+    /** When Auto mistakes Latin handwriting for Devanagari, consult English only if
+     * the first Marathi read has little lexical evidence; retain Marathi when it reads well. */
+    private static void tryEnglishCrossScriptAutoPass(Context context, List<Stroke> primaryStrokes,
+            List<Stroke> originalStrokes, float primaryPassAngle, float writingAngle,
+            String preContext, RecognitionResult marathiResult, boolean includeReviewSuggestions,
+            Callback callback) {
+        int marathiScore = scoreLanguageCandidate(marathiResult.text, "MARATHI", context);
+        if (marathiScore >= 4) {
+            tryHindiAutoPass(context, primaryStrokes, originalStrokes, primaryPassAngle,
+                    writingAngle, preContext, marathiResult, includeReviewSuggestions, callback);
+            return;
+        }
+        executeSingleRecognitionPass(context, primaryStrokes, originalStrokes, primaryPassAngle,
+                "ENGLISH", preContext, new Callback() {
+                    @Override public void onSuccess(RecognitionResult englishResult) {
+                        String bestEnglish = bestLanguageCandidate(englishResult.alternatives,
+                                "ENGLISH", context);
+                        int englishScore = scoreLanguageCandidate(bestEnglish, "ENGLISH", context);
+                        int englishEvidence = countEnglishEvidence(bestEnglish, context);
+                        boolean oneKnownWord = bestEnglish.trim().split("\\s+").length == 1
+                                && englishEvidence == 1 && englishScore >= 2 && marathiScore == 0;
+                        boolean strongPhrase = englishEvidence >= 2
+                                && englishScore >= marathiScore + 8;
+                        if (!containsLatinLetters(bestEnglish) || containsDevanagari(bestEnglish)
+                                || (!strongPhrase && !oneKnownWord)) {
+                            tryHindiAutoPass(context, primaryStrokes, originalStrokes, primaryPassAngle,
+                                    writingAngle, preContext, marathiResult, includeReviewSuggestions, callback);
+                            return;
+                        }
+                        RecognitionResult combined = mergeLanguageResults(englishResult,
+                                bestEnglish, marathiResult);
+                        if (includeReviewSuggestions) {
+                            tryReviewHypotheses(context, originalStrokes, "ENGLISH", preContext,
+                                    combined, primaryPassAngle != 0f, writingAngle, callback);
+                        } else {
+                            callback.onSuccess(combined);
+                        }
+                    }
+
+                    @Override public void onFailure(Exception error) {
+                        tryHindiAutoPass(context, primaryStrokes, originalStrokes, primaryPassAngle,
+                                writingAngle, preContext, marathiResult, includeReviewSuggestions, callback);
+                    }
+                });
+    }
+
     private static void tryCrossLanguageFallback(Context context, List<Stroke> strokes,
             String originalLanguage, String preContext, Callback callback) {
         List<String> fallbackLanguages = new ArrayList<>();
@@ -901,10 +995,25 @@ public final class HandwritingRecognitionEngine {
         for (String token : tokens) {
             String clean = token.replaceAll("[^\\p{L}\\p{M}\\p{N}]", "");
             if (clean.isEmpty()) continue;
+            if ("ENGLISH".equalsIgnoreCase(language) && COMMON_ENGLISH_WORDS.contains(clean)) score += 5;
             if (markers.contains(clean)) score += 7;
-            if (dictionary != null && dictionary.isValidWord(clean, language)) score += 1;
+            if (dictionary != null && dictionary.isValidWord(clean, language)) score += 2;
         }
         return score;
+    }
+
+    private static int countEnglishEvidence(String text, Context context) {
+        if (text == null || text.trim().isEmpty()) return 0;
+        LinguisticDictionary dictionary = context != null
+                ? LinguisticDictionary.getInstance(context) : null;
+        int count = 0;
+        for (String token : text.trim().split("\\s+")) {
+            String clean = token.toLowerCase(java.util.Locale.ROOT)
+                    .replaceAll("^[^\\p{L}]+|[^\\p{L}]+$", "");
+            if (!clean.isEmpty() && (COMMON_ENGLISH_WORDS.contains(clean)
+                    || (dictionary != null && dictionary.isValidWord(clean, "ENGLISH")))) count++;
+        }
+        return count;
     }
 
     private static RecognitionResult mergeLanguageResults(RecognitionResult selected,
@@ -1540,37 +1649,28 @@ public final class HandwritingRecognitionEngine {
                                              String preContext, RectF bounds,
                                              Callback callback) {
         try {
-            float naturalHeight = bounds.height();
-            float naturalWidth = bounds.width();
+            // Send the captured trajectory at its original scale. Translation only
+            // removes the page offset; no median character-height scale is inferred.
+            float naturalWidth = Math.max(1f, bounds.width());
+            float naturalHeight = Math.max(1f, bounds.height());
+            float scaledW = naturalWidth;
+            float scaledH = naturalHeight;
+            float padX = Math.max(24f, naturalWidth * 0.05f);
+            float padY = Math.max(24f, naturalHeight * 0.05f);
 
-            float charHeight = 0f;
-            if (strokesToRecognize != null && !strokesToRecognize.isEmpty()) {
-                List<Float> heights = new ArrayList<>();
-                for (Stroke s : strokesToRecognize) {
-                    if (s != null && s.getBounds() != null && s.getBounds().height() > 4f) {
-                        heights.add(s.getBounds().height());
+            long firstInkTime = Long.MAX_VALUE;
+            for (Stroke source : strokesToRecognize) {
+                if (source == null) continue;
+                List<DrawingPoint> points = source.getRecognitionPoints();
+                if (points == null || points.isEmpty()) points = source.points;
+                if (points == null) continue;
+                for (DrawingPoint point : points) {
+                    if (point != null && point.timeMillis >= 0L) {
+                        firstInkTime = Math.min(firstInkTime, point.timeMillis);
                     }
                 }
-                if (!heights.isEmpty()) {
-                    Collections.sort(heights);
-                    int idx = (int) (heights.size() * 0.75f);
-                    if (idx >= heights.size()) idx = heights.size() - 1;
-                    charHeight = heights.get(idx);
-                }
             }
-            if (charHeight <= 0f) {
-                charHeight = bounds.height();
-            }
-
-            float scale = 1.0f;
-            if (charHeight > 0f && charHeight < 140f) {
-                scale = Math.min(4.5f, 160f / charHeight);
-            }
-
-            float scaledW = naturalWidth * scale;
-            float scaledH = naturalHeight * scale;
-            float padX = Math.max(24f, scaledW * 0.10f);
-            float padY = Math.max(24f, scaledH * 0.10f);
+            boolean hasCapturedTimes = firstInkTime != Long.MAX_VALUE;
 
             Ink.Builder inkBuilder = Ink.builder();
             long currentTime = 0L;
@@ -1583,46 +1683,28 @@ public final class HandwritingRecognitionEngine {
                 if (inputPoints == null || inputPoints.isEmpty()) inputPoints = source.points;
                 if (inputPoints == null || inputPoints.isEmpty()) continue;
 
-                // Natural inter-stroke pen-lift delay between separate strokes (120ms to 200ms)
-                if (addedStrokes > 0) {
+                // Use captured pen-up intervals when available; legacy notes without
+                // timestamps receive only a small synthetic inter-stroke gap.
+                if (addedStrokes > 0 && !hasCapturedTimes) {
                     currentTime += 130L;
                 }
 
                 Ink.Stroke.Builder strokeBuilder = Ink.Stroke.builder();
                 int addedPoints = 0;
-                float lastAddedX = 0f;
-                float lastAddedY = 0f;
-                long lastPointRawTime = -1L;
-
                 for (DrawingPoint point : inputPoints) {
                     if (point == null || !isFinite(point.x) || !isFinite(point.y)) continue;
-
-                    long stepDelta = 12L; // Default ~80Hz sampling
-                    if (point.timeMillis > 0L && lastPointRawTime > 0L) {
-                        long rawDelta = point.timeMillis - lastPointRawTime;
-                        if (rawDelta > 0L && rawDelta <= 150L) {
-                            stepDelta = Math.max(6L, Math.min(40L, rawDelta));
-                        }
+                    if (hasCapturedTimes && point.timeMillis >= firstInkTime) {
+                        long capturedRelativeTime = point.timeMillis - firstInkTime;
+                        currentTime = capturedRelativeTime > currentTime || addedPoints == 0 && addedStrokes == 0
+                                ? capturedRelativeTime : currentTime + 1L;
+                    } else if (addedPoints > 0 || addedStrokes > 0) {
+                        currentTime += 12L;
                     }
-                    if (addedPoints > 0) {
-                        currentTime += stepDelta;
-                    }
-                    lastPointRawTime = point.timeMillis;
 
-                    float normX = (point.x - bounds.left) * scale + padX;
-                    float normY = (point.y - bounds.top) * scale + padY;
+                    float inkX = point.x - bounds.left + padX;
+                    float inkY = point.y - bounds.top + padY;
 
-                    strokeBuilder.addPoint(Ink.Point.create(normX, normY, currentTime));
-                    lastAddedX = normX;
-                    lastAddedY = normY;
-                    addedPoints++;
-                }
-
-                if (addedPoints == 1) {
-                    // For single-tap dots (like anusvar or i-dot), create a micro-offset second point
-                    currentTime += 15L;
-                    strokeBuilder.addPoint(Ink.Point.create(
-                            lastAddedX + 2.0f, lastAddedY + 2.0f, currentTime));
+                    strokeBuilder.addPoint(Ink.Point.create(inkX, inkY, currentTime));
                     addedPoints++;
                 }
 
@@ -1747,24 +1829,9 @@ public final class HandwritingRecognitionEngine {
             RectF origBounds = boundsOf(srcStrokes);
             if (origBounds == null) origBounds = bounds;
 
-            // Character font size estimation that works naturally at any angle or incline
-            float estimatedLineHeight = bounds.height();
-            if (srcStrokes != null && !srcStrokes.isEmpty()) {
-                List<Float> strokeHeights = new ArrayList<>();
-                for (Stroke s : srcStrokes) {
-                    if (s != null && s.getBounds() != null && s.getBounds().height() > 4f) {
-                        strokeHeights.add(s.getBounds().height());
-                    }
-                }
-                if (!strokeHeights.isEmpty()) {
-                    Collections.sort(strokeHeights);
-                    float medianStrokeH = strokeHeights.get(strokeHeights.size() / 2);
-                    if (bounds.height() > medianStrokeH * 2.0f) {
-                        estimatedLineHeight = Math.max(medianStrokeH * 1.35f, 32f);
-                    }
-                }
-            }
-            float fontSize = Math.max(26f, Math.min(65f, estimatedLineHeight * 0.85f));
+            // This affects inserted-text appearance only. Recognition itself receives
+            // the original ordered points and timestamps without per-character sizing.
+            float fontSize = Math.max(26f, Math.min(65f, bounds.height() * 0.85f));
 
             float startX = origBounds.left;
             float startY = origBounds.bottom - 4f;

@@ -1,5 +1,6 @@
 package org.opennotes.app.model;
 
+import org.opennotes.app.util.TextSpacingCompat;
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -60,9 +61,12 @@ public class TextItem {
                 MEASURE_PAINT.setTextSize(fontSize);
                 if (android.os.Build.VERSION.SDK_INT >= 21) {
                     MEASURE_PAINT.setLetterSpacing(letterSpacingEm);
-                    MEASURE_PAINT.setWordSpacing(wordSpacingEm * fontSize);
+                    if (android.os.Build.VERSION.SDK_INT >= 29) {
+                        MEASURE_PAINT.setWordSpacing(wordSpacingEm * fontSize);
+                    }
                 }
-                width = MEASURE_PAINT.measureText(text != null ? text : "");
+                width = TextSpacingCompat.measureText(MEASURE_PAINT, text,
+                        wordSpacingEm * fontSize);
             }
             android.graphics.RectF unrotated = new android.graphics.RectF(x - 4f, y - fontSize - 4f, x + width + 4f, y + 6f);
             if (Math.abs(rotationAngle) < 0.5f) {
