@@ -1150,8 +1150,7 @@ public class CanvasView extends View {
         if (currentPage != requestedPage) return;
         if (index >= segmentedLines.size()) {
             if (accumulatedLines.isEmpty()) {
-                // Fallback to single block if individual line segmentation produced no candidates
-                recognizeSingleBlock(requestedPage, requestedStrokes, textColor, letUserChooseCandidate);
+                handleRecognitionFailure(new IllegalArgumentException("Could not decipher handwriting. Your ink was kept."));
                 return;
             }
             if (letUserChooseCandidate) {
