@@ -27,9 +27,9 @@ import java.util.Locale;
 import java.util.Map;
 
 /**
- * On-Device Real-Time Self-Learning & Adaptive Handwriting Model.
- * Learns the user's personal handwriting quirks, cursive ligatures, and doctor's handwriting.
- * Enables exporting and importing .onhw training profile files so users can share their learned styles.
+ * On-device personalization store for corrections, vocabulary, word pairs, and ink prototypes.
+ * These examples rerank future candidates; this class does not update or train the ML Kit model.
+ * Export/import uses .onhw local-learning profiles.
  */
 public class UserHandwritingModel {
     private static final String TAG = "UserHandwritingModel";
@@ -135,7 +135,7 @@ public class UserHandwritingModel {
     }
 
     /**
-     * Real-time training: User corrects a recognized word/symbol or teaches their personal style.
+     * Save a user correction and, when ink is supplied, an example for local candidate reranking.
      */
     public synchronized void learnCorrection(String recognizedAs, String intendedText, List<Stroke> strokes) {
         if (intendedText == null || intendedText.trim().isEmpty()) return;

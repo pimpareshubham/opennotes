@@ -27,6 +27,8 @@ import org.opennotes.app.ai.InkPreprocessor;
 import org.opennotes.app.ai.SemanticStrokeClusterer;
 import org.opennotes.app.ai.UserHandwritingModel;
 import org.opennotes.app.ai.LinguisticDictionary;
+import org.opennotes.app.ai.HandwritingImageOcr;
+import org.opennotes.app.ai.GeometricDigitDisambiguator;
 
 import java.util.List;
 import java.util.HashMap;
@@ -399,7 +401,8 @@ public final class HandwritingRecognitionEngine {
                                         String preferredLanguage, String preContext,
                                         Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
-        recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, false, callback);
+        recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, false,
+                withImageOcr(context, strokes, preferredLanguage, callback));
     }
 
     /**
@@ -412,7 +415,8 @@ public final class HandwritingRecognitionEngine {
                                                                String preContext,
                                                                Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
-        recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, true, callback);
+        recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, true,
+                withImageOcr(context, strokes, preferredLanguage, callback));
     }
 
     public static void recognizeStrokeLine(Context context,
@@ -439,7 +443,32 @@ public final class HandwritingRecognitionEngine {
                                                     String preContext,
                                                     boolean includeReviewSuggestions,
                                                     Callback callback) {
-        recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, includeReviewSuggestions, callback);
+        recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, includeReviewSuggestions,
+                withImageOcr(context, line.strokes, preferredLanguage, callback));
+    }
+
+    /** Add independent image-OCR candidates while preserving Digital Ink's primary result. */
+    private static Callback withImageOcr(Context context, List<Stroke> strokes,
+                                         String language, Callback downstream) {
+        return new Callback() {
+            @Override public void onSuccess(RecognitionResult result) {
+                String selectedLanguage = result.language != null ? result.language : language;
+                HandwritingImageOcr.recognize(context, strokes, selectedLanguage, candidate -> {
+                    String clean = candidate == null ? "" : candidate.trim().replaceAll("\\s+", " ");
+                    if (clean.isEmpty() || clean.equalsIgnoreCase(result.text.trim())
+                            || result.alternatives.contains(clean)) {
+                        downstream.onSuccess(result);
+                        return;
+                    }
+                    List<String> alternatives = new ArrayList<>(result.alternatives);
+                    if (alternatives.size() < MAX_REVIEW_CANDIDATES) alternatives.add(clean);
+                    downstream.onSuccess(new RecognitionResult(result.text, result.language,
+                            result.bounds, result.fontSize, alternatives, result.angleDegrees,
+                            result.startX, result.startY, result.wordItems));
+                });
+            }
+            @Override public void onFailure(Exception error) { downstream.onFailure(error); }
+        };
     }
 
     private static String recentPreContext(String preContext, int maxCodePoints) {
@@ -1274,10 +1303,13 @@ public final class HandwritingRecognitionEngine {
 
     private static RecognitionResult disambiguateDigits(Context context, RecognitionResult result, List<Stroke> strokes) {
         if (result == null) return null;
-        // Keep the model's first candidate intact. The line-wide geometric and
-        // dictionary heuristics cannot reliably override names, numbers, or words.
+        // Keep the ML Kit transcript first, but surface a geometry-checked numeric
+        // alternative for review when isolated digit strokes support a correction.
         List<String> alternatives = new ArrayList<>();
         if (result.text != null && !result.text.trim().isEmpty()) alternatives.add(result.text);
+        String geometricDigits = GeometricDigitDisambiguator.disambiguateDigits(result.text, strokes);
+        if (geometricDigits != null && !geometricDigits.equals(result.text)
+                && !alternatives.contains(geometricDigits)) alternatives.add(geometricDigits);
         for (String candidate : result.alternatives) {
             if (candidate != null && !candidate.trim().isEmpty() && !alternatives.contains(candidate)) {
                 alternatives.add(candidate);
@@ -1975,9 +2007,19 @@ public final class HandwritingRecognitionEngine {
                                                            List<String> alternatives, String language, String preContext) {
         if (alternatives == null || alternatives.isEmpty()) return alternatives;
         List<String> pool = new ArrayList<>(alternatives);
-        // Never let app dictionaries or rough geometry overrule the recognizer's
-        // ordered hypotheses. User-taught corrections remain available as explicit
-        // suggestions, after the native candidates, instead of being applied silently.
+        LinguisticDictionary dictionary = context != null
+                ? LinguisticDictionary.getInstance(context) : null;
+        if (dictionary != null && "MARATHI".equalsIgnoreCase(language)) {
+            for (String candidate : alternatives) {
+                for (String orthographic : dictionary.suggestMarathiOrthographicVariants(candidate, 4)) {
+                    if (!pool.contains(orthographic) && pool.size() < MAX_REVIEW_CANDIDATES) {
+                        pool.add(orthographic);
+                    }
+                }
+            }
+        }
+        // User-taught corrections remain available as candidates. Grammar can reorder
+        // a model alternative only when lexical and structural evidence is substantial.
         UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
         if (userModel != null) {
             for (String cand : alternatives) {
@@ -1988,8 +2030,33 @@ public final class HandwritingRecognitionEngine {
             }
             pool = rerankPersonalContext(pool, userModel, preContext);
         }
-
+        pool = rerankWithGrammar(context, pool, language);
         return rerankClearAnusvarAlternatives(strokes, pool, language);
+    }
+
+    /** Promote a non-primary hypothesis only when lexical plus grammar evidence is substantial. */
+    private static List<String> rerankWithGrammar(Context context, List<String> candidates, String language) {
+        if (candidates == null || candidates.size() < 2
+                || !("ENGLISH".equalsIgnoreCase(language) || "MARATHI".equalsIgnoreCase(language))) return candidates;
+        LinguisticDictionary dictionary = context != null ? LinguisticDictionary.getInstance(context) : null;
+        if (dictionary == null) return candidates;
+        String primary = candidates.get(0);
+        int primaryScore = dictionary.scoreLine(primary, language);
+        String best = primary;
+        int bestScore = primaryScore;
+        for (String candidate : candidates) {
+            if (candidate == null || candidate.trim().isEmpty()) continue;
+            if ("ENGLISH".equalsIgnoreCase(language) && !containsLatinLetters(candidate)) continue;
+            if ("MARATHI".equalsIgnoreCase(language) && !containsDevanagari(candidate)) continue;
+            int score = dictionary.scoreLine(candidate, language);
+            if (score > bestScore) { best = candidate; bestScore = score; }
+        }
+        // Require more than a single token's weak morphology score before changing the head.
+        if (best.equals(primary) || bestScore < primaryScore + 12) return candidates;
+        List<String> ranked = new ArrayList<>(candidates);
+        ranked.remove(best);
+        ranked.add(0, best);
+        return ranked;
     }
 
     /** Keeps ML Kit's first suggestion fixed; learned phrase context only orders alternatives. */

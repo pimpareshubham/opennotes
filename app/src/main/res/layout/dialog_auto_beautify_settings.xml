@@ -92,7 +92,7 @@
             android:layout_width="match_parent"
             android:layout_height="38dp"
             android:gravity="center"
-            android:text="✨ Universal Auto-Detect (Marathi, English, Hindi, 0-9, Symbols)"
+            android:text="✨ Auto (English, Hindi, Marathi)"
             android:textColor="#FFFFFF"
             android:textSize="12sp"
             android:textStyle="bold"

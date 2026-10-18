@@ -2572,7 +2572,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         popup.getMenu().add(0, 8, 7, "Convert Entire Page to Beautiful Font");
         popup.getMenu().add(0, 9, 8, "Paste from Clipboard");
         popup.getMenu().add(0, 10, 9, "📥 Offline Handwriting Models");
-        popup.getMenu().add(0, 11, 10, "🎓 Train My Handwriting Style");
+        popup.getMenu().add(0, 11, 10, "🎓 Teach My Handwriting");
         popup.getMenu().add(0, 12, 11, "📤 Export Handwriting Profile (.onhw)");
         popup.getMenu().add(0, 13, 12, "📥 Import Handwriting Profile (.onhw)");
         popup.getMenu().add(0, 14, 13, "↔ Adjust selected text spacing");
@@ -2921,7 +2921,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         MaterialAlertDialogBuilder profileBuilder = new MaterialAlertDialogBuilder(this)
-                .setTitle("🎓 My Handwriting Training Engine")
+                .setTitle("🎓 My Local Handwriting Learning")
                 .setView(layout)
                 .setPositiveButton("Done", null);
         ThemeUtils.showStyledDialog(profileBuilder, this);
@@ -2963,12 +2963,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("🎓 Teach Handwriting Style")
                 .setView(layout)
-                .setPositiveButton("Train Style", (dialog, which) -> {
+                .setPositiveButton("Save Example", (dialog, which) -> {
                     String intended = editIntended.getText().toString().trim();
                     String recognized = editRecognized.getText().toString().trim();
                     if (!intended.isEmpty()) {
                         UserHandwritingModel.getInstance(this).learnCorrection(recognized, intended, strokes);
-                        Toast.makeText(this, "✨ Trained! Style learned for '" + intended + "'", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, "✨ Saved a local handwriting example for '" + intended + "'", Toast.LENGTH_SHORT).show();
                     } else {
                         Toast.makeText(this, "Please enter the intended text", Toast.LENGTH_SHORT).show();
                     }
@@ -3368,7 +3368,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         dialog.setButton(AlertDialog.BUTTON_NEUTRAL, "⚙️ AI & Models", (d, w) -> {
             String[] options = {
                     "📥 Offline Handwriting Models",
-                    "🎓 Train My Handwriting Style",
+                    "🎓 Teach My Handwriting",
                     "📤 Export Local Handwriting Learning (.onhw)",
                     "📥 Import Local Handwriting Learning (.onhw)"
             };

@@ -12,6 +12,7 @@ android {
         targetSdk 35
         versionCode 1
         versionName "1.0.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
 
         vectorDrawables.useSupportLibrary = true
     }
@@ -41,4 +42,10 @@ dependencies {
     implementation 'androidx.cardview:cardview:1.0.0'
     implementation 'androidx.input:input-motionprediction:1.0.0'
     testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:runner:1.6.2'
+    androidTestImplementation 'androidx.test.ext:junit:1.2.1'
+    // Bundled on-device OCR: Latin and Devanagari scripts. It supplements digital ink
+    // candidates; ML Kit Text Recognition is image OCR, not a handwriting-specific model.
+    implementation 'com.google.mlkit:text-recognition:16.0.1'
+    implementation 'com.google.mlkit:text-recognition-devanagari:16.0.1'
 }

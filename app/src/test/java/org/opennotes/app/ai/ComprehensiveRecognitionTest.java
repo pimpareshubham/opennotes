@@ -286,4 +286,30 @@ public class ComprehensiveRecognitionTest {
         Assert.assertEquals("किंमत 500 रुपये",
                 SpatialSpaceNormalizer.normalizeSpacing("किंमत 500 रुपये", new ArrayList<>(), "MARATHI"));
     }
+
+    @Test
+    public void testEnglishAndMarathiGrammarEvidence() {
+        LinguisticDictionary dictionary = LinguisticDictionary.getInstance(null);
+        Assert.assertTrue(dictionary.scoreGrammarLine("How are you", "ENGLISH")
+                > dictionary.scoreGrammarLine("How is you", "ENGLISH"));
+        Assert.assertTrue(dictionary.scoreGrammarLine("मी आहे", "MARATHI")
+                > dictionary.scoreGrammarLine("मी आहात", "MARATHI"));
+        Assert.assertTrue(dictionary.scoreLine("How are you", "ENGLISH")
+                > dictionary.scoreLine("How is you", "ENGLISH"));
+    }
+
+    @Test
+    public void testDevanagariVowelsMatrasAndConjunctOrthography() {
+        String[] validForms = {"अ", "आ", "इ", "ई", "उ", "ऊ", "ऋ", "ए", "ऐ", "ओ", "औ", "अं", "अः",
+                "का", "कि", "की", "कु", "कू", "कृ", "के", "कै", "को", "कौ", "कं", "क्ष", "ज्ञ", "स्त्री"};
+        for (String form : validForms) {
+            Assert.assertEquals("Valid Devanagari orthography should not be penalized: " + form,
+                    0, LinguisticDictionary.scoreDevanagariOrthography(form));
+        }
+        Assert.assertTrue("A dependent vowel sign cannot begin a word",
+                LinguisticDictionary.scoreDevanagariOrthography("िक") < 0);
+        Assert.assertTrue("Anusvara correction should be surfaced as a candidate",
+                LinguisticDictionary.getInstance(null).suggestMarathiOrthographicVariants("किवा", 4)
+                        .contains("किंवा"));
+    }
 }

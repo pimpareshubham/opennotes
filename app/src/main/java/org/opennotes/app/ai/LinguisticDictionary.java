@@ -7,6 +7,7 @@ import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -19,16 +20,17 @@ import java.util.concurrent.Executors;
 import java.util.regex.Pattern;
 
 /**
- * Built-in tri-lingual (Marathi, Hindi, English) Linguistic & Symbolic Knowledge Engine.
+ * Built-in Marathi, Hindi, and English lexical and heuristic candidate scorer.
  * 
  * Provides:
- * 1. Over 150,000+ base root lexical vocabulary loaded from compressed asset wordlists.
- * 2. Generative Morphological Engine (Vibhakti, Sandhi, Samas, Kriyapad, and Affix derivation)
- *    expanding recognition coverage beyond 10 Crore (100,000,000+) valid grammatical words.
- * 3. Infinite Mathematical, Scientific, Measurement, Currency, and Symbolic expression grammar.
- * 4. Multi-hypothesis candidate reranking based on authentic vocabulary density.
- * 5. High-precision ligature fine-tuning (anusvara, velanti, and cursive OCR disambiguation).
- * 6. 100% crash-proof, thread-safe, and constant O(1) performance.
+ * 1. Bundled English, Hindi, and Marathi wordlists plus a small built-in seed vocabulary.
+ * 2. Heuristic suffix and compound checks that can accept forms absent from the wordlists;
+ *    generated forms are candidates and are not certified dictionary entries.
+ * 3. Recognition of common numeric, measurement, currency, and symbolic forms.
+ * 4. Multi-hypothesis candidate reranking based on wordlist and grammar evidence.
+ * 5. Unicode-aware Devanagari vowel signs, anusvara, virama conjuncts, sandhi,
+ *    vibhakti, and sparse English/Marathi agreement heuristics.
+ * 6. Thread-safe lexical lookup and candidate scoring.
  */
 public class LinguisticDictionary {
 
@@ -56,7 +58,11 @@ public class LinguisticDictionary {
             "शिवाय", "पर्यंत", "दरम्यान", "तातच", "तात", "तोस", "तोय", "तीस", "तीय", "तेय", "लोय",
             "लीय", "लेत", "णाराच", "णारीच", "णारेच", "णारा", "णारी", "णारे", "तानाच", "ताना",
             "ल्यावर", "ल्यास", "ल्यामुळे", "ल्याने", "लेला", "लेली", "लेले", "लेल्या", "वे", "वी",
-            "वेत", "तच", "ात", "तून", "तील", "त", "ला", "ना", "ने", "नी", "चा", "ची", "चे", "च्या"
+            "वेत", "तच", "ात", "तून", "तील", "त", "ला", "ना", "ने", "नी", "चा", "ची", "चे", "च्या",
+            "ांमधून", "ांमधील", "ांमध्ये", "ांपासून", "ांपर्यंत", "ांकडून", "ांकडे", "ांवरून",
+            "ांसाठी", "ांमुळे", "ांप्रमाणे", "ांनुसार", "ांबाबत", "ांविषयी", "ांसमोर", "ांपुढे",
+            "ांमागे", "ांजवळ", "ांखाली", "ांतील", "ांवर", "ांत", "ांची", "ांचा", "ांचे", "ांच्या",
+            "ांना", "ांनी", "ींनी", "ींना", "ींचा", "ींची", "ींचे", "ींच्या", "पाशी", "सह"
     };
 
     // English productive suffixes
@@ -125,6 +131,29 @@ public class LinguisticDictionary {
             "wrote", "year", "yes", "you", "your"
     };
 
+    private static final Set<String> ENGLISH_GRAMMAR_BIGRAMS = new HashSet<>(Arrays.asList(
+            "how are", "how do", "how is", "are you", "do you", "did you", "can you",
+            "would you", "could you", "i am", "i have", "you are", "you have", "we are",
+            "we have", "they are", "they have", "he is", "he has", "she is", "she has",
+            "it is", "it has", "this is", "that is", "there is", "there are", "what is",
+            "what are", "in the", "on the", "to the", "for the", "of the", "with the",
+            "a lot", "thank you", "good morning", "please let", "i will", "we will"));
+    private static final Set<String> ENGLISH_GRAMMAR_TRIGRAMS = new HashSet<>(Arrays.asList(
+            "how are you", "how do you", "how did you", "what do you", "what is the",
+            "where are you", "when are you", "why are you", "thank you for", "there is a",
+            "there are many", "i would like", "i am going", "we are going", "you are going",
+            "he is going", "she is going", "it is going", "as soon as", "one of the",
+            "a lot of", "kind of a", "out of the", "in front of", "looking forward to"));
+    private static final Set<String> MARATHI_GRAMMAR_BIGRAMS = new HashSet<>(Arrays.asList(
+            "मी आहे", "मी आहेच", "तू आहेस", "तुम्ही आहात", "आपण आहोत", "तो आहे", "ती आहे",
+            "ते आहे", "ते आहेत", "आम्ही आहोत", "मला हवे", "मला पाहिजे", "काय आहे",
+            "कसे आहे", "काय झाले", "काय करावे", "करून घ्या", "करून दे", "म्हणूनच आहे",
+            "च्या साठी", "च्या मध्ये", "च्या कडे", "आणि मग", "जर तर", "नाही तर"));
+    private static final Set<String> MARATHI_GRAMMAR_TRIGRAMS = new HashSet<>(Arrays.asList(
+            "तुम्ही कसे आहात", "तुम्ही कशी आहात", "तू कसा आहेस", "तू कशी आहेस",
+            "तुमचे नाव काय", "माझे नाव आहे", "मला असे वाटते", "मला हे हवे",
+            "काय करत आहात", "काय करीत आहात", "कृपया मला सांगा", "धन्यवाद तुम्हाला"));
+
     private LinguisticDictionary(Context context) {
         // Pre-populate core seeds immediately
         marathiDict.addAll(Arrays.asList(MARATHI_SEEDS));
@@ -153,7 +182,7 @@ public class LinguisticDictionary {
             Log.d(TAG, "Linguistic & Morphological Knowledge Engine loaded: Marathi=" + marathiDict.size()
                     + ", Hindi=" + hindiDict.size()
                     + ", English=" + englishDict.size()
-                    + " [Generative space: >10 Crore words & symbols]");
+                    + " [wordlists plus heuristic morphology]");
         } catch (Throwable t) {
             Log.w(TAG, "Could not load full dictionaries from assets; running on core seeds", t);
         }
@@ -184,7 +213,7 @@ public class LinguisticDictionary {
         String clean = cleanPunctuation(word).trim();
         if (clean.isEmpty()) return true;
 
-        // 1. Symbolic, Mathematical, Measurement, or Currency expression check (Infinite grammar)
+        // 1. Recognized numeric, mathematical, measurement, or currency form.
         if (isSymbolOrScientificExpression(clean)) {
             return true;
         }
@@ -210,7 +239,8 @@ public class LinguisticDictionary {
      * Devanagari Generative Morphological Engine:
      * Analyzes Vibhakti inflections, postpositions, normal/oblique stem transformations,
      * and compound words (सामासिक शब्द / समास).
-     * Multiplies base lexicon into >100,000,000 authentic grammatical words.
+     * Applies suffix rules and known-stem checks. This is a heuristic, not a
+     * comprehensive grammar or a guarantee that every accepted form is authentic.
      */
     private boolean isMorphologicallyValidDevanagari(String word, Set<String> dictionary) {
         if (word == null || word.length() < 3) return false;
@@ -238,6 +268,9 @@ public class LinguisticDictionary {
                     if (dictionary.contains(baseStem + "ा")) return true;
                     if (dictionary.contains(baseStem)) return true;
                 }
+                // Frequent plural and oblique stems before Marathi case endings.
+                if (dictionary.contains(stem + "ा") || dictionary.contains(stem + "े")
+                        || dictionary.contains(stem + "ी") || dictionary.contains(stem + "या")) return true;
             }
         }
 
@@ -255,6 +288,41 @@ public class LinguisticDictionary {
             }
         }
 
+        if (isVowelSandhiCompound(word, dictionary)) return true;
+
+        return false;
+    }
+
+    /** Reverse common vowel-sandhi fusions, accepting a form only when both roots exist. */
+    private boolean isVowelSandhiCompound(String word, Set<String> dictionary) {
+        int length = word.length();
+        if (length < 5) return false;
+        final String[] independentVowels = {"अ", "आ", "इ", "ई", "उ", "ऊ", "ऋ", "ए", "ऐ", "ओ", "औ"};
+        for (int split = 2; split <= length - 2; split++) {
+            String left = word.substring(0, split);
+            String right = word.substring(split);
+            // Elision/coalescence can remove the first independent vowel of the second root.
+            if (dictionary.contains(left)) {
+                for (String vowel : independentVowels) {
+                    if (dictionary.contains(vowel + right)) return true;
+                }
+            }
+            char fused = left.charAt(left.length() - 1);
+            String leftRoot = left.substring(0, left.length() - 1);
+            if (leftRoot.length() < 2 || !dictionary.contains(leftRoot)) continue;
+            String[] restoredVowels;
+            switch (fused) {
+                case 'ा': restoredVowels = new String[]{"अ", "आ"}; break;
+                case 'े': restoredVowels = new String[]{"इ", "ई"}; break;
+                case 'ो': restoredVowels = new String[]{"उ", "ऊ"}; break;
+                case 'ै': restoredVowels = new String[]{"ए", "ऐ"}; break;
+                case 'ौ': restoredVowels = new String[]{"ओ", "औ"}; break;
+                default: continue;
+            }
+            for (String vowel : restoredVowels) {
+                if (dictionary.contains(vowel + right)) return true;
+            }
+        }
         return false;
     }
 
@@ -303,9 +371,7 @@ public class LinguisticDictionary {
         return false;
     }
 
-    /**
-     * Infinite Symbolic, Mathematical, Measurement, Currency & Scientific Expression Grammar.
-     */
+    /** Recognize supported numeric, symbolic, measurement, currency, and scientific forms. */
     public boolean isSymbolOrScientificExpression(String s) {
         if (s == null || s.isEmpty()) return false;
         if (NUMERIC_PATTERN.matcher(s).matches()) return true;
@@ -339,13 +405,245 @@ public class LinguisticDictionary {
             } else {
                 score -= 5; // Unknown / OCR misspelling
             }
+            if ("MARATHI".equalsIgnoreCase(language) && containsDevanagari(clean)) {
+                score += scoreDevanagariOrthography(clean);
+            }
+        }
+        return score + scoreGrammarLine(line, language);
+    }
+
+    /** Validate Unicode vowel signs, anusvara/visarga, nukta, virama and conjunct structure. */
+    public static int scoreDevanagariOrthography(String word) {
+        if (word == null || word.isEmpty()) return 0;
+        String normalized = Normalizer.normalize(word, Normalizer.Form.NFC);
+        int score = 0;
+        boolean previousWasConsonant = false;
+        boolean previousWasVirama = false;
+        boolean vowelSignSeen = false;
+        boolean hasSyllableBase = false;
+        for (int offset = 0; offset < normalized.length();) {
+            int cp = normalized.codePointAt(offset);
+            offset += Character.charCount(cp);
+            if (isDevanagariConsonant(cp)) {
+                previousWasConsonant = true;
+                previousWasVirama = false;
+                vowelSignSeen = false;
+                hasSyllableBase = true;
+                continue;
+            }
+            if (isDevanagariVowelSign(cp)) {
+                if (!previousWasConsonant || previousWasVirama || vowelSignSeen) score -= 12;
+                vowelSignSeen = true;
+                previousWasConsonant = false;
+                previousWasVirama = false;
+                hasSyllableBase = true;
+                continue;
+            }
+            if (cp == 0x094D) { // virama / halant, including conjunct-forming sequences
+                if (!previousWasConsonant || previousWasVirama) score -= 10;
+                previousWasVirama = true;
+                previousWasConsonant = false;
+                vowelSignSeen = false;
+                continue;
+            }
+            if (cp == 0x093C) { // nukta modifies the preceding consonant
+                if (!previousWasConsonant || previousWasVirama) score -= 8;
+                continue;
+            }
+            if (cp == 0x0901 || cp == 0x0902 || cp == 0x0903) { // chandrabindu, anusvara, visarga
+                if (!hasSyllableBase) score -= 6;
+                previousWasConsonant = false;
+                previousWasVirama = false;
+                vowelSignSeen = false;
+                continue;
+            }
+            if (isDevanagariIndependentVowel(cp)) {
+                previousWasConsonant = false;
+                previousWasVirama = false;
+                vowelSignSeen = false;
+                hasSyllableBase = true;
+                continue;
+            }
+            if (cp == 0x200C || cp == 0x200D) { // ZWNJ/ZWJ may appear in explicit conjuncts
+                if (!previousWasVirama) score -= 5;
+                continue;
+            }
+            if (Character.UnicodeScript.of(cp) == Character.UnicodeScript.DEVANAGARI
+                    && (Character.getType(cp) == Character.NON_SPACING_MARK
+                    || Character.getType(cp) == Character.COMBINING_SPACING_MARK)) {
+                if (!previousWasConsonant && !previousWasVirama) score -= 5;
+                continue;
+            }
+            previousWasConsonant = false;
+            previousWasVirama = false;
+            vowelSignSeen = false;
+            hasSyllableBase = false;
+        }
+        // Do not reject an incomplete trailing halant: users may intentionally write a
+        // conjunct in progress or use Sanskrit/loanword forms ending in a halant.
+        return score;
+    }
+
+    private static boolean isDevanagariConsonant(int cp) {
+        return (cp >= 0x0915 && cp <= 0x0939) || (cp >= 0x0958 && cp <= 0x095F)
+                || (cp >= 0x0978 && cp <= 0x097F);
+    }
+
+    private static boolean isDevanagariVowelSign(int cp) {
+        return (cp >= 0x093E && cp <= 0x094C) || (cp >= 0x094E && cp <= 0x094F)
+                || (cp >= 0x0955 && cp <= 0x0957) || (cp >= 0x0962 && cp <= 0x0963);
+    }
+
+    private static boolean isDevanagariIndependentVowel(int cp) {
+        return (cp >= 0x0904 && cp <= 0x0914) || cp == 0x0960 || cp == 0x0961;
+    }
+
+    private static boolean containsDevanagari(String text) {
+        for (int i = 0; i < text.length();) {
+            int cp = text.codePointAt(i);
+            if (Character.UnicodeScript.of(cp) == Character.UnicodeScript.DEVANAGARI) return true;
+            i += Character.charCount(cp);
+        }
+        return false;
+    }
+
+    /** Return only dictionary-backed single-matra alternatives; never invent a final transcript. */
+    public List<String> suggestMarathiOrthographicVariants(String line, int limit) {
+        if (line == null || line.trim().isEmpty() || limit <= 0) return Collections.emptyList();
+        String[] tokens = line.trim().split("\\s+");
+        List<String> suggestions = new ArrayList<>();
+        char[][] confusions = {{'ि','ी'}, {'ु','ू'}, {'े','ै'}, {'ो','ौ'}, {'ं','ँ'},
+                {'ॅ','े'}, {'ॉ','ो'}, {'ॆ','े'}, {'ॊ','ो'}, {'ृ','ॄ'}, {'ॢ','ॣ'}};
+        for (int tokenIndex = 0; tokenIndex < tokens.length && suggestions.size() < limit; tokenIndex++) {
+            String token = tokens[tokenIndex];
+            String clean = token.replaceAll("^[\\p{Punct}\\s]+|[\\p{Punct}\\s]+$", "");
+            if (!containsDevanagari(clean) || isValidWord(clean, "MARATHI")) continue;
+            String anusvar = tryRestoreAnusvara(clean);
+            if (anusvar != null && isValidWord(anusvar, "MARATHI")) {
+                String[] corrected = tokens.clone();
+                corrected[tokenIndex] = token.replace(clean, anusvar);
+                suggestions.add(String.join(" ", corrected));
+                if (suggestions.size() >= limit) continue;
+            }
+            for (int charIndex = 0; charIndex < clean.length() && suggestions.size() < limit; charIndex++) {
+                for (char[] pair : confusions) {
+                    char replacement = clean.charAt(charIndex) == pair[0] ? pair[1]
+                            : clean.charAt(charIndex) == pair[1] ? pair[0] : 0;
+                    if (replacement == 0) continue;
+                    String variant = clean.substring(0, charIndex) + replacement + clean.substring(charIndex + 1);
+                    if (!isValidWord(variant, "MARATHI") || scoreDevanagariOrthography(variant) < 0) continue;
+                    String[] corrected = tokens.clone();
+                    corrected[tokenIndex] = token.replace(clean, variant);
+                    String result = String.join(" ", corrected);
+                    if (!result.equals(line.trim()) && !suggestions.contains(result)) suggestions.add(result);
+                    if (suggestions.size() >= limit) break;
+                }
+            }
+        }
+        return suggestions;
+    }
+
+    /**
+     * Lightweight grammar evidence for candidate ranking. Rules are deliberately
+     * sparse and positive-first: they reward common English/Marathi constructions
+     * and penalize only clear English subject/verb agreement conflicts.
+     */
+    public int scoreGrammarLine(String line, String language) {
+        if (line == null || line.trim().isEmpty()) return 0;
+        String normalized = line.toLowerCase().replaceAll("[^\\p{L}\\p{M}\\s]", " ")
+                .trim().replaceAll("\\s+", " ");
+        if (normalized.isEmpty()) return 0;
+        String[] words = normalized.split(" ");
+        int score = 0;
+        if ("ENGLISH".equalsIgnoreCase(language)) {
+            for (int i = 0; i + 2 < words.length; i++) {
+                if (ENGLISH_GRAMMAR_TRIGRAMS.contains(words[i] + " " + words[i + 1] + " " + words[i + 2])) score += 8;
+            }
+            for (int i = 0; i + 1 < words.length; i++) {
+                if (ENGLISH_GRAMMAR_BIGRAMS.contains(words[i] + " " + words[i + 1])) score += 5;
+                String subject = words[i], verb = words[i + 1];
+                boolean singularThird = ("he".equals(subject) || "she".equals(subject) || "it".equals(subject))
+                        && ("are".equals(verb) || "were".equals(verb) || "have".equals(verb) || "do".equals(verb));
+                boolean otherPronoun = ("i".equals(subject) || "you".equals(subject)
+                        || "we".equals(subject) || "they".equals(subject))
+                        && ("is".equals(verb) || "was".equals(verb) || "has".equals(verb) || "does".equals(verb));
+                if (singularThird || otherPronoun) score -= 8;
+                if (("can".equals(subject) || "could".equals(subject) || "will".equals(subject)
+                        || "would".equals(subject) || "should".equals(subject) || "must".equals(subject))
+                        && ("is".equals(verb) || "are".equals(verb) || "has".equals(verb))) score -= 5;
+                if ("to".equals(subject) && ("is".equals(verb) || "are".equals(verb) || "was".equals(verb))) score -= 5;
+                if (("this".equals(subject) || "that".equals(subject)) && ("are".equals(verb) || "were".equals(verb))) score -= 5;
+                if (("these".equals(subject) || "those".equals(subject)) && ("is".equals(verb) || "was".equals(verb))) score -= 5;
+                if ("a".equals(subject) || "an".equals(subject)) {
+                    boolean vowelSound = startsWithEnglishVowelSound(verb);
+                    if (("an".equals(subject) && vowelSound) || ("a".equals(subject) && !vowelSound)) score += 3;
+                    else score -= 3;
+                }
+                if ("many".equals(subject) && ("is".equals(verb) || "was".equals(verb))) score -= 4;
+                if ("much".equals(subject) && ("are".equals(verb) || "were".equals(verb))) score -= 4;
+            }
+        } else if ("MARATHI".equalsIgnoreCase(language)) {
+            for (int i = 0; i + 2 < words.length; i++) {
+                if (MARATHI_GRAMMAR_TRIGRAMS.contains(words[i] + " " + words[i + 1] + " " + words[i + 2])) score += 10;
+            }
+            for (int i = 0; i + 1 < words.length; i++) {
+                if (MARATHI_GRAMMAR_BIGRAMS.contains(words[i] + " " + words[i + 1])) score += 6;
+                // Common Marathi postpositions/clitics should follow a noun or pronoun,
+                // not appear as a detached sentence-initial token.
+                if (i == 0 && isMarathiPostposition(words[i])) score -= 3;
+                String subject = words[i], verb = words[i + 1];
+                if (("मी".equals(subject) && ("आहेस".equals(verb) || "आहात".equals(verb)))
+                        || (("तू".equals(subject)) && ("आहे".equals(verb) || "आहात".equals(verb)))
+                        || (("तुम्ही".equals(subject) || "आम्ही".equals(subject) || "आपण".equals(subject))
+                        && ("आहे".equals(verb) || "आहेस".equals(verb)))
+                        || (("तो".equals(subject) || "ती".equals(subject)) && "आहेत".equals(verb))) score -= 8;
+                if (!marathiAgreementIsPlausible(subject, verb)) score -= 6;
+            }
         }
         return score;
     }
 
+    private static boolean marathiAgreementIsPlausible(String subject, String verb) {
+        if ("तुम्ही".equals(subject) || "आम्ही".equals(subject) || "आपण".equals(subject)) {
+            return !("तुम्ही".equals(subject) && ("करतो".equals(verb) || "करते".equals(verb)
+                    || "जातो".equals(verb) || "जाते".equals(verb)))
+                    && !("आम्ही".equals(subject) && ("आहेस".equals(verb) || "आहात".equals(verb)))
+                    && !("आपण".equals(subject) && ("आहेस".equals(verb) || "आहात".equals(verb)));
+        }
+        if ("तू".equals(subject)) {
+            return !("करतो".equals(verb) || "करते".equals(verb) || "जातो".equals(verb)
+                    || "जाते".equals(verb) || "आहे".equals(verb) || "आहेत".equals(verb));
+        }
+        if ("तो".equals(subject)) {
+            return !("करते".equals(verb) || "जाते".equals(verb) || "गेली".equals(verb)
+                    || "आहेत".equals(verb) || "होत्या".equals(verb));
+        }
+        if ("ती".equals(subject)) {
+            return !("करतो".equals(verb) || "जातो".equals(verb) || "गेला".equals(verb)
+                    || "आहेत".equals(verb) || "होते".equals(verb));
+        }
+        return true;
+    }
+
+    private static boolean startsWithEnglishVowelSound(String word) {
+        if (word == null || word.isEmpty()) return false;
+        if (word.startsWith("uni") || word.startsWith("use") || word.startsWith("user")
+                || word.startsWith("euro") || word.startsWith("one") || word.startsWith("once")) return false;
+        if (word.startsWith("hour") || word.startsWith("honest") || word.startsWith("heir")) return true;
+        char first = Character.toLowerCase(word.charAt(0));
+        return first == 'a' || first == 'e' || first == 'i' || first == 'o' || first == 'u';
+    }
+
+    private static boolean isMarathiPostposition(String word) {
+        return "मध्ये".equals(word) || "वर".equals(word) || "पासून".equals(word)
+                || "साठी".equals(word) || "कडे".equals(word) || "ला".equals(word)
+                || "ने".equals(word) || "चा".equals(word) || "ची".equals(word)
+                || "चे".equals(word) || "च्या".equals(word);
+    }
+
     /**
      * Refines recognized text by comparing with dictionary and candidate hypotheses.
-     * Provides the definitive "final touch" for pristine accuracy.
+     * Uses lexical and grammar evidence to rank available candidates conservatively.
      */
     public String refineRecognizedLine(String text, String language, List<String> alternatives) {
         if (text == null || text.trim().isEmpty()) return text;

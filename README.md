@@ -19,8 +19,13 @@ A digital notebook designed for Android tablets and phones, with stylus drawing,
 
 ### 🧠 2. On-Device Handwriting Recognition
 - Uses ML Kit Digital Ink Recognition for English, Hindi, and Marathi instead of geometric character guessing.
+- The **Auto** setting compares supported English, Hindi, and Marathi model hypotheses; it does not detect every language.
+- A second on-device image-text recognizer contributes an additional candidate from a rendered copy of the strokes. It is generic OCR rather than a handwriting-specific model, so review its suggestion before using it.
 - Recognition runs asynchronously; original handwriting stays on the page if recognition fails.
 - Language models download on first use and run on-device afterward. The first download requires an internet connection.
+- Local corrections, vocabulary, and stroke examples personalize candidate ranking; they do not train or modify ML Kit's recognition model. The `.onhw` file exports this local learning.
+- Bundled dictionaries are finite wordlists with heuristic morphology. They are not exhaustive language dictionaries.
+- Candidate ranking also uses conservative English agreement cues and Marathi orthographic, vibhakti, sandhi, and common agreement cues. These are heuristics, not a complete English or Marathi grammar, and they rank OCR hypotheses rather than guarantee a corrected transcript.
 - **Undo/Redo Support**: Converted text can be undone with a single tap, immediately restoring the original handwriting.
 
 ### 🔤 3. External TTF & OTF Custom Font Import
@@ -43,9 +48,9 @@ A digital notebook designed for Android tablets and phones, with stylus drawing,
 - Proportionally handles extended infinite heights without content clipping.
 - Export dialog displays file name, file size, exact device path, and one-tap **Share**, **Open File**, and **Copy Path** buttons.
 
-### 🔒 6. 100% Offline & Private
-- Zero network permissions requested in `AndroidManifest.xml`.
-- No cloud dependencies, no analytics, no user tracking, and no subscriptions. All processing is 100% on-device.
+### 🔒 6. On-Device Processing & Privacy
+- Recognition and image OCR run on-device. Digital Ink language models require a first-use download; after download, recognition works offline.
+- No cloud recognition service, analytics, or user tracking is used.
 
 ---
 
