@@ -64,7 +64,7 @@ public class CanvasView extends View {
     private static final float STROKE_GRID_CELL_SIZE = 512f;
     private static final long MAX_STROKE_GRID_CELLS = 64L;
     private static final long MAX_VISIBLE_GRID_CELLS = 128L;
-    private static final int LASER_FADE_BUCKETS = 8;
+    private static final int LASER_FADE_BUCKETS = 24;
     private static final ExecutorService RECOGNITION_PREPROCESSOR =
             Executors.newSingleThreadExecutor();
 
@@ -2408,7 +2408,8 @@ public class CanvasView extends View {
                         if (p2.startsSubpath) continue;
                         LaserPoint p0 = i > 0 && !p1.startsSubpath ? laserTrail.get(i - 1) : p1;
                         LaserPoint p3 = i + 2 < laserTrail.size() && !laserTrail.get(i + 2).startsSubpath ? laserTrail.get(i + 2) : p2;
-                        float lifeRatio = Math.max(0.05f, 1.0f - (float) (now - p2.timestamp) / (float) laserFadeDurationMs);
+                        float lifeRatio = Math.max(0f, Math.min(1f,
+                                1.0f - (float) (now - p2.timestamp) / (float) laserFadeDurationMs));
                         int bucket = Math.min(LASER_FADE_BUCKETS - 1, (int) (lifeRatio * LASER_FADE_BUCKETS));
                         Path path = laserFadePaths[bucket];
                         float control1X = p1.x + (p2.x - p0.x) / 6f;
@@ -2423,12 +2424,14 @@ public class CanvasView extends View {
                 for (int bucket = 0; bucket < LASER_FADE_BUCKETS; bucket++) {
                     if (!usedLaserFadePaths[bucket]) continue;
                     float lifeRatio = (bucket + 0.5f) / LASER_FADE_BUCKETS;
+                    float fade = lifeRatio * lifeRatio * (3f - 2f * lifeRatio);
+                    float widthScale = 0.72f + 0.28f * fade;
                     laserGlowPaint.setColor(laserColor);
-                    laserGlowPaint.setAlpha((int) (180 * lifeRatio));
-                    laserGlowPaint.setStrokeWidth(laserStrokeWidth * 2.2f * lifeRatio);
+                    laserGlowPaint.setAlpha(Math.round(180f * fade));
+                    laserGlowPaint.setStrokeWidth(laserStrokeWidth * 2.2f * widthScale);
                     canvas.drawPath(laserFadePaths[bucket], laserGlowPaint);
-                    laserCorePaint.setAlpha((int) (255 * lifeRatio));
-                    laserCorePaint.setStrokeWidth(laserStrokeWidth * 0.65f * lifeRatio);
+                    laserCorePaint.setAlpha(Math.round(255f * fade));
+                    laserCorePaint.setStrokeWidth(laserStrokeWidth * 0.65f * widthScale);
                     canvas.drawPath(laserFadePaths[bucket], laserCorePaint);
                 }
                 if (!laserTrail.isEmpty()) {
@@ -3691,7 +3694,7 @@ public class CanvasView extends View {
                                   Map<String, List<TextItem>> groups) {
         float letter = Math.max(-0.12f, Math.min(0.40f, letterSpacingEm));
         // Negative word spacing tightens the natural gap; positive spacing loosens it.
-        float word = Math.max(-0.50f, Math.min(2f, wordSpacingEm));
+        float word = Math.max(-5.0f, Math.min(2f, wordSpacingEm));
         for (TextItem item : selectedTexts) {
             if (item.spacingGroupId == null || item.spacingGroupId.isEmpty()) {
                 item.letterSpacingEm = letter;

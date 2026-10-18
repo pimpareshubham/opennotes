@@ -473,6 +473,25 @@ public final class HandwritingRecognitionEngine {
             detectedLang = "MARATHI";
         }
 
+        // Digital Ink language models are optimized for words and frequently turn a
+        // hand-drawn arrow into punctuation or unrelated letters. For an isolated,
+        // unmistakable two/three-stroke arrow, use its geometry directly. This is
+        // intentionally restricted to a complete arrow selection so ordinary writing
+        // and arrows embedded in text continue through ML Kit unchanged.
+        String standaloneArrow = recognizeStandaloneArrow(strokes);
+        if (standaloneArrow != null) {
+            RectF arrowBounds = boundsOf(strokes);
+            if (arrowBounds != null) {
+                float arrowSize = Math.max(26f, Math.min(65f,
+                        Math.max(arrowBounds.width(), arrowBounds.height()) * 0.62f));
+                MAIN.post(() -> callback.onSuccess(new RecognitionResult(
+                        standaloneArrow, detectedLang, new RectF(arrowBounds), arrowSize,
+                        Collections.singletonList(standaloneArrow), 0f,
+                        arrowBounds.left, arrowBounds.bottom - 4f)));
+                return;
+            }
+        }
+
         // For steep or vertical writing (|angle| >= 30°), deskew before the primary pass so ML Kit receives
         // canonical horizontal ink. For natural slant (|angle| < 30°), evaluate unrotated first.
         final float primaryPassAngle = (Math.abs(writingAngle) >= 30.0f) ? writingAngle : 0f;
@@ -1454,7 +1473,267 @@ public final class HandwritingRecognitionEngine {
             }
         }
 
-        return pool;
+        return rerankClearAnusvarAlternatives(strokes, pool, language);
+    }
+
+    /**
+     * A tiny detached dot above Devanagari handwriting is strong evidence for anusvara.
+     * Reorder only model-provided alternatives in that narrow case; never invent text or
+     * let broad line geometry change unrelated matras or consonants.
+     */
+    private static List<String> rerankClearAnusvarAlternatives(List<Stroke> strokes,
+                                                               List<String> candidates,
+                                                               String language) {
+        if (strokes == null || candidates == null || candidates.size() < 2
+                || !("MARATHI".equalsIgnoreCase(language) || "HINDI".equalsIgnoreCase(language))
+                || !hasClearDetachedAnusvarDot(strokes)) {
+            return candidates;
+        }
+
+        boolean hasDevanagariCandidate = false;
+        for (String candidate : candidates) {
+            if (containsDevanagari(candidate)) {
+                hasDevanagariCandidate = true;
+                break;
+            }
+        }
+        if (!hasDevanagariCandidate) return candidates;
+
+        Map<String, Integer> originalRanks = new HashMap<>();
+        for (int i = 0; i < candidates.size(); i++) {
+            originalRanks.putIfAbsent(candidates.get(i), i);
+        }
+        List<String> ranked = new ArrayList<>(candidates);
+        ranked.sort((left, right) -> {
+            boolean leftHasAnusvar = left != null && left.indexOf('\u0902') >= 0;
+            boolean rightHasAnusvar = right != null && right.indexOf('\u0902') >= 0;
+            if (leftHasAnusvar != rightHasAnusvar) return leftHasAnusvar ? -1 : 1;
+            return Integer.compare(originalRanks.getOrDefault(left, Integer.MAX_VALUE),
+                    originalRanks.getOrDefault(right, Integer.MAX_VALUE));
+        });
+        return ranked;
+    }
+
+    private static boolean hasClearDetachedAnusvarDot(List<Stroke> strokes) {
+        RectF allInk = boundsOf(strokes);
+        if (allInk == null || allInk.width() < 8f || allInk.height() < 12f) return false;
+        float textHeight = allInk.height();
+        float maxDotExtent = Math.max(4f, textHeight * 0.18f);
+
+        for (Stroke candidate : strokes) {
+            if (candidate == null) continue;
+            List<DrawingPoint> points = candidate.getRecognitionPoints();
+            if (points == null || points.isEmpty()) continue;
+
+            RectF dotBounds = rawBounds(points);
+            if (dotBounds == null || dotBounds.width() > maxDotExtent
+                    || dotBounds.height() > maxDotExtent) continue;
+
+            float arcLength = 0f;
+            for (int i = 1; i < points.size(); i++) {
+                DrawingPoint before = points.get(i - 1);
+                DrawingPoint after = points.get(i);
+                arcLength += (float) Math.hypot(after.x - before.x, after.y - before.y);
+            }
+            if (points.size() > 8 && arcLength > textHeight * 0.20f) continue;
+            float dotX = dotBounds.centerX();
+            float dotY = dotBounds.centerY();
+            if (dotY > allInk.top + textHeight * 0.46f) continue;
+
+            RectF bodyBounds = new RectF();
+            boolean hasBody = false;
+            for (Stroke other : strokes) {
+                if (other == null || other == candidate) continue;
+                List<DrawingPoint> bodyPoints = other.getRecognitionPoints();
+                if (bodyPoints == null) continue;
+                RectF part = rawBounds(bodyPoints);
+                if (part == null || part.height() < textHeight * 0.30f) continue;
+                if (!hasBody) {
+                    bodyBounds.set(part);
+                    hasBody = true;
+                } else {
+                    bodyBounds.union(part);
+                }
+            }
+            if (!hasBody || bodyBounds.height() < textHeight * 0.40f) continue;
+
+            float horizontalAllowance = Math.max(3f, bodyBounds.height() * 0.18f);
+            boolean aboveBody = dotY < bodyBounds.top + bodyBounds.height() * 0.42f;
+            boolean alignedWithText = dotX >= bodyBounds.left - horizontalAllowance
+                    && dotX <= bodyBounds.right + horizontalAllowance;
+            if (aboveBody && alignedWithText) return true;
+        }
+        return false;
+    }
+
+    private static RectF rawBounds(List<DrawingPoint> points) {
+        if (points == null || points.isEmpty()) return null;
+        RectF bounds = null;
+        for (DrawingPoint point : points) {
+            if (point == null || !isFinite(point.x) || !isFinite(point.y)) continue;
+            if (bounds == null) bounds = new RectF(point.x, point.y, point.x, point.y);
+            else bounds.union(point.x, point.y);
+        }
+        return bounds;
+    }
+
+    private static boolean containsDevanagari(String text) {
+        if (text == null) return false;
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.UnicodeBlock.of(text.charAt(i)) == Character.UnicodeBlock.DEVANAGARI) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Recognize a standalone arrow made from a shaft plus a two-arm arrowhead.
+     * A three-stroke arrow has one stroke per component; a two-stroke arrow has
+     * a separate shaft and a V-shaped arrowhead. Geometry is measured from the
+     * original input samples so pen smoothing and zoom do not alter recognition.
+     */
+    private static String recognizeStandaloneArrow(List<Stroke> input) {
+        if (input == null) return null;
+        List<List<DrawingPoint>> parts = new ArrayList<>(input.size());
+        RectF bounds = null;
+        for (Stroke stroke : input) {
+            if (stroke == null) continue;
+            List<DrawingPoint> points = stroke.getRecognitionPoints();
+            if (points == null || points.size() < 2) return null;
+            RectF partBounds = rawBounds(points);
+            if (partBounds == null) return null;
+            if (bounds == null) bounds = new RectF(partBounds);
+            else bounds.union(partBounds);
+            parts.add(points);
+        }
+        if (parts.size() < 2 || parts.size() > 3 || bounds == null) return null;
+
+        float majorAxis = Math.max(bounds.width(), bounds.height());
+        float minorAxis = Math.min(bounds.width(), bounds.height());
+        if (majorAxis < 22f || majorAxis / Math.max(1f, minorAxis) < 1.35f) return null;
+
+        int shaftIndex = -1;
+        float shaftLength = 0f;
+        for (int i = 0; i < parts.size(); i++) {
+            List<DrawingPoint> points = parts.get(i);
+            DrawingPoint first = points.get(0);
+            DrawingPoint last = points.get(points.size() - 1);
+            float chord = pointDistance(first, last);
+            float arc = strokeArcLength(points);
+            if (chord >= majorAxis * 0.56f && arc > 0f
+                    && chord / arc >= 0.68f && chord > shaftLength) {
+                shaftIndex = i;
+                shaftLength = chord;
+            }
+        }
+        if (shaftIndex < 0) return null;
+
+        List<DrawingPoint> shaft = parts.get(shaftIndex);
+        DrawingPoint shaftStart = shaft.get(0);
+        DrawingPoint shaftEnd = shaft.get(shaft.size() - 1);
+        float tolerance = Math.max(5f, majorAxis * 0.16f);
+        for (int tipAtEnd = 0; tipAtEnd < 2; tipAtEnd++) {
+            DrawingPoint tip = tipAtEnd == 1 ? shaftEnd : shaftStart;
+            DrawingPoint tail = tipAtEnd == 1 ? shaftStart : shaftEnd;
+            float dirX = (tip.x - tail.x) / shaftLength;
+            float dirY = (tip.y - tail.y) / shaftLength;
+            if (hasArrowhead(parts, shaftIndex, tip, dirX, dirY, majorAxis, tolerance)) {
+                return arrowGlyph(dirX, dirY);
+            }
+        }
+        return null;
+    }
+
+    private static boolean hasArrowhead(List<List<DrawingPoint>> parts, int shaftIndex,
+                                        DrawingPoint tip, float dirX, float dirY,
+                                        float majorAxis, float tolerance) {
+        if (parts.size() == 3) {
+            List<float[]> arms = new ArrayList<>(2);
+            for (int i = 0; i < parts.size(); i++) {
+                if (i == shaftIndex) continue;
+                float[] arm = getArmFromTip(parts.get(i), tip, dirX, dirY,
+                        majorAxis, tolerance);
+                if (arm == null) return false;
+                arms.add(arm);
+            }
+            return areOppositeArrowArms(arms.get(0), arms.get(1));
+        }
+
+        // A V can be drawn as a single polyline. Its nearest point to the shaft
+        // tip must be internal, with both outer ends behind the tip on opposite
+        // sides of the shaft.
+        List<DrawingPoint> head = parts.get(shaftIndex == 0 ? 1 : 0);
+        int nearestIndex = -1;
+        float nearestDistance = Float.MAX_VALUE;
+        for (int i = 0; i < head.size(); i++) {
+            float distance = pointDistance(head.get(i), tip);
+            if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestIndex = i;
+            }
+        }
+        if (nearestIndex <= 0 || nearestIndex >= head.size() - 1
+                || nearestDistance > tolerance) return false;
+        float[] firstArm = armVector(tip, head.get(0), dirX, dirY, majorAxis);
+        float[] secondArm = armVector(tip, head.get(head.size() - 1), dirX, dirY, majorAxis);
+        return firstArm != null && secondArm != null
+                && areOppositeArrowArms(firstArm, secondArm);
+    }
+
+    /** Returns [direction dot, signed cross] for an arm that connects to the tip. */
+    private static float[] getArmFromTip(List<DrawingPoint> points, DrawingPoint tip,
+                                         float dirX, float dirY, float majorAxis,
+                                         float tolerance) {
+        if (points == null || points.size() < 2) return null;
+        DrawingPoint first = points.get(0);
+        DrawingPoint last = points.get(points.size() - 1);
+        float firstDistance = pointDistance(first, tip);
+        float lastDistance = pointDistance(last, tip);
+        DrawingPoint far;
+        if (Math.min(firstDistance, lastDistance) > tolerance) return null;
+        far = firstDistance <= lastDistance ? last : first;
+        return armVector(tip, far, dirX, dirY, majorAxis);
+    }
+
+    private static float[] armVector(DrawingPoint tip, DrawingPoint far,
+                                     float dirX, float dirY, float majorAxis) {
+        float x = far.x - tip.x;
+        float y = far.y - tip.y;
+        float length = (float) Math.hypot(x, y);
+        if (length < majorAxis * 0.08f || length > majorAxis * 0.70f) return null;
+        float dot = (x * dirX + y * dirY) / length;
+        float cross = (dirX * y - dirY * x) / length;
+        if (dot > -0.08f || Math.abs(cross) < 0.18f) return null;
+        return new float[]{dot, cross};
+    }
+
+    private static boolean areOppositeArrowArms(float[] first, float[] second) {
+        return first != null && second != null && first[1] * second[1] < 0f;
+    }
+
+    private static float strokeArcLength(List<DrawingPoint> points) {
+        float length = 0f;
+        for (int i = 1; i < points.size(); i++) {
+            length += pointDistance(points.get(i - 1), points.get(i));
+        }
+        return length;
+    }
+
+    private static float pointDistance(DrawingPoint first, DrawingPoint second) {
+        return (float) Math.hypot(second.x - first.x, second.y - first.y);
+    }
+
+    private static String arrowGlyph(float dx, float dy) {
+        int sector = Math.floorMod(Math.round((float) Math.atan2(dy, dx) / ((float) Math.PI / 4f)), 8);
+        switch (sector) {
+            case 0: return "\u2192";
+            case 1: return "\u2198";
+            case 2: return "\u2193";
+            case 3: return "\u2199";
+            case 4: return "\u2190";
+            case 5: return "\u2196";
+            case 6: return "\u2191";
+            default: return "\u2197";
+        }
     }
 
     private static String getLastToken(String text) {

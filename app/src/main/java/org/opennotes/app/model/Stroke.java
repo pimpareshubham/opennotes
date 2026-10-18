@@ -117,60 +117,110 @@ public class Stroke {
             return;
         }
 
+        // Calm small sample-to-sample direction changes before building the fountain nib outline.
+        // Recognition keeps the original samples; this only improves how the ink is rendered.
+        if (tool == DrawingTool.FOUNTAIN && count > 3) {
+            List<DrawingPoint> smoothed = new ArrayList<>(count);
+            smoothed.add(filtered.get(0));
+            for (int i = 1; i < count - 1; i++) {
+                DrawingPoint before = filtered.get(i - 1);
+                DrawingPoint point = filtered.get(i);
+                DrawingPoint after = filtered.get(i + 1);
+                smoothed.add(new DrawingPoint(
+                        before.x * 0.18f + point.x * 0.64f + after.x * 0.18f,
+                        before.y * 0.18f + point.y * 0.64f + after.y * 0.18f,
+                        before.pressure * 0.18f + point.pressure * 0.64f + after.pressure * 0.18f,
+                        point.timeMillis));
+            }
+            smoothed.add(filtered.get(count - 1));
+            filtered = smoothed;
+            count = filtered.size();
+        }
+
         // 3. Compute continuous base widths with pressure
         float[] widths = new float[count];
         for (int i = 0; i < count; i++) {
             widths[i] = getPressureWidth(filtered.get(i).pressure, sensitivity);
         }
 
-        // Multi-point forward-backward smoothing on width so line width transitions like real ink
+        // Smooth pressure noise across a short spatial window so the nib does not pulse between samples.
         if (count > 2) {
             float[] smoothedWidths = new float[count];
-            smoothedWidths[0] = widths[0];
-            smoothedWidths[count - 1] = widths[count - 1];
-            for (int i = 1; i < count - 1; i++) {
-                smoothedWidths[i] = 0.22f * widths[i - 1] + 0.56f * widths[i] + 0.22f * widths[i + 1];
+            final float[] widthWeights = {1f, 2f, 3f, 2f, 1f};
+            for (int i = 0; i < count; i++) {
+                float weightedWidth = 0f;
+                float weightTotal = 0f;
+                for (int offset = -2; offset <= 2; offset++) {
+                    int sampleIndex = Math.max(0, Math.min(count - 1, i + offset));
+                    float weight = widthWeights[offset + 2];
+                    weightedWidth += widths[sampleIndex] * weight;
+                    weightTotal += weight;
+                }
+                smoothedWidths[i] = weightedWidth / weightTotal;
             }
             System.arraycopy(smoothedWidths, 0, widths, 0, count);
         }
 
-        // 4. Start & End Calligraphic Tapering:
-        // ELIMINATES start & end circular blobs/dots completely!
-        // Pen touches gently and lifts off into an elegant fine tip.
+        // Taper by traveled distance, not sample index, so tip shape stays consistent at 60/120 Hz.
         if (count >= 3) {
-            widths[0] *= 0.32f;
-            widths[1] *= 0.62f;
-            if (count > 4) widths[2] *= 0.84f;
-
-            widths[count - 1] *= 0.28f;
-            widths[count - 2] *= 0.58f;
-            if (count > 4) widths[count - 3] *= 0.82f;
-        } else {
-            widths[0] *= 0.40f;
-            widths[1] *= 0.40f;
+            float totalLength = 0f;
+            for (int i = 1; i < count; i++) {
+                DrawingPoint before = filtered.get(i - 1);
+                DrawingPoint after = filtered.get(i);
+                totalLength += (float) Math.hypot(after.x - before.x, after.y - before.y);
+            }
+            float taperLength = Math.min(totalLength * 0.30f, Math.max(3f, width * 1.5f));
+            if (taperLength > 0f) {
+                float traveled = 0f;
+                for (int i = 0; i < count; i++) {
+                    if (i > 0) {
+                        DrawingPoint before = filtered.get(i - 1);
+                        DrawingPoint point = filtered.get(i);
+                        traveled += (float) Math.hypot(point.x - before.x, point.y - before.y);
+                    }
+                    float fromStart = smoothStep(Math.min(1f, traveled / taperLength));
+                    float fromEnd = smoothStep(Math.min(1f, (totalLength - traveled) / taperLength));
+                    widths[i] *= Math.min(fromStart, fromEnd);
+                }
+            }
         }
 
         // 5. Calligraphic Nib Angle Modulation for FOUNTAIN tool
         // Fountain pen nib held at ~45°: downstrokes expand, cross-strokes are crisp & fine
         if (tool == DrawingTool.FOUNTAIN) {
             for (int i = 0; i < count; i++) {
-                float tx, ty;
-                if (i == 0) {
-                    tx = filtered.get(1).x - filtered.get(0).x;
-                    ty = filtered.get(1).y - filtered.get(0).y;
-                } else if (i == count - 1) {
-                    tx = filtered.get(count - 1).x - filtered.get(count - 2).x;
-                    ty = filtered.get(count - 1).y - filtered.get(count - 2).y;
-                } else {
-                    tx = filtered.get(i + 1).x - filtered.get(i - 1).x;
-                    ty = filtered.get(i + 1).y - filtered.get(i - 1).y;
-                }
+                int tangentStart = Math.max(0, i - 2);
+                int tangentEnd = Math.min(count - 1, i + 2);
+                float tx = filtered.get(tangentEnd).x - filtered.get(tangentStart).x;
+                float ty = filtered.get(tangentEnd).y - filtered.get(tangentStart).y;
                 float len = (float) Math.hypot(tx, ty);
                 if (len > 0.0001f) {
                     tx /= len;
                     ty /= len;
                     float modulation = 0.72f + 0.52f * Math.abs(0.7071f * tx - 0.7071f * ty);
                     widths[i] *= modulation;
+                }
+            }
+        }
+
+        // Keep the variable-width ribbon from folding back over itself at sharp reversals.
+        if (tool == DrawingTool.FOUNTAIN && count > 2) {
+            for (int i = 1; i < count - 1; i++) {
+                DrawingPoint before = filtered.get(i - 1);
+                DrawingPoint point = filtered.get(i);
+                DrawingPoint after = filtered.get(i + 1);
+                float inX = point.x - before.x;
+                float inY = point.y - before.y;
+                float outX = after.x - point.x;
+                float outY = after.y - point.y;
+                float inLength = (float) Math.hypot(inX, inY);
+                float outLength = (float) Math.hypot(outX, outY);
+                if (inLength > 0.001f && outLength > 0.001f) {
+                    float directionDot = (inX * outX + inY * outY) / (inLength * outLength);
+                    if (directionDot < -0.55f) {
+                        float cornerWidthLimit = Math.max(1.2f, Math.min(inLength, outLength) * 0.55f);
+                        widths[i] = Math.min(widths[i], cornerWidthLimit);
+                    }
                 }
             }
         }
@@ -184,17 +234,10 @@ public class Stroke {
         float[] tanY = new float[count];
 
         for (int i = 0; i < count; i++) {
-            float tx, ty;
-            if (i == 0) {
-                tx = filtered.get(1).x - filtered.get(0).x;
-                ty = filtered.get(1).y - filtered.get(0).y;
-            } else if (i == count - 1) {
-                tx = filtered.get(count - 1).x - filtered.get(count - 2).x;
-                ty = filtered.get(count - 1).y - filtered.get(count - 2).y;
-            } else {
-                tx = filtered.get(i + 1).x - filtered.get(i - 1).x;
-                ty = filtered.get(i + 1).y - filtered.get(i - 1).y;
-            }
+            int tangentStart = Math.max(0, i - 2);
+            int tangentEnd = Math.min(count - 1, i + 2);
+            float tx = filtered.get(tangentEnd).x - filtered.get(tangentStart).x;
+            float ty = filtered.get(tangentEnd).y - filtered.get(tangentStart).y;
             float dist = (float) Math.hypot(tx, ty);
             if (dist < 0.0001f) {
                 tx = 1f;
@@ -255,6 +298,11 @@ public class Stroke {
 
         cachedPressurePath = path;
         pressurePathDirty = false;
+    }
+
+    private static float smoothStep(float value) {
+        float t = Math.max(0f, Math.min(1f, value));
+        return t * t * (3f - 2f * t);
     }
 
     private float getPressureWidth(float pressure, float sensitivity) {

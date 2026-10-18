@@ -28,6 +28,7 @@ public class AppSettings {
     private static final String KEY_INK_COLOR = "pref_ink_color";
     private static final String KEY_PRESSURE_SENSITIVITY = "pref_pressure_sensitivity";
     private static final String KEY_STABILIZATION = "pref_stabilization";
+    private static final String KEY_LASER_DURATION_MS = "pref_laser_duration_ms";
     private static final String KEY_STRAIGHT_LINE_ASSIST = "pref_straight_line_assist";
     private static final String KEY_STYLUS_ONLY = "pref_stylus_only";
     private static final String KEY_FINGER_MOVE_CANVAS = "pref_finger_move_canvas";
@@ -110,6 +111,14 @@ public class AppSettings {
 
     public void setStabilization(float value) {
         prefs.edit().putFloat(KEY_STABILIZATION, value).apply();
+    }
+
+    public long getLaserDurationMs() {
+        return prefs.getLong(KEY_LASER_DURATION_MS, 1500L);
+    }
+
+    public void setLaserDurationMs(long durationMs) {
+        prefs.edit().putLong(KEY_LASER_DURATION_MS, Math.max(400L, Math.min(5000L, durationMs))).apply();
     }
 
     // Straight Line Assist

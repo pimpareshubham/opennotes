@@ -156,7 +156,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private LinearLayout layoutStabilization;
     private SeekBar seekStabilization;
     private TextView textStabilizationValue;
+    private TextView textStabilizationTitle;
     private SwitchCompat switchStraightLine;
+    private LinearLayout layoutStraightLine;
     private LinearLayout layoutToolQuickColors;
     private Button btnAddToPenBox;
     private LinearLayout layoutPenBoxDock;
@@ -427,6 +429,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         layoutStabilization = findViewById(R.id.layoutStabilization);
         seekStabilization = findViewById(R.id.seekStabilization);
         textStabilizationValue = findViewById(R.id.textStabilizationValue);
+        textStabilizationTitle = findViewById(R.id.textStabilizationTitle);
+        layoutStraightLine = findViewById(R.id.layoutStraightLine);
         switchStraightLine = findViewById(R.id.switchStraightLine);
         layoutToolQuickColors = findViewById(R.id.layoutToolQuickColors);
         btnAddToPenBox = findViewById(R.id.btnAddToPenBox);
@@ -1068,7 +1072,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnLassoStyle.setOnClickListener(v -> showLassoStyleDialog());
         btnLassoDuplicate.setOnClickListener(v -> canvasView.duplicateSelection());
         btnLassoColor.setOnClickListener(v -> {
-            StarColorPickerDialog.show(this, "Selection Color", canvasView.getColor(), color -> {
+            StarColorPickerDialog.show(this, "Selection Color", canvasView.getSelectionColor(), color -> {
                 canvasView.setSelectionColor(color);
             });
         });
@@ -1103,7 +1107,56 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (textToolPropertyTitle != null && title != null) {
             textToolPropertyTitle.setText(title);
         }
-        if (canvasView.getTool() == DrawingTool.LASER) {
+        boolean laserTool = canvasView.getTool() == DrawingTool.LASER;
+        if (layoutPressureSensitivity != null) {
+            layoutPressureSensitivity.setVisibility(laserTool ? View.GONE : View.VISIBLE);
+        }
+        if (layoutStabilization != null) layoutStabilization.setVisibility(View.VISIBLE);
+        if (layoutStraightLine != null) {
+            layoutStraightLine.setVisibility(laserTool ? View.GONE : View.VISIBLE);
+        }
+        if (textStabilizationTitle != null) {
+            textStabilizationTitle.setText(laserTool ? "Laser trail duration" : "Stabilization");
+        }
+        if (seekStabilization != null) {
+            seekStabilization.setOnSeekBarChangeListener(null);
+            if (laserTool) {
+                long durationMs = canvasView.getLaserFadeDurationMs();
+                seekStabilization.setMax(100);
+                seekStabilization.setProgress(Math.round((durationMs - 400L) / 4600f * 100f));
+                textStabilizationValue.setText(String.format(Locale.US, "%.1f s", durationMs / 1000f));
+                seekStabilization.setContentDescription("Laser pointer trail duration from 0.4 to 5 seconds");
+                seekStabilization.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                    @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                        if (!fromUser) return;
+                        long selectedDurationMs = 400L + Math.round(progress * 46L);
+                        canvasView.setLaserFadeDurationMs(selectedDurationMs);
+                        textStabilizationValue.setText(String.format(Locale.US, "%.1f s", selectedDurationMs / 1000f));
+                        if (appSettings != null) appSettings.setLaserDurationMs(selectedDurationMs);
+                    }
+                    @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                    @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+                });
+            } else {
+                float stabilization = canvasView.getStrokeStabilization();
+                int progress = Math.round(stabilization * 100f);
+                seekStabilization.setProgress(progress);
+                textStabilizationValue.setText(progress + "%");
+                seekStabilization.setContentDescription("Stroke stabilization");
+                seekStabilization.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                    @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                        if (!fromUser) return;
+                        float value = progress / 100f;
+                        canvasView.setStrokeStabilization(value);
+                        textStabilizationValue.setText(progress + "%");
+                        if (appSettings != null) appSettings.setStabilization(value);
+                    }
+                    @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+                    @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+                });
+            }
+        }
+        if (laserTool) {
             if (textToolPropertyTitle != null) textToolPropertyTitle.setText("Laser Presentation Pointer");
             if (btnNibFine != null) {
                 btnNibFine.setText("Trail Line");
@@ -1130,15 +1183,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if (seekStrokeThickness != null) seekStrokeThickness.setProgress(Math.round(canvasView.getLaserStrokeWidth()));
             if (textThicknessValue != null) textThicknessValue.setText(String.format(Locale.US, "%.1f mm", canvasView.getLaserStrokeWidth() * 0.3f));
 
-            if (textStraightLineTitle != null) textStraightLineTitle.setText("Long Trail Duration (2.5s vs 1.2s)");
+            if (textStraightLineTitle != null) textStraightLineTitle.setText("Straight-Line Snapping");
             if (switchStraightLine != null) {
                 switchStraightLine.setOnCheckedChangeListener(null);
-                switchStraightLine.setChecked(canvasView.getLaserFadeDurationMs() > 1500L);
-                switchStraightLine.setOnCheckedChangeListener((btn, isChecked) -> {
-                    long duration = isChecked ? 2500L : 1200L;
-                    canvasView.setLaserFadeDurationMs(duration);
-                    Toast.makeText(this, isChecked ? "Trail Duration: 2.5s" : "Trail Duration: 1.2s", Toast.LENGTH_SHORT).show();
-                });
+                switchStraightLine.setChecked(false);
             }
         } else {
             if (btnNibFine != null) {
@@ -1364,6 +1412,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (seekPressureSensitivity != null) seekPressureSensitivity.setProgress(Math.round(savedPressure * 100f));
         if (textPressureValue != null) textPressureValue.setText(Math.round(savedPressure * 100f) + "%");
 
+        canvasView.setLaserFadeDurationMs(appSettings.getLaserDurationMs());
+
         // Restore Stabilization Smoothing
         float savedStab = appSettings.getStabilization();
         canvasView.setStrokeStabilization(savedStab);
@@ -1501,6 +1551,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             gd.setColor(qCol);
             gd.setStroke(2, 0xFF475569);
             dot.setBackground(gd);
+            dot.setContentDescription("Set ink color " + String.format(Locale.US, "#%06X", 0xFFFFFF & qCol));
+            dot.setFocusable(true);
+            dot.setClickable(true);
 
             dot.setOnClickListener(v -> {
                 canvasView.setColor(qCol);
@@ -1508,6 +1561,22 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             });
             layoutToolQuickColors.addView(dot);
         }
+
+        // Every drawing tool shares the ink color, so expose the full palette in its settings.
+        ImageView paletteButton = new ImageView(this);
+        int paletteSize = dpToPx(40);
+        LinearLayout.LayoutParams paletteParams = new LinearLayout.LayoutParams(paletteSize, paletteSize);
+        paletteParams.setMargins(dpToPx(8), 0, 0, 0);
+        paletteButton.setLayoutParams(paletteParams);
+        paletteButton.setImageResource(R.drawable.ic_palette);
+        paletteButton.setColorFilter(0xFF38BDF8);
+        paletteButton.setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8));
+        paletteButton.setBackgroundResource(android.R.drawable.list_selector_background);
+        paletteButton.setContentDescription("Open full ink color palette");
+        paletteButton.setFocusable(true);
+        paletteButton.setClickable(true);
+        paletteButton.setOnClickListener(v -> showColorPickerDialog());
+        layoutToolQuickColors.addView(paletteButton);
 
         btnAddToPenBox.setOnClickListener(v -> addCurrentToPenBox());
     }
@@ -1954,7 +2023,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 0xFFFEF08A  // Soft Pastel Yellow
         };
         int currentColor = canvasView.getSelectionColor();
-        populateStyleColorSwatches(layoutColors, palette, currentColor, color -> {
+        populateStyleColorSwatches(layoutColors, includeSelectedColor(palette, currentColor), currentColor, "Custom Ink Color", color -> {
             canvasView.setSelectionColor(color);
         });
 
@@ -1986,7 +2055,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     0x40625AFF, 0x4038BDF8, 0x4010B981, 0x40EF4444, 0x40F59E0B, 0x408B5CF6,
                     0x80625AFF, 0x8038BDF8, 0x8010B981, 0x80EF4444, 0x80F59E0B, 0x808B5CF6
             };
-            populateStyleColorSwatches(layoutFillColors, fillPalette, isFilled ? curFill : fillPalette[0], color -> {
+            int selectedFillColor = isFilled ? curFill : fillPalette[0];
+            populateStyleColorSwatches(layoutFillColors, includeSelectedColor(fillPalette, selectedFillColor), selectedFillColor, "Custom Fill Color", color -> {
                 canvasView.setSelectionFillColor(color);
             });
 
@@ -2031,7 +2101,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
-    private void populateStyleColorSwatches(LinearLayout container, int[] colors, int selectedColor, java.util.function.Consumer<Integer> onSelected) {
+    private void populateStyleColorSwatches(LinearLayout container, int[] colors, int selectedColor,
+                                           String customColorTitle, java.util.function.Consumer<Integer> onSelected) {
         if (container == null) return;
         container.removeAllViews();
         List<FrameLayout> swatchFrames = new ArrayList<>();
@@ -2102,12 +2173,22 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         plusFrame.setClickable(true);
         plusFrame.setFocusable(true);
         plusFrame.setOnClickListener(v -> {
-            StarColorPickerDialog.show(this, "Custom Style Color", selectedColor, color -> {
+            StarColorPickerDialog.show(this, customColorTitle, selectedColor, color -> {
                 onSelected.accept(color);
-                populateStyleColorSwatches(container, colors, color, onSelected);
+                populateStyleColorSwatches(container, includeSelectedColor(colors, color), color,
+                        customColorTitle, onSelected);
             });
         });
         container.addView(plusFrame);
+    }
+
+    private int[] includeSelectedColor(int[] palette, int selectedColor) {
+        for (int color : palette) {
+            if (color == selectedColor) return palette;
+        }
+        int[] expanded = java.util.Arrays.copyOf(palette, palette.length + 1);
+        expanded[palette.length] = selectedColor;
+        return expanded;
     }
 
 
@@ -2598,16 +2679,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         SeekBar letterSeek = new SeekBar(this);
         SeekBar wordSeek = new SeekBar(this);
         letterSeek.setMax(100);
-        wordSeek.setMax(100);
+        wordSeek.setMax(700);
         float[] letterValue = {Math.max(-0.12f, Math.min(0.40f, first.letterSpacingEm))};
-        final float minWordSpacing = -0.50f;
+        final float minWordSpacing = -5.0f;
         final float maxWordSpacing = 2.0f;
         float[] wordValue = {Math.max(minWordSpacing, Math.min(maxWordSpacing, first.wordSpacingEm))};
         letterSeek.setProgress(Math.round((letterValue[0] + 0.12f) / 0.52f * 100f));
         wordSeek.setProgress(Math.round((wordValue[0] - minWordSpacing)
-                / (maxWordSpacing - minWordSpacing) * 100f));
+                / (maxWordSpacing - minWordSpacing) * 700f));
         letterSeek.setContentDescription("Letter spacing");
-        wordSeek.setContentDescription("Word spacing; drag left to tighten, right to loosen");
+        wordSeek.setContentDescription("Word spacing from minus 5 em to plus 2 em; drag left to tighten, right to loosen");
         Runnable updateLabels = () -> {
             letterLabel.setText(String.format(Locale.getDefault(), "Letter spacing: %+.2f em", letterValue[0]));
             wordLabel.setText(String.format(Locale.getDefault(), "Word spacing: %+.2f em", wordValue[0]));
@@ -2624,7 +2705,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
         wordSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                wordValue[0] = minWordSpacing + progress / 100f * (maxWordSpacing - minWordSpacing);
+                wordValue[0] = minWordSpacing + progress / 700f * (maxWordSpacing - minWordSpacing);
                 updateLabels.run();
                 canvasView.updateSelectedTextSpacingPreview(letterValue[0], wordValue[0]);
             }
@@ -2652,7 +2733,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         reset.setOnClickListener(v -> {
             letterSeek.setProgress(Math.round((0.12f / 0.52f) * 100f));
             wordSeek.setProgress(Math.round((0f - minWordSpacing)
-                    / (maxWordSpacing - minWordSpacing) * 100f));
+                    / (maxWordSpacing - minWordSpacing) * 700f));
         });
         View spacer = new View(this);
         actions.addView(reset);
