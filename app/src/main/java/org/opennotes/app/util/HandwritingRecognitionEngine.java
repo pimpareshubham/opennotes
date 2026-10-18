@@ -386,7 +386,6 @@ public final class HandwritingRecognitionEngine {
                                         String preferredLanguage, String preContext,
                                         Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
-        org.opennotes.app.ai.LinguisticDictionary.getInstance(context);
         recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, false, callback);
     }
 
@@ -430,6 +429,15 @@ public final class HandwritingRecognitionEngine {
         recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, includeReviewSuggestions, callback);
     }
 
+    private static String recentPreContext(String preContext, int maxCodePoints) {
+        if (preContext == null || preContext.isEmpty() || maxCodePoints <= 0) return "";
+        int count = preContext.codePointCount(0, preContext.length());
+        int start = count > maxCodePoints
+                ? preContext.offsetByCodePoints(0, count - maxCodePoints)
+                : 0;
+        return preContext.substring(start);
+    }
+
 
 
     private static void recognizeMultiHypothesis(Context context,
@@ -439,7 +447,10 @@ public final class HandwritingRecognitionEngine {
                                                  boolean includeReviewSuggestions,
                                                  Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
-        final String contextText = preContext == null ? "" : preContext;
+        // ML Kit only uses the characters immediately before this line (roughly
+        // the last 20). Bound the context here so distant page text cannot bias a
+        // short word and oversized context is not needlessly passed through.
+        final String contextText = recentPreContext(preContext, 20);
 
         final float writingAngle = InkNormalizer.detectWritingAngleDegrees(strokes);
 
@@ -534,19 +545,8 @@ public final class HandwritingRecognitionEngine {
                     transformedStrokeCopies(originalStrokes, 90f, false, false), 90f));
         }
 
-        // Test common tilt variations: +15°, -15°, +30°, -30°, +45°, -45°
-        hypotheses.add(new AngleHypothesis(
-                transformedStrokeCopies(originalStrokes, 15f, false, false), 15f));
-        hypotheses.add(new AngleHypothesis(
-                transformedStrokeCopies(originalStrokes, -15f, false, false), -15f));
-        hypotheses.add(new AngleHypothesis(
-                transformedStrokeCopies(originalStrokes, 30f, false, false), 30f));
-        hypotheses.add(new AngleHypothesis(
-                transformedStrokeCopies(originalStrokes, -30f, false, false), -30f));
-        hypotheses.add(new AngleHypothesis(
-                transformedStrokeCopies(originalStrokes, 45f, false, false), 45f));
-        hypotheses.add(new AngleHypothesis(
-                transformedStrokeCopies(originalStrokes, -45f, false, false), -45f));
+        // Use only angles measured from this ink. A fixed rotation sweep creates
+        // plausible-looking but unrelated alternatives and adds serial model passes.
 
         runWaterfall(context, hypotheses, originalStrokes, 0, language, preContext, primaryResult, callback);
     }
@@ -740,56 +740,17 @@ public final class HandwritingRecognitionEngine {
 
     private static RecognitionResult disambiguateDigits(Context context, RecognitionResult result, List<Stroke> strokes) {
         if (result == null) return null;
-        String text = result.text != null ? result.text : "";
-        List<String> alternatives = new ArrayList<>(result.alternatives);
-
-        // 1. If text contains stray Devanagari numerals, convert to standard universal Arabic digits (0-9)
-        if (text.matches(".*[०-९].*")) {
-            text = convertDevanagariDigitsToArabic(text);
-        }
-
-        // 2. Geometric digit disambiguation (open-top 4 vs 9)
-        String geomDisambiguated = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(text, strokes);
-        if (!geomDisambiguated.equals(text)) {
-            if (!alternatives.contains(text)) alternatives.add(text);
-            text = geomDisambiguated;
-        }
-
-        // 3. Spatial and Topological Space Normalization (e.g. "24 8" -> "248", "B ook" -> "Book")
-        text = org.opennotes.app.ai.SpatialSpaceNormalizer.normalizeSpacing(text, strokes, result.language);
-
-        List<String> verifiedAlternatives = new ArrayList<>();
-        for (String alt : alternatives) {
-            if (alt.matches(".*[०-९].*")) {
-                alt = convertDevanagariDigitsToArabic(alt);
-            }
-            String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, strokes);
-            dis = org.opennotes.app.ai.SpatialSpaceNormalizer.normalizeSpacing(dis, strokes, result.language);
-            if (!verifiedAlternatives.contains(dis)) {
-                verifiedAlternatives.add(dis);
+        // Keep the model's first candidate intact. The line-wide geometric and
+        // dictionary heuristics cannot reliably override names, numbers, or words.
+        List<String> alternatives = new ArrayList<>();
+        if (result.text != null && !result.text.trim().isEmpty()) alternatives.add(result.text);
+        for (String candidate : result.alternatives) {
+            if (candidate != null && !candidate.trim().isEmpty() && !alternatives.contains(candidate)) {
+                alternatives.add(candidate);
             }
         }
-
-        // Apply built-in tri-lingual Marathi/Hindi/English Linguistic Dictionary refinement ("final touch")
-        if (context != null) {
-            try {
-                org.opennotes.app.ai.LinguisticDictionary dict = org.opennotes.app.ai.LinguisticDictionary.getInstance(context);
-                text = dict.refineRecognizedLine(text, result.language, verifiedAlternatives);
-            } catch (Throwable ignored) {
-            }
-        }
-
-        if (!verifiedAlternatives.contains(text)) {
-            verifiedAlternatives.add(0, text);
-        }
-
-        String finalLang = result.language;
-        if (text.matches("^[0-9\\s.,\\-+]+$") || text.matches("^[a-zA-Z0-9\\s.,\\-+!?'\"()]+$")) {
-            finalLang = "ENGLISH";
-        }
-
-        return new RecognitionResult(text, finalLang, result.bounds, result.fontSize,
-                verifiedAlternatives, result.angleDegrees, result.startX, result.startY, result.wordItems);
+        return new RecognitionResult(result.text, result.language, result.bounds, result.fontSize,
+                alternatives, result.angleDegrees, result.startX, result.startY, result.wordItems);
     }
 
     private static List<Stroke> transformedStrokeCopies(List<Stroke> strokes,
@@ -1252,37 +1213,12 @@ public final class HandwritingRecognitionEngine {
                 startY = origBounds.top + 4f;
             }
 
+            // ML Kit returns its candidates in descending likelihood order. Preserve
+            // the transcript and order verbatim; speculative lexical, spacing, and
+            // geometric rules were silently changing valid handwriting.
             String finalText = text;
-            if (finalText.matches(".*[०-९].*")) {
-                finalText = convertDevanagariDigitsToArabic(finalText);
-            }
-            finalText = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(finalText, originalStrokes);
-            finalText = org.opennotes.app.ai.SpatialSpaceNormalizer.normalizeSpacing(finalText, originalStrokes, lang);
-
-            List<String> verifiedAlternatives = new ArrayList<>();
-            for (String alt : rerankedAlternatives) {
-                if (alt.matches(".*[०-९].*")) {
-                    alt = convertDevanagariDigitsToArabic(alt);
-                }
-                String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, originalStrokes);
-                dis = org.opennotes.app.ai.SpatialSpaceNormalizer.normalizeSpacing(dis, originalStrokes, lang);
-                if (!verifiedAlternatives.contains(dis)) {
-                    verifiedAlternatives.add(dis);
-                }
-            }
-
-            // Apply built-in tri-lingual Marathi/Hindi/English Linguistic Dictionary refinement ("final touch")
-            if (context != null) {
-                try {
-                    org.opennotes.app.ai.LinguisticDictionary dict = org.opennotes.app.ai.LinguisticDictionary.getInstance(context);
-                    finalText = dict.refineRecognizedLine(finalText, lang, verifiedAlternatives);
-                } catch (Throwable ignored) {
-                }
-            }
-
-            if (!verifiedAlternatives.contains(finalText)) {
-                verifiedAlternatives.add(0, finalText);
-            }
+            List<String> verifiedAlternatives = new ArrayList<>(rerankedAlternatives);
+            if (!verifiedAlternatives.contains(finalText)) verifiedAlternatives.add(0, finalText);
 
             final float finalFontSize = fontSize;
             final String postText = finalText;
@@ -1505,45 +1441,15 @@ public final class HandwritingRecognitionEngine {
                                                            List<String> alternatives, String language, String preContext) {
         if (alternatives == null || alternatives.isEmpty()) return alternatives;
         List<String> pool = new ArrayList<>(alternatives);
-        // Prioritize candidates based on authentic linguistic dictionary density
-        if (context != null && pool.size() > 1) {
-            try {
-                org.opennotes.app.ai.LinguisticDictionary dict = org.opennotes.app.ai.LinguisticDictionary.getInstance(context);
-                Collections.sort(pool, (c1, c2) -> {
-                    int s1 = dict.scoreLine(c1, language);
-                    int s2 = dict.scoreLine(c2, language);
-                    return Integer.compare(s2, s1);
-                });
-            } catch (Throwable ignored) {
-            }
-        }
-
-        // Devanagari (Marathi/Hindi) linguistic and geometric feature matching
-        if (InkNormalizer.isIndicLanguage(language)) {
-            pool = rerankDevanagariCandidates(strokes, pool);
-
-            UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
-            if (userModel != null) {
-                for (String cand : alternatives) {
-                    String learned = userModel.predictLearnedCorrection(cand, strokes);
-                    if (learned != null && !learned.trim().isEmpty() && !pool.contains(learned)) {
-                        pool.add(0, learned);
-                    }
-                }
-            }
-            return pool;
-        }
-
-        // English / Latin:
-        // Google's Digital Ink ML model for English features an extensive built-in language
-        // model and dictionary. Respect ML Kit's top-ranked candidate while prioritizing
-        // user-trained personalized corrections if available.
+        // Never let app dictionaries or rough geometry overrule the recognizer's
+        // ordered hypotheses. User-taught corrections remain available as explicit
+        // suggestions, after the native candidates, instead of being applied silently.
         UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
         if (userModel != null) {
             for (String cand : alternatives) {
                 String learned = userModel.predictLearnedCorrection(cand, strokes);
                 if (learned != null && !learned.trim().isEmpty() && !pool.contains(learned)) {
-                    pool.add(0, learned); // Prioritize user-trained style at top
+                    pool.add(learned);
                 }
             }
         }
