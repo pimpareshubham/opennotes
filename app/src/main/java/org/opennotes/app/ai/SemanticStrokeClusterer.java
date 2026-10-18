@@ -239,71 +239,42 @@ public class SemanticStrokeClusterer {
             return result;
         }
 
-        // Estimate median stroke height excluding tiny flecks/noise
-        List<Float> heights = new ArrayList<>();
-        for (ProjectedStroke ps : projected) {
-            if (ps.height > 6f) {
-                heights.add(ps.height);
-            }
-        }
-        if (heights.isEmpty()) {
-            for (ProjectedStroke ps : projected) {
-                heights.add(ps.height);
-            }
-        }
-        Collections.sort(heights);
-        float medianH = !heights.isEmpty() ? heights.get(heights.size() / 2) : 30f;
-        medianH = Math.max(15f, medianH);
-
         int n = projected.size();
         int[] parent = new int[n];
         for (int i = 0; i < n; i++) {
             parent[i] = i;
         }
 
-        // Form connected components of strokes on the same line
+        // 1. Group strokes that overlap or are vertically aligned (diacritics/matras/accents/stems)
         for (int i = 0; i < n; i++) {
             ProjectedStroke s1 = projected.get(i);
             for (int j = i + 1; j < n; j++) {
                 ProjectedStroke s2 = projected.get(j);
 
                 float vOverlap = Math.max(0f, Math.min(s1.maxY, s2.maxY) - Math.max(s1.minY, s2.minY));
-                float minH = Math.min(s1.height, s2.height);
-
                 float hOverlap = Math.max(0f, Math.min(s1.maxX, s2.maxX) - Math.max(s1.minX, s2.minX));
-                float minW = Math.min(s1.width, s2.width);
+
+                // Diacritic or modifier directly above/below character body:
+                boolean isDiacriticAlignment = (hOverlap > 0f)
+                        || (s1.minX >= s2.minX - 30f && s1.maxX <= s2.maxX + 30f)
+                        || (s2.minX >= s1.minX - 30f && s2.maxX <= s1.maxX + 30f);
 
                 float vGap = Math.max(0f, Math.max(s1.minY, s2.minY) - Math.min(s1.maxY, s2.maxY));
                 float hGap = Math.max(0f, Math.max(s1.minX, s2.minX) - Math.min(s1.maxX, s2.maxX));
-                float cyDist = Math.abs(s1.cy - s2.cy);
 
-                boolean isDiacritic = (minH < 0.50f * medianH)
-                        || (minH < 0.40f * Math.max(s1.height, s2.height));
-
-                boolean isSameLine = false;
-
-                if (isDiacritic) {
-                    // Vertical diacritic / accent / matra / shirorekha attached to character body
-                    if (hOverlap >= 0.10f * minW
-                            || (s1.minX >= s2.minX - 25f && s1.maxX <= s2.maxX + 25f)
-                            || (s2.minX >= s1.minX - 25f && s2.maxX <= s1.maxX + 25f)) {
-                        if (vGap <= 0.85f * medianH && cyDist <= 1.35f * medianH) {
-                            isSameLine = true;
-                        }
-                    }
-                } else {
-                    // Main character strokes on the same line:
-                    // Consecutive characters in words have substantial vertical overlap and horizontal proximity
-                    if (hGap <= 1.8f * medianH) {
-                        if (vOverlap >= 0.10f * minH && cyDist <= 0.85f * medianH) {
-                            isSameLine = true;
-                        } else if (hGap <= 0.95f * medianH && cyDist <= 0.75f * medianH) {
-                            isSameLine = true;
-                        }
-                    }
+                boolean connect = false;
+                if (vOverlap > 0f && hOverlap > 0f) {
+                    // Directly touching or overlapping
+                    connect = true;
+                } else if (isDiacriticAlignment && vGap <= 12f) {
+                    // Vertical accent / matra / ukar / dot directly attached to character
+                    connect = true;
+                } else if (vOverlap > 0f && hGap <= 50f) {
+                    // Consecutive strokes in the same word
+                    connect = true;
                 }
 
-                if (isSameLine) {
+                if (connect) {
                     int rootI = dsuFind(parent, i);
                     int rootJ = dsuFind(parent, j);
                     if (rootI != rootJ) {
@@ -313,7 +284,7 @@ public class SemanticStrokeClusterer {
             }
         }
 
-        // Group into initial clusters
+        // Group into initial word/token clusters
         java.util.Map<Integer, List<ProjectedStroke>> clustersMap = new java.util.LinkedHashMap<>();
         for (int i = 0; i < n; i++) {
             int root = dsuFind(parent, i);
@@ -326,46 +297,40 @@ public class SemanticStrokeClusterer {
         }
         List<List<ProjectedStroke>> clusterList = new ArrayList<>(clustersMap.values());
 
-        // Merge horizontally separated word clusters that lie along the same baseline
+        // 2. Merge word clusters along the same baseline row:
+        // If two clusters share vertical overlap and are positioned side-by-side horizontally along the row
+        // (i.e. neither cluster is a distinct row vertically below/above the other), merge them into the same line.
         if (clusterList.size() > 1) {
             boolean merged = true;
             while (merged) {
                 merged = false;
                 for (int i = 0; i < clusterList.size(); i++) {
                     List<ProjectedStroke> c1 = clusterList.get(i);
-                    float c1Top = Float.MAX_VALUE, c1Bottom = -Float.MAX_VALUE, sumCy1 = 0f;
+                    float c1Top = Float.MAX_VALUE, c1Bottom = -Float.MAX_VALUE;
                     float c1Left = Float.MAX_VALUE, c1Right = -Float.MAX_VALUE;
                     for (ProjectedStroke s : c1) {
                         c1Top = Math.min(c1Top, s.minY);
                         c1Bottom = Math.max(c1Bottom, s.maxY);
                         c1Left = Math.min(c1Left, s.minX);
                         c1Right = Math.max(c1Right, s.maxX);
-                        sumCy1 += s.cy;
                     }
-                    float c1Cy = sumCy1 / c1.size();
-                    float c1H = Math.max(1f, c1Bottom - c1Top);
 
                     for (int j = i + 1; j < clusterList.size(); j++) {
                         List<ProjectedStroke> c2 = clusterList.get(j);
-                        float c2Top = Float.MAX_VALUE, c2Bottom = -Float.MAX_VALUE, sumCy2 = 0f;
+                        float c2Top = Float.MAX_VALUE, c2Bottom = -Float.MAX_VALUE;
                         float c2Left = Float.MAX_VALUE, c2Right = -Float.MAX_VALUE;
                         for (ProjectedStroke s : c2) {
                             c2Top = Math.min(c2Top, s.minY);
                             c2Bottom = Math.max(c2Bottom, s.maxY);
                             c2Left = Math.min(c2Left, s.minX);
                             c2Right = Math.max(c2Right, s.maxX);
-                            sumCy2 += s.cy;
                         }
-                        float c2Cy = sumCy2 / c2.size();
-                        float c2H = Math.max(1f, c2Bottom - c2Top);
 
-                        float cyDiff = Math.abs(c1Cy - c2Cy);
                         float vOverlap = Math.max(0f, Math.min(c1Bottom, c2Bottom) - Math.max(c1Top, c2Top));
-                        float minClusterH = Math.min(c1H, c2H);
-                        float cHGap = Math.max(0f, Math.max(c1Left, c2Left) - Math.min(c1Right, c2Right));
+                        boolean sideBySide = (c1Right <= c2Left + 20f) || (c2Right <= c1Left + 20f);
 
-                        if (cHGap <= 5.0f * medianH && cyDiff <= 0.65f * medianH
-                                && (vOverlap >= 0.10f * minClusterH || cyDiff <= 0.45f * medianH)) {
+                        // If they share vertical baseline overlap and are side-by-side along the row, merge!
+                        if (vOverlap > 0f && sideBySide) {
                             c1.addAll(c2);
                             clusterList.remove(j);
                             merged = true;
@@ -377,54 +342,58 @@ public class SemanticStrokeClusterer {
             }
         }
 
-        // Absorb orphan marks (dots, accents, short diacritics) into the nearest line cluster
+        // 3. Absorb any remaining orphan marks into the nearest line that covers their horizontal span
         if (clusterList.size() > 1) {
             for (int i = clusterList.size() - 1; i >= 0; i--) {
                 List<ProjectedStroke> cluster = clusterList.get(i);
-                float cTop = Float.MAX_VALUE, cBottom = -Float.MAX_VALUE, cCy = 0f;
+                if (cluster.size() > 2) continue;
+
+                float cLeft = Float.MAX_VALUE, cRight = -Float.MAX_VALUE, sumCy = 0f;
                 for (ProjectedStroke s : cluster) {
-                    cTop = Math.min(cTop, s.minY);
-                    cBottom = Math.max(cBottom, s.maxY);
-                    cCy += s.cy;
+                    cLeft = Math.min(cLeft, s.minX);
+                    cRight = Math.max(cRight, s.maxX);
+                    sumCy += s.cy;
                 }
-                cCy /= cluster.size();
-                float cH = cBottom - cTop;
-                if (cluster.size() <= 2 && cH < 0.80f * medianH && clusterList.size() > 1) {
-                    int bestIdx = -1;
-                    float minDistance = Float.MAX_VALUE;
-                    for (int k = 0; k < clusterList.size(); k++) {
-                        if (k == i) continue;
-                        List<ProjectedStroke> target = clusterList.get(k);
-                        float targetCy = 0f;
-                        for (ProjectedStroke s : target) {
-                            targetCy += s.cy;
-                        }
-                        targetCy /= target.size();
-                        float dist = Math.abs(cCy - targetCy);
-                        if (dist < minDistance) {
-                            minDistance = dist;
-                            bestIdx = k;
-                        }
+                float cCy = sumCy / cluster.size();
+
+                int bestIdx = -1;
+                float minCyDist = Float.MAX_VALUE;
+                for (int k = 0; k < clusterList.size(); k++) {
+                    if (k == i) continue;
+                    List<ProjectedStroke> target = clusterList.get(k);
+                    float tLeft = Float.MAX_VALUE, tRight = -Float.MAX_VALUE, tSumCy = 0f;
+                    for (ProjectedStroke s : target) {
+                        tLeft = Math.min(tLeft, s.minX);
+                        tRight = Math.max(tRight, s.maxX);
+                        tSumCy += s.cy;
                     }
-                    if (bestIdx != -1 && minDistance <= 1.6f * medianH) {
-                        clusterList.get(bestIdx).addAll(cluster);
-                        clusterList.remove(i);
+                    float tCy = tSumCy / target.size();
+
+                    // Check if target line covers this mark horizontally
+                    boolean coversX = (cLeft >= tLeft - 40f && cRight <= tRight + 40f);
+                    float dist = Math.abs(cCy - tCy);
+                    if (coversX && dist < minCyDist) {
+                        minCyDist = dist;
+                        bestIdx = k;
                     }
+                }
+
+                if (bestIdx != -1) {
+                    clusterList.get(bestIdx).addAll(cluster);
+                    clusterList.remove(i);
                 }
             }
         }
 
-        // Sort lines top to bottom by vertical center
+        // Sort lines top to bottom by vertical position
         Collections.sort(clusterList, (l1, l2) -> {
-            float sum1 = 0f;
-            for (ProjectedStroke s : l1) sum1 += s.cy;
-            float avg1 = sum1 / l1.size();
+            float minTop1 = Float.MAX_VALUE;
+            for (ProjectedStroke s : l1) minTop1 = Math.min(minTop1, s.minY);
 
-            float sum2 = 0f;
-            for (ProjectedStroke s : l2) sum2 += s.cy;
-            float avg2 = sum2 / l2.size();
+            float minTop2 = Float.MAX_VALUE;
+            for (ProjectedStroke s : l2) minTop2 = Math.min(minTop2, s.minY);
 
-            return Float.compare(avg1, avg2);
+            return Float.compare(minTop1, minTop2);
         });
 
         // Reconstruct StrokeLines preserving each stroke's natural temporal drawing order
@@ -442,7 +411,7 @@ public class SemanticStrokeClusterer {
             if (orderedLineStrokes.isEmpty()) continue;
 
             RectF lineBounds = InkNormalizer.getBounds(orderedLineStrokes);
-            List<StrokeWord> words = segmentLineIntoWords(orderedLineStrokes, medianH, rotAngle);
+            List<StrokeWord> words = segmentLineIntoWords(orderedLineStrokes, 0f, rotAngle);
             result.add(new StrokeLine(orderedLineStrokes, words, lineBounds, rotAngle));
         }
 
@@ -453,6 +422,10 @@ public class SemanticStrokeClusterer {
      * Segments strokes of a single line into coherent word / token clusters.
      */
     public static List<StrokeWord> segmentLineIntoWords(List<Stroke> orderedLineStrokes, float medianH, float rotAngle) {
+        return segmentLineIntoWords(orderedLineStrokes, rotAngle);
+    }
+
+    public static List<StrokeWord> segmentLineIntoWords(List<Stroke> orderedLineStrokes, float rotAngle) {
         List<StrokeWord> words = new ArrayList<>();
         if (orderedLineStrokes == null || orderedLineStrokes.isEmpty()) return words;
         if (orderedLineStrokes.size() == 1) {
@@ -485,8 +458,8 @@ public class SemanticStrokeClusterer {
                 float hOverlap = Math.max(0f, Math.min(s1.maxX, s2.maxX) - Math.max(s1.minX, s2.minX));
                 float hGap = Math.max(0f, Math.max(s1.minX, s2.minX) - Math.min(s1.maxX, s2.maxX));
 
-                boolean isShirorekha1 = (s1.width >= 2.0f * s1.height && s1.width >= 0.7f * medianH);
-                boolean isShirorekha2 = (s2.width >= 2.0f * s2.height && s2.width >= 0.7f * medianH);
+                boolean isShirorekha1 = (s1.width >= 2.0f * s1.height && s1.width >= 25f);
+                boolean isShirorekha2 = (s2.width >= 2.0f * s2.height && s2.width >= 25f);
 
                 boolean sameWord = false;
                 if (hOverlap > 0f) {
@@ -495,10 +468,7 @@ public class SemanticStrokeClusterer {
                     sameWord = true;
                 } else if (isShirorekha2 && (s1.minX >= s2.minX - 10f && s1.maxX <= s2.maxX + 10f)) {
                     sameWord = true;
-                // Handwriting often has wider intra-word gaps than print, especially
-                // around y, r, t and detached joins. Keep the threshold generous but
-                // below the typical full word gap so neighboring words stay separate.
-                } else if (hGap < 0.72f * medianH) {
+                } else if (hGap <= 15f) {
                     sameWord = true;
                 }
 

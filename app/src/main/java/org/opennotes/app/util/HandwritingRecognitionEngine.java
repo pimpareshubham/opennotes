@@ -1452,28 +1452,6 @@ public final class HandwritingRecognitionEngine {
                     cleaned.add(new DrawingPoint(p.x, p.y, p.pressure, p.timeMillis));
                 }
             }
-            if (trimHooks && cleaned.size() > 4) {
-                DrawingPoint p0 = cleaned.get(0);
-                DrawingPoint p1 = cleaned.get(1);
-                DrawingPoint p2 = cleaned.get(2);
-                float d01x = p1.x - p0.x, d01y = p1.y - p0.y;
-                float d12x = p2.x - p1.x, d12y = p2.y - p1.y;
-                float dotStart = d01x * d12x + d01y * d12y;
-                if (dotStart < -0.4f * (Math.hypot(d01x, d01y) * Math.hypot(d12x, d12y))) {
-                    cleaned.remove(0);
-                }
-                int last = cleaned.size() - 1;
-                DrawingPoint q2 = cleaned.get(last);
-                DrawingPoint q1 = cleaned.get(last - 1);
-                DrawingPoint q0 = cleaned.get(last - 2);
-                float e01x = q1.x - q0.x, e01y = q1.y - q0.y;
-                float e12x = q2.x - q1.x, e12y = q2.y - q1.y;
-                float dotEnd = e01x * e12x + e01y * e12y;
-                if (dotEnd < -0.4f * (Math.hypot(e01x, e01y) * Math.hypot(e12x, e12y))) {
-                    cleaned.remove(last);
-                }
-            }
-
             List<DrawingPoint> processed = cleaned;
             if (resamplePoints && cleaned.size() >= 2) {
                 processed = resampleStroke(cleaned, 3.0f);
@@ -1724,16 +1702,16 @@ public final class HandwritingRecognitionEngine {
                     DigitalInkRecognizerOptions.builder(model).setMaxResultCount(16).build());
 
             // Primary pass: RecognitionContext with WritingArea and preContext
+            // Unconstrained recognition without artificial WritingArea box limits
             RecognitionContext recognitionContext = null;
-            try {
-                float writingAreaW = Math.max(200f, scaledW + padX * 2.0f);
-                float writingAreaH = Math.max(120f, scaledH + padY * 2.0f);
-                recognitionContext = RecognitionContext.builder()
-                        .setPreContext(preContext != null ? preContext : "")
-                        .setWritingArea(new WritingArea(writingAreaW, writingAreaH))
-                        .build();
-            } catch (Exception e) {
-                Log.w(TAG, "Failed to build RecognitionContext, proceeding unconstrained", e);
+            if (preContext != null && !preContext.trim().isEmpty()) {
+                try {
+                    recognitionContext = RecognitionContext.builder()
+                            .setPreContext(preContext.trim())
+                            .build();
+                } catch (Exception e) {
+                    Log.w(TAG, "Failed to build RecognitionContext", e);
+                }
             }
 
             Task<com.google.mlkit.vision.digitalink.common.RecognitionResult> primaryTask =

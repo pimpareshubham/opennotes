@@ -392,4 +392,42 @@ public class ComprehensiveRecognitionTest {
                     lines.get(i).bounds.top < lines.get(i + 1).bounds.top);
         }
     }
+
+    @Test
+    public void testSingleLineMarathiWithoutShirorekha() {
+        // Reproduces the exact user handwriting of "शुभम सुरेश पिंपरे" from Image 1:
+        // 3 words written on a single line WITHOUT continuous shirorekha:
+        // Word 1: "शुभम" at x = 0..150, y = 30..80 (ukar at y=80..110)
+        // Word 2: "सुरेश" at x = 210..360, y = 30..80 (matra at y=0..30, ukar at y=80..110)
+        // Word 3: "पिंपरे" at x = 430..600, y = 30..80 (velanti stem, anusvara dot at y=10..12, tall matra at y=-25..30)
+        List<Stroke> strokes = new ArrayList<>();
+
+        // Word 1: शुभम
+        strokes.add(createSyntheticStroke(25f, 30f, 25f, 80f, 10));  // श
+        strokes.add(createSyntheticStroke(20f, 80f, 25f, 110f, 8));  // ु (ukar below baseline)
+        strokes.add(createSyntheticStroke(75f, 30f, 75f, 80f, 10));  // भ
+        strokes.add(createSyntheticStroke(125f, 30f, 125f, 80f, 10)); // म
+
+        // Word 2: सुरेश
+        strokes.add(createSyntheticStroke(235f, 30f, 235f, 80f, 10)); // स
+        strokes.add(createSyntheticStroke(230f, 80f, 235f, 110f, 8)); // ु (ukar)
+        strokes.add(createSyntheticStroke(285f, 30f, 285f, 80f, 10)); // र
+        strokes.add(createSyntheticStroke(285f, 30f, 305f, 0f, 8));   // े (matra)
+        strokes.add(createSyntheticStroke(335f, 30f, 335f, 80f, 10)); // श
+
+        // Word 3: पिंपरे
+        strokes.add(createSyntheticStroke(430f, 15f, 430f, 80f, 10)); // ि (velanti)
+        strokes.add(createSyntheticStroke(470f, 30f, 470f, 80f, 10)); // प
+        strokes.add(createSyntheticStroke(472f, 10f, 474f, 12f, 3));  // ं (anusvara dot)
+        strokes.add(createSyntheticStroke(520f, 30f, 520f, 80f, 10)); // प
+        strokes.add(createSyntheticStroke(565f, 30f, 565f, 80f, 10)); // र
+        strokes.add(createSyntheticStroke(565f, 30f, 600f, -25f, 8)); // े (tall matra)
+
+        List<SemanticStrokeClusterer.StrokeLine> lines = SemanticStrokeClusterer.segmentIntoLines(strokes);
+        Assert.assertNotNull("Lines should not be null", lines);
+        Assert.assertEquals("Single line 'शुभम सुरेश पिंपरे' must be segmented into EXACTLY 1 line, NOT fragmented into isolated letters",
+                1, lines.size());
+        Assert.assertEquals("All strokes must be preserved in the single line",
+                strokes.size(), lines.get(0).strokes.size());
+    }
 }
