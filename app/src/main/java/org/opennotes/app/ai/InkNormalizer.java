@@ -6,6 +6,7 @@ import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.Stroke;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -144,22 +145,23 @@ public class InkNormalizer {
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);
 
-            float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
-            float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
-
+            float[] projectedX = new float[pointCount];
+            float[] projectedY = new float[pointCount];
+            int projectedCount = 0;
             for (DrawingPoint p : allPoints) {
                 float dx = p.x - cx;
                 float dy = p.y - cy;
                 float rx = dx * cos - dy * sin;
                 float ry = dx * sin + dy * cos;
-                if (rx < minX) minX = rx;
-                if (rx > maxX) maxX = rx;
-                if (ry < minY) minY = ry;
-                if (ry > maxY) maxY = ry;
+                projectedX[projectedCount] = rx;
+                projectedY[projectedCount] = ry;
+                projectedCount++;
             }
 
-            float w = Math.max(1f, maxX - minX);
-            float h = Math.max(1f, maxY - minY);
+            // Trim extreme projected samples so isolated marks and long ascenders
+            // cannot dominate the angle estimate for an otherwise clear baseline.
+            float w = Math.max(1f, robustProjectionSpan(projectedX, projectedCount));
+            float h = Math.max(1f, robustProjectionSpan(projectedY, projectedCount));
             float ar = w / h;
             float area = w * h;
 
@@ -189,22 +191,21 @@ public class InkNormalizer {
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);
 
-            float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
-            float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
-
+            float[] projectedX = new float[pointCount];
+            float[] projectedY = new float[pointCount];
+            int projectedCount = 0;
             for (DrawingPoint p : allPoints) {
                 float dx = p.x - cx;
                 float dy = p.y - cy;
                 float rx = dx * cos - dy * sin;
                 float ry = dx * sin + dy * cos;
-                if (rx < minX) minX = rx;
-                if (rx > maxX) maxX = rx;
-                if (ry < minY) minY = ry;
-                if (ry > maxY) maxY = ry;
+                projectedX[projectedCount] = rx;
+                projectedY[projectedCount] = ry;
+                projectedCount++;
             }
 
-            float w = Math.max(1f, maxX - minX);
-            float h = Math.max(1f, maxY - minY);
+            float w = Math.max(1f, robustProjectionSpan(projectedX, projectedCount));
+            float h = Math.max(1f, robustProjectionSpan(projectedY, projectedCount));
             float score = (w * w) / (h * (float) Math.sqrt(w * h));
             if (hasProgression && progDist >= 18f) {
                 float diff = Math.abs(normalizeAngleDiff(deg, progAngle));
@@ -229,6 +230,14 @@ public class InkNormalizer {
         if (bestAspectRatio < 1.30f && progDist < 25f && strokes.size() <= 4) return 0f;
 
         return refinedAngle;
+    }
+
+    /** Returns a trimmed coordinate span to reduce the effect of isolated ink outliers. */
+    private static float robustProjectionSpan(float[] values, int count) {
+        if (values == null || count <= 0) return 0f;
+        Arrays.sort(values, 0, count);
+        int trim = Math.min((int) (count * 0.05f), Math.max(0, (count - 1) / 2));
+        return values[count - trim - 1] - values[trim];
     }
 
     private static int countHorizontalStrokePairs(List<Stroke> strokes) {
@@ -281,10 +290,47 @@ public class InkNormalizer {
 
     public static NormalizedInk normalizeInk(List<Stroke> strokes, String language) {
         if (strokes == null || strokes.isEmpty()) {
-            return new NormalizedInk(strokes, new OrientationTransform(0f, 0f, 0f, 0f));
+            return new NormalizedInk(new ArrayList<>(), new OrientationTransform(0f, 0f, 0f, 0f));
         }
-        RectF bounds = getBounds(strokes);
-        return new NormalizedInk(strokes, new OrientationTransform(0f, bounds.centerX(), bounds.centerY(), 0f));
+        // Return recognition-safe copies so prototype extraction sees consistent
+        // point spacing and cannot accidentally mutate the note's source strokes.
+        List<Stroke> normalized = InkPreprocessor.prepare(strokes);
+        RectF bounds = getBounds(normalized);
+        float pivotX = bounds != null ? bounds.centerX() : 0f;
+        float pivotY = bounds != null ? bounds.centerY() : 0f;
+        float angle = detectWritingAngleDegrees(normalized);
+        if (Math.abs(angle) < 3.5f || bounds == null) angle = 0f;
+        if (angle != 0f) normalized = rotateCopies(normalized, angle, pivotX, pivotY);
+        return new NormalizedInk(normalized,
+                new OrientationTransform(angle, pivotX, pivotY, 0f));
+    }
+
+    /** Rotates recognition copies to a horizontal baseline; positive angle maps back via toOriginal. */
+    private static List<Stroke> rotateCopies(List<Stroke> source, float angleDegrees,
+                                             float pivotX, float pivotY) {
+        List<Stroke> output = new ArrayList<>(source.size());
+        double radians = Math.toRadians(angleDegrees);
+        float cosine = (float) Math.cos(radians);
+        float sine = (float) Math.sin(radians);
+        for (Stroke stroke : source) {
+            if (stroke == null) continue;
+            Stroke copy = new Stroke(stroke.color, stroke.width, stroke.tool);
+            copy.lineStyle = stroke.lineStyle;
+            List<DrawingPoint> points = stroke.getRecognitionPoints();
+            if (points == null || points.isEmpty()) points = stroke.points;
+            if (points == null) continue;
+            for (DrawingPoint point : points) {
+                if (point == null) continue;
+                float dx = point.x - pivotX;
+                float dy = point.y - pivotY;
+                float x = dx * cosine + dy * sine + pivotX;
+                float y = -dx * sine + dy * cosine + pivotY;
+                copy.addPoint(x, y, point.pressure, point.timeMillis);
+                copy.addRecognitionPoint(x, y, point.pressure, point.timeMillis);
+            }
+            output.add(copy);
+        }
+        return output;
     }
 
     public static class NormalizedInk {

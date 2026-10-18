@@ -23,8 +23,10 @@ import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.db.AppSettings;
 import org.opennotes.app.ai.InkNormalizer;
+import org.opennotes.app.ai.InkPreprocessor;
 import org.opennotes.app.ai.SemanticStrokeClusterer;
 import org.opennotes.app.ai.UserHandwritingModel;
+import org.opennotes.app.ai.LinguisticDictionary;
 
 import java.util.List;
 import java.util.HashMap;
@@ -44,6 +46,7 @@ public final class HandwritingRecognitionEngine {
     private static final float DEGENERATE_AXIS_RATIO = 0.08f;
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
+    private static final int MAX_REVIEW_CANDIDATES = 32;
     private static final Map<String, Task<Void>> MODEL_DOWNLOADS = new HashMap<>();
     private static final Map<String, List<PendingApproval>> WAITING_APPROVALS = new HashMap<>();
 
@@ -492,9 +495,9 @@ public final class HandwritingRecognitionEngine {
             }
         }
 
-        // For steep or vertical writing (|angle| >= 30°), deskew before the primary pass so ML Kit receives
-        // canonical horizontal ink. For natural slant (|angle| < 30°), evaluate unrotated first.
-        final float primaryPassAngle = (Math.abs(writingAngle) >= 30.0f) ? writingAngle : 0f;
+        // Deskew moderate as well as steep baselines. The detector suppresses small
+        // noisy estimates, so a 3.5° threshold avoids rotating ordinary level writing.
+        final float primaryPassAngle = (Math.abs(writingAngle) >= 3.5f) ? writingAngle : 0f;
         List<Stroke> primaryStrokes = (primaryPassAngle != 0f)
                 ? transformedStrokeCopies(strokes, primaryPassAngle, false, false)
                 : strokes;
@@ -504,8 +507,23 @@ public final class HandwritingRecognitionEngine {
             public void onSuccess(RecognitionResult primaryResult) {
                 RecognitionResult reconciled = disambiguateDigits(context, primaryResult, strokes);
                 if (reconciled != null && !reconciled.text.trim().isEmpty()) {
-                    if (includeReviewSuggestions && reconciled.alternatives.size() <= 1) {
-                        tryAlternativeHypothesis(context, strokes, detectedLang, contextText,
+                    if (isAutoLanguage(preferredLanguage)
+                            && containsLatinLetters(reconciled.text)
+                            && !containsDevanagari(reconciled.text)) {
+                        tryEnglishAutoPass(context, primaryStrokes, strokes, primaryPassAngle,
+                                writingAngle, contextText, reconciled, includeReviewSuggestions, callback);
+                        return;
+                    }
+                    if (isAutoLanguage(preferredLanguage) && containsDevanagari(reconciled.text)) {
+                        tryHindiAutoPass(context, primaryStrokes, strokes, primaryPassAngle,
+                                writingAngle, contextText, reconciled, includeReviewSuggestions, callback);
+                        return;
+                    }
+                    // Review mode should gather alternative views of the ink even when ML Kit
+                    // returns several candidates for its first view. Those alternatives may
+                    // all come from the same orientation and miss a much better deskewed read.
+                    if (includeReviewSuggestions) {
+                        tryReviewHypotheses(context, strokes, detectedLang, contextText,
                                 reconciled, primaryPassAngle != 0f, writingAngle, callback);
                     } else {
                         callback.onSuccess(reconciled);
@@ -526,6 +544,66 @@ public final class HandwritingRecognitionEngine {
                         null, primaryPassAngle != 0f, writingAngle, callback);
             }
         });
+    }
+
+    /** In Auto mode, a Latin-script answer from the Marathi fallback is a cue to consult
+     * the English model before returning. Explicit language selections are never changed. */
+    private static void tryEnglishAutoPass(Context context, List<Stroke> primaryStrokes,
+            List<Stroke> originalStrokes, float primaryPassAngle, float writingAngle,
+            String preContext, RecognitionResult primaryResult, boolean includeReviewSuggestions,
+            Callback callback) {
+        executeSingleRecognitionPass(context, primaryStrokes, originalStrokes, primaryPassAngle,
+                "ENGLISH", preContext, new Callback() {
+                    @Override
+                    public void onSuccess(RecognitionResult englishResult) {
+                        if (englishResult == null || !containsLatinLetters(englishResult.text)
+                                || containsDevanagari(englishResult.text)) {
+                            deliverAutoFallback(primaryResult, originalStrokes, writingAngle,
+                                    includeReviewSuggestions, callback, context, preContext);
+                            return;
+                        }
+                        RecognitionResult combined = mergeCandidates(englishResult, primaryResult);
+                        if (includeReviewSuggestions) {
+                            tryReviewHypotheses(context, originalStrokes, "ENGLISH", preContext,
+                                    combined, primaryPassAngle != 0f, writingAngle, callback);
+                        } else {
+                            callback.onSuccess(combined);
+                        }
+                    }
+
+                    @Override
+                    public void onFailure(Exception error) {
+                        deliverAutoFallback(primaryResult, originalStrokes, writingAngle,
+                                includeReviewSuggestions, callback, context, preContext);
+                    }
+                });
+    }
+
+    private static void deliverAutoFallback(RecognitionResult primaryResult, List<Stroke> strokes,
+            float writingAngle, boolean includeReviewSuggestions, Callback callback,
+            Context context, String preContext) {
+        if (includeReviewSuggestions) {
+            tryReviewHypotheses(context, strokes, primaryResult.language, preContext,
+                    primaryResult, false, writingAngle, callback);
+        } else {
+            callback.onSuccess(primaryResult);
+        }
+    }
+
+    private static boolean isAutoLanguage(String language) {
+        return language == null || "AUTO".equalsIgnoreCase(language)
+                || "AUTO_DETECT".equalsIgnoreCase(language);
+    }
+
+    private static boolean containsLatinLetters(String text) {
+        if (text == null) return false;
+        for (int i = 0; i < text.length();) {
+            int codePoint = text.codePointAt(i);
+            if (Character.isLetter(codePoint)
+                    && Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.LATIN) return true;
+            i += Character.charCount(codePoint);
+        }
+        return false;
     }
 
     private static class AngleHypothesis {
@@ -550,10 +628,22 @@ public final class HandwritingRecognitionEngine {
 
         if (primaryWasDeskewed) {
             hypotheses.add(new AngleHypothesis(originalStrokes, 0f));
-        } else if (Math.abs(writingAngle) >= 4.0f) {
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, writingAngle, false, false), writingAngle));
         }
+
+        // The geometric estimate is usually close, but handwriting baselines can be
+        // distorted by ascenders, dots, diagrams, and short selections. Try nearby
+        // deskew angles in review/failure recovery so those cases can still surface
+        // useful candidates. Keep the search deterministic and merge all successful
+        // passes into the review suggestions while preserving the primary result.
+        float[] offsets = {-12f, 12f, -25f, 25f, -15f, 15f, -30f, 30f, -45f, 45f};
+        for (float offset : offsets) {
+            float angle = writingAngle + offset;
+            if (angle <= -85f || angle >= 85f) continue;
+            hypotheses.add(new AngleHypothesis(
+                    transformedStrokeCopies(originalStrokes, angle, false, false), angle));
+        }
+        hypotheses.add(new AngleHypothesis(
+                transformedStrokeCopies(originalStrokes, writingAngle, false, false), writingAngle));
 
         RectF bounds = boundsOf(originalStrokes);
         if (bounds != null && bounds.height() > bounds.width() * 1.3f) {
@@ -564,8 +654,8 @@ public final class HandwritingRecognitionEngine {
                     transformedStrokeCopies(originalStrokes, 90f, false, false), 90f));
         }
 
-        // Use only angles measured from this ink. A fixed rotation sweep creates
-        // plausible-looking but unrelated alternatives and adds serial model passes.
+        // Each retry is an offset around the angle measured from this ink rather
+        // than an absolute page rotation, keeping hypotheses tied to the sample.
 
         runWaterfall(context, hypotheses, originalStrokes, 0, language, preContext, primaryResult, callback);
     }
@@ -578,24 +668,35 @@ public final class HandwritingRecognitionEngine {
                                      String preContext,
                                      RecognitionResult accumulatedResult,
                                      Callback callback) {
+        Map<String, Integer> candidateVotes = new HashMap<>();
+        if (accumulatedResult != null) {
+            for (String candidate : accumulatedResult.alternatives) {
+                if (candidate != null && !candidate.trim().isEmpty()) {
+                    candidateVotes.put(candidate, 1);
+                }
+            }
+        }
+        runWaterfall(context, queue, originalStrokes, index, language, preContext,
+                accumulatedResult, candidateVotes, callback);
+    }
+
+    private static void runWaterfall(Context context,
+                                     List<AngleHypothesis> queue,
+                                     List<Stroke> originalStrokes,
+                                     int index,
+                                     String language,
+                                     String preContext,
+                                     RecognitionResult accumulatedResult,
+                                     Map<String, Integer> candidateVotes,
+                                     Callback callback) {
         if (index >= queue.size()) {
             if (accumulatedResult != null) {
-                callback.onSuccess(disambiguateDigits(context, accumulatedResult, originalStrokes));
-            } else if ((preContext == null || preContext.isEmpty()) && !queue.isEmpty()) {
-                // Cross-language fallback (Devanagari <-> English) if primary language produced no candidates
-                String fallbackLang = "ENGLISH".equalsIgnoreCase(language) ? "MARATHI" : "ENGLISH";
-                resolveReadyModel(fallbackLang, new ModelResolutionCallback() {
-                    @Override
-                    public void onResolved(DigitalInkRecognitionModel model, String tag) {
-                        executeSingleRecognitionPass(context, originalStrokes, originalStrokes, 0f, fallbackLang, "", callback);
-                    }
-
-                    @Override
-                    public void onNoneReady(String preferredTag) {
-                        callback.onFailure(new IllegalArgumentException(
-                                "No handwriting text was recognized on this line. Check the selected language or select a clearer line of ink."));
-                    }
-                });
+                callback.onSuccess(disambiguateDigits(context,
+                        rankCandidatesByAgreement(accumulatedResult, candidateVotes), originalStrokes));
+            } else if (!queue.isEmpty()) {
+                // Try the other supported scripts in a stable order. This also
+                // covers Hindi <-> Marathi for Devanagari code-switching.
+                tryCrossLanguageFallback(context, originalStrokes, language, preContext, callback);
                 return;
             } else {
                 callback.onFailure(new IllegalArgumentException(
@@ -606,7 +707,8 @@ public final class HandwritingRecognitionEngine {
 
         AngleHypothesis hypothesis = queue.get(index);
         if (hypothesis == null || hypothesis.strokes == null || hypothesis.strokes.isEmpty()) {
-            runWaterfall(context, queue, originalStrokes, index + 1, language, preContext, accumulatedResult, callback);
+            runWaterfall(context, queue, originalStrokes, index + 1, language, preContext,
+                    accumulatedResult, candidateVotes, callback);
             return;
         }
 
@@ -615,10 +717,18 @@ public final class HandwritingRecognitionEngine {
             @Override
             public void onSuccess(RecognitionResult candidateResult) {
                 if (candidateResult != null && !candidateResult.text.trim().isEmpty()) {
+                    Set<String> seenInPass = new HashSet<>();
+                    for (String candidate : candidateResult.alternatives) {
+                        if (candidate != null && !candidate.trim().isEmpty() && seenInPass.add(candidate)) {
+                            candidateVotes.put(candidate, candidateVotes.getOrDefault(candidate, 0) + 1);
+                        }
+                    }
                     RecognitionResult merged = mergeCandidates(accumulatedResult, candidateResult);
-                    callback.onSuccess(disambiguateDigits(context, merged, originalStrokes));
+                    runWaterfall(context, queue, originalStrokes, index + 1, language,
+                            preContext, merged, candidateVotes, callback);
                 } else {
-                    runWaterfall(context, queue, originalStrokes, index + 1, language, preContext, accumulatedResult, callback);
+                    runWaterfall(context, queue, originalStrokes, index + 1, language, preContext,
+                            accumulatedResult, candidateVotes, callback);
                 }
             }
 
@@ -628,9 +738,347 @@ public final class HandwritingRecognitionEngine {
                     callback.onFailure(error);
                     return;
                 }
-                runWaterfall(context, queue, originalStrokes, index + 1, language, preContext, accumulatedResult, callback);
+                runWaterfall(context, queue, originalStrokes, index + 1, language, preContext,
+                        accumulatedResult, candidateVotes, callback);
             }
         });
+    }
+
+    private static void tryCrossLanguageFallback(Context context, List<Stroke> strokes,
+            String originalLanguage, String preContext, Callback callback) {
+        List<String> fallbackLanguages = new ArrayList<>();
+        if ("HINDI".equalsIgnoreCase(originalLanguage)) {
+            fallbackLanguages.add("MARATHI");
+            fallbackLanguages.add("ENGLISH");
+        } else if ("MARATHI".equalsIgnoreCase(originalLanguage)) {
+            fallbackLanguages.add("HINDI");
+            fallbackLanguages.add("ENGLISH");
+        } else {
+            fallbackLanguages.add("MARATHI");
+            fallbackLanguages.add("HINDI");
+        }
+        tryCrossLanguageFallback(context, strokes, fallbackLanguages, 0, preContext,
+                new IllegalArgumentException("No handwriting text was recognized on this line. "
+                        + "Check the selected language or select a clearer line of ink."), callback);
+    }
+
+    private static void tryCrossLanguageFallback(Context context, List<Stroke> strokes,
+            List<String> languages, int index, String preContext, Exception lastError,
+            Callback callback) {
+        if (index >= languages.size()) {
+            tryWordClusterFallback(context, strokes, "ENGLISH", preContext, lastError, callback);
+            return;
+        }
+        String language = languages.get(index);
+        executeSingleRecognitionPass(context, strokes, strokes, 0f, language, preContext,
+                new Callback() {
+                    @Override
+                    public void onSuccess(RecognitionResult result) {
+                        if (result != null && result.text != null && !result.text.trim().isEmpty()) {
+                            callback.onSuccess(result);
+                        } else {
+                            tryCrossLanguageFallback(context, strokes, languages, index + 1,
+                                    preContext, lastError, callback);
+                        }
+                    }
+
+                    @Override
+                    public void onFailure(Exception error) {
+                        if (isFatalError(error)) {
+                            callback.onFailure(error);
+                            return;
+                        }
+                        tryCrossLanguageFallback(context, strokes, languages, index + 1,
+                                preContext, error != null ? error : lastError, callback);
+                    }
+                });
+    }
+
+    /** Auto mode compares Hindi and Marathi hypotheses when both recognize Devanagari.
+     * Marathi remains the default unless Hindi has clear language-specific evidence. */
+    private static void tryHindiAutoPass(Context context, List<Stroke> primaryStrokes,
+            List<Stroke> originalStrokes, float primaryPassAngle, float writingAngle,
+            String preContext, RecognitionResult marathiResult, boolean includeReviewSuggestions,
+            Callback callback) {
+        executeSingleRecognitionPass(context, primaryStrokes, originalStrokes, primaryPassAngle,
+                "HINDI", preContext, new Callback() {
+                    @Override
+                    public void onSuccess(RecognitionResult hindiResult) {
+                        if (hindiResult == null || !containsDevanagari(hindiResult.text)) {
+                            deliverAutoFallback(marathiResult, originalStrokes, writingAngle,
+                                    includeReviewSuggestions, callback, context, preContext);
+                            return;
+                        }
+                        String bestMarathi = bestLanguageCandidate(marathiResult.alternatives,
+                                "MARATHI", context);
+                        String bestHindi = bestLanguageCandidate(hindiResult.alternatives,
+                                "HINDI", context);
+                        int marathiScore = scoreLanguageCandidate(bestMarathi, "MARATHI", context);
+                        int hindiScore = scoreLanguageCandidate(bestHindi, "HINDI", context);
+                        boolean preferHindi = hindiScore >= marathiScore + 8;
+                        RecognitionResult selected = preferHindi ? hindiResult : marathiResult;
+                        String selectedText = preferHindi ? bestHindi : bestMarathi;
+                        RecognitionResult combined = mergeLanguageResults(selected, selectedText,
+                                preferHindi ? marathiResult : hindiResult);
+                        if (includeReviewSuggestions) {
+                            tryReviewHypotheses(context, originalStrokes, combined.language,
+                                    preContext, combined, primaryPassAngle != 0f, writingAngle, callback);
+                        } else {
+                            callback.onSuccess(combined);
+                        }
+                    }
+
+                    @Override
+                    public void onFailure(Exception error) {
+                        deliverAutoFallback(marathiResult, originalStrokes, writingAngle,
+                                includeReviewSuggestions, callback, context, preContext);
+                    }
+                });
+    }
+
+    private static String bestLanguageCandidate(List<String> candidates, String language, Context context) {
+        if (candidates == null || candidates.isEmpty()) return "";
+        String best = candidates.get(0);
+        int bestScore = Integer.MIN_VALUE;
+        for (String candidate : candidates) {
+            int score = scoreLanguageCandidate(candidate, language, context);
+            if (score > bestScore) {
+                bestScore = score;
+                best = candidate;
+            }
+        }
+        return best;
+    }
+
+    private static int scoreLanguageCandidate(String text, String language, Context context) {
+        if (text == null || text.trim().isEmpty()) return Integer.MIN_VALUE / 2;
+        String[] tokens = text.trim().split("\\s+");
+        Set<String> markers = "HINDI".equalsIgnoreCase(language)
+                ? new HashSet<>(Arrays.asList("है", "हैं", "था", "थे", "थी", "मैं", "में", "को", "से", "और", "किया", "होगा"))
+                : new HashSet<>(Arrays.asList("आहे", "आहेत", "आणि", "माझे", "माझा", "माझी", "तुम्ही", "करतो", "करते", "करून", "साठी", "म्हणून", "झाले"));
+        LinguisticDictionary dictionary = context != null
+                ? LinguisticDictionary.getInstance(context) : null;
+        int score = 0;
+        for (String token : tokens) {
+            String clean = token.replaceAll("[^\\p{L}\\p{M}\\p{N}]", "");
+            if (clean.isEmpty()) continue;
+            if (markers.contains(clean)) score += 7;
+            if (dictionary != null && dictionary.isValidWord(clean, language)) score += 1;
+        }
+        return score;
+    }
+
+    private static RecognitionResult mergeLanguageResults(RecognitionResult selected,
+            String selectedText, RecognitionResult other) {
+        List<String> alternatives = new ArrayList<>();
+        if (selectedText != null && !selectedText.trim().isEmpty()) alternatives.add(selectedText);
+        for (String candidate : selected.alternatives) {
+            if (candidate != null && !candidate.trim().isEmpty() && !alternatives.contains(candidate)) {
+                alternatives.add(candidate);
+                if (alternatives.size() >= MAX_REVIEW_CANDIDATES) break;
+            }
+        }
+        if (other != null && alternatives.size() < MAX_REVIEW_CANDIDATES) {
+            if (other.text != null && !other.text.trim().isEmpty() && !alternatives.contains(other.text)) {
+                alternatives.add(other.text);
+            }
+            for (String candidate : other.alternatives) {
+                if (candidate != null && !candidate.trim().isEmpty() && !alternatives.contains(candidate)) {
+                    alternatives.add(candidate);
+                    if (alternatives.size() >= MAX_REVIEW_CANDIDATES) break;
+                }
+            }
+        }
+        return new RecognitionResult(selectedText, selected.language, selected.bounds, selected.fontSize,
+                alternatives, selected.angleDegrees, selected.startX, selected.startY, selected.wordItems);
+    }
+
+    /** Stable candidates from several orientations rise in the review list; ML Kit's
+     * primary result remains first so agreement never silently changes the transcript. */
+    private static RecognitionResult rankCandidatesByAgreement(RecognitionResult result,
+                                                                Map<String, Integer> votes) {
+        if (result == null || result.alternatives.size() < 2 || votes == null || votes.isEmpty()) return result;
+        List<String> ranked = new ArrayList<>(result.alternatives);
+        Map<String, Integer> originalRanks = new HashMap<>();
+        for (int i = 0; i < ranked.size(); i++) originalRanks.putIfAbsent(ranked.get(i), i);
+        String primary = result.text;
+        ranked.remove(primary);
+        ranked.sort((left, right) -> {
+            int voteOrder = Integer.compare(votes.getOrDefault(right, 0), votes.getOrDefault(left, 0));
+            if (voteOrder != 0) return voteOrder;
+            return Integer.compare(originalRanks.getOrDefault(left, Integer.MAX_VALUE),
+                    originalRanks.getOrDefault(right, Integer.MAX_VALUE));
+        });
+        ranked.add(0, primary);
+        return new RecognitionResult(result.text, result.language, result.bounds, result.fontSize,
+                ranked, result.angleDegrees, result.startX, result.startY, result.wordItems);
+    }
+
+    /**
+     * Last-resort recovery for a line that the recognizer could not read as a whole.
+     * Separate spatial word groups can be easier to recognize when a tight word gap,
+     * ligature, or unusual spacing makes the full line ambiguous.
+     */
+    private static void tryWordClusterFallback(Context context, List<Stroke> strokes,
+                                              String language, String preContext,
+                                              Exception originalError, Callback callback) {
+        if (strokes == null || strokes.size() < 2) {
+            callback.onFailure(originalError);
+            return;
+        }
+        List<Float> heights = new ArrayList<>();
+        for (Stroke stroke : strokes) {
+            RectF bounds = InkNormalizer.getExactBounds(stroke);
+            if (bounds != null && bounds.height() > 6f) heights.add(bounds.height());
+        }
+        if (heights.isEmpty()) {
+            callback.onFailure(originalError);
+            return;
+        }
+        Collections.sort(heights);
+        float medianHeight = Math.max(15f, heights.get(heights.size() / 2));
+        float angle = InkNormalizer.detectWritingAngleDegrees(strokes);
+        List<SemanticStrokeClusterer.StrokeWord> words =
+                SemanticStrokeClusterer.segmentLineIntoWords(strokes, medianHeight, angle);
+        if (words == null || words.size() < 2) {
+            callback.onFailure(originalError);
+            return;
+        }
+        recognizeWordClustersSequentially(context, words, 0, language, preContext,
+                new ArrayList<>(), new ArrayList<>(), originalError, callback);
+    }
+
+    /** Adds a spatially segmented read to review suggestions even when whole-line OCR worked. */
+    private static void trySpatialReviewHypothesis(Context context, List<Stroke> strokes,
+            String language, String preContext, RecognitionResult primary, Callback callback) {
+        if (primary == null || strokes == null || strokes.size() < 3) {
+            callback.onSuccess(primary);
+            return;
+        }
+        List<Float> heights = new ArrayList<>();
+        for (Stroke stroke : strokes) {
+            RectF bounds = InkNormalizer.getExactBounds(stroke);
+            if (bounds != null && bounds.height() > 6f) heights.add(bounds.height());
+        }
+        if (heights.isEmpty()) {
+            callback.onSuccess(primary);
+            return;
+        }
+        Collections.sort(heights);
+        float medianHeight = Math.max(15f, heights.get(heights.size() / 2));
+        float angle = InkNormalizer.detectWritingAngleDegrees(strokes);
+        List<SemanticStrokeClusterer.StrokeWord> words =
+                SemanticStrokeClusterer.segmentLineIntoWords(strokes, medianHeight, angle);
+        if (words == null || words.size() < 2 || words.size() > 8) {
+            callback.onSuccess(primary);
+            return;
+        }
+        recognizeWordClustersSequentially(context, words, 0, language, preContext,
+                new ArrayList<>(), new ArrayList<>(),
+                new IllegalArgumentException("Spatial word recognition returned no text."), new Callback() {
+                    @Override
+                    public void onSuccess(RecognitionResult segmented) {
+                        callback.onSuccess(appendReviewCandidate(primary,
+                                segmented != null ? segmented.text : null));
+                    }
+
+                    @Override
+                    public void onFailure(Exception error) {
+                        callback.onSuccess(primary);
+                    }
+                });
+    }
+
+    private static void tryReviewHypotheses(Context context, List<Stroke> strokes,
+            String language, String preContext, RecognitionResult primary,
+            boolean primaryWasDeskewed, float writingAngle, Callback callback) {
+        tryAlternativeHypothesis(context, strokes, language, preContext, primary,
+                primaryWasDeskewed, writingAngle, new Callback() {
+                    @Override
+                    public void onSuccess(RecognitionResult angleResult) {
+                        trySpatialReviewHypothesis(context, strokes, language, preContext,
+                                angleResult != null ? angleResult : primary, callback);
+                    }
+
+                    @Override
+                    public void onFailure(Exception error) {
+                        if (primary != null) callback.onSuccess(primary);
+                        else callback.onFailure(error);
+                    }
+                });
+    }
+
+    private static RecognitionResult appendReviewCandidate(RecognitionResult primary, String candidate) {
+        if (primary == null || candidate == null || candidate.trim().isEmpty()
+                || primary.alternatives.contains(candidate)) return primary;
+        List<String> alternatives = new ArrayList<>(primary.alternatives);
+        if (alternatives.size() >= MAX_REVIEW_CANDIDATES) {
+            alternatives.remove(alternatives.size() - 1);
+        }
+        alternatives.add(candidate);
+        return new RecognitionResult(primary.text, primary.language, primary.bounds,
+                primary.fontSize, alternatives, primary.angleDegrees, primary.startX,
+                primary.startY, primary.wordItems);
+    }
+
+    private static void recognizeWordClustersSequentially(Context context,
+            List<SemanticStrokeClusterer.StrokeWord> words, int index, String language,
+            String preContext, List<String> recognizedWords, List<WordItem> wordItems,
+            Exception originalError, Callback callback) {
+        if (index >= words.size()) {
+            String text = String.join(" ", recognizedWords);
+            RectF bounds = new RectF();
+            boolean hasBounds = false;
+            float fontSize = 32f;
+            for (SemanticStrokeClusterer.StrokeWord word : words) {
+                if (word.bounds == null) continue;
+                if (!hasBounds) {
+                    bounds.set(word.bounds);
+                    hasBounds = true;
+                } else {
+                    bounds.union(word.bounds);
+                }
+            }
+            if (!hasBounds) {
+                callback.onFailure(originalError);
+                return;
+            }
+            for (WordItem item : wordItems) {
+                if (item.bounds != null) fontSize = Math.max(fontSize, item.bounds.height() * 0.8f);
+            }
+            callback.onSuccess(new RecognitionResult(text, language, bounds, fontSize,
+                    Collections.singletonList(text), 0f, bounds.left, bounds.bottom - 4f, wordItems));
+            return;
+        }
+
+        SemanticStrokeClusterer.StrokeWord word = words.get(index);
+        if (word == null || word.strokes == null || word.strokes.isEmpty()) {
+            callback.onFailure(originalError);
+            return;
+        }
+        executeSingleRecognitionPass(context, word.strokes, word.strokes, 0f, language, preContext,
+                new Callback() {
+                    @Override
+                    public void onSuccess(RecognitionResult result) {
+                        if (result == null || result.text == null || result.text.trim().isEmpty()) {
+                            callback.onFailure(originalError);
+                            return;
+                        }
+                        recognizedWords.add(result.text.trim());
+                        RectF wordBounds = word.bounds != null ? new RectF(word.bounds) : boundsOf(word.strokes);
+                        wordItems.add(new WordItem(result.text.trim(), wordBounds, ""));
+                        String nextContext = (preContext == null || preContext.isEmpty())
+                                ? result.text : preContext + " " + result.text;
+                        recognizeWordClustersSequentially(context, words, index + 1, language,
+                                recentPreContext(nextContext, 20), recognizedWords, wordItems,
+                                originalError, callback);
+                    }
+
+                    @Override
+                    public void onFailure(Exception error) {
+                        callback.onFailure(originalError != null ? originalError : error);
+                    }
+                });
     }
 
     private static void executeSingleRecognitionPass(Context context,
@@ -648,7 +1096,15 @@ public final class HandwritingRecognitionEngine {
                                                      String preferredLanguage,
                                                      String preContext,
                                                      Callback callback) {
-        final RectF bounds = boundsOf(strokesToRecognize);
+        // Work on cleaned, uniformly sampled copies. Original strokes are retained
+        // separately for placement, learning, and undo; preprocessing never mutates them.
+        final List<Stroke> preparedStrokes = InkPreprocessor.prepare(strokesToRecognize);
+        if (preparedStrokes.isEmpty()) {
+            postFailure(callback, new IllegalArgumentException(
+                    "No usable handwriting points were found. Your ink was kept."));
+            return;
+        }
+        final RectF bounds = boundsOf(preparedStrokes);
         if (bounds == null) {
             postFailure(callback, new IllegalArgumentException(
                     "No usable handwriting points were found. Your ink was kept."));
@@ -658,7 +1114,7 @@ public final class HandwritingRecognitionEngine {
         resolveReadyModel(preferredLanguage, new ModelResolutionCallback() {
             @Override
             public void onResolved(DigitalInkRecognitionModel model, String tag) {
-                runRecognition(context, model, strokesToRecognize, originalStrokes, angleDegrees,
+                runRecognition(context, model, preparedStrokes, originalStrokes, angleDegrees,
                         preferredLanguage, preContext, bounds, callback);
             }
 
@@ -683,7 +1139,7 @@ public final class HandwritingRecognitionEngine {
                 });
 
                 downloadThenRecognize(context, manager, model, tag,
-                        strokesToRecognize, originalStrokes, angleDegrees,
+                        preparedStrokes, originalStrokes, angleDegrees,
                         preferredLanguage, preContext, bounds, callback);
             }
         });
@@ -751,6 +1207,7 @@ public final class HandwritingRecognitionEngine {
         for (String candidate : alternate.alternatives) {
             if (candidate != null && !candidate.trim().isEmpty() && !merged.contains(candidate)) {
                 merged.add(candidate);
+                if (merged.size() >= MAX_REVIEW_CANDIDATES) break;
             }
         }
         return new RecognitionResult(primary.text, primary.language, primary.bounds,
@@ -1252,7 +1709,7 @@ public final class HandwritingRecognitionEngine {
 
             MAIN.post(() -> callback.onSuccess(
                     new RecognitionResult(postText, finalLang, finalBounds, finalFontSize,
-                            verifiedAlternatives, angleDegrees, finalStartX, finalStartY)));
+                            verifiedAlternatives, 0f, finalStartX, finalStartY)));
         } finally {
             recognizer.close();
         }
@@ -1471,9 +1928,29 @@ public final class HandwritingRecognitionEngine {
                     pool.add(learned);
                 }
             }
+            pool = rerankPersonalContext(pool, userModel, preContext);
         }
 
         return rerankClearAnusvarAlternatives(strokes, pool, language);
+    }
+
+    /** Keeps ML Kit's first suggestion fixed; learned phrase context only orders alternatives. */
+    private static List<String> rerankPersonalContext(List<String> candidates,
+            UserHandwritingModel userModel, String preContext) {
+        if (candidates == null || candidates.size() < 2 || userModel == null) return candidates;
+        List<String> ranked = new ArrayList<>(candidates);
+        String primary = ranked.remove(0);
+        Map<String, Integer> originalRanks = new HashMap<>();
+        for (int i = 0; i < ranked.size(); i++) originalRanks.putIfAbsent(ranked.get(i), i);
+        ranked.sort((left, right) -> {
+            int leftScore = userModel.getPersonalizedContextScore(left, preContext);
+            int rightScore = userModel.getPersonalizedContextScore(right, preContext);
+            if (leftScore != rightScore) return Integer.compare(rightScore, leftScore);
+            return Integer.compare(originalRanks.getOrDefault(left, Integer.MAX_VALUE),
+                    originalRanks.getOrDefault(right, Integer.MAX_VALUE));
+        });
+        ranked.add(0, primary);
+        return ranked;
     }
 
     /**

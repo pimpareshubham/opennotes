@@ -208,7 +208,14 @@ public class SemanticStrokeClusterer {
 
         int n = projected.size();
         int[] parent = new int[n];
-        for (int i = 0; i < n; i++) parent[i] = i;
+        float[] componentTop = new float[n];
+        float[] componentBottom = new float[n];
+        final float maxLineClusterHeight = 1.85f * medianH;
+        for (int i = 0; i < n; i++) {
+            parent[i] = i;
+            componentTop[i] = projected.get(i).minY;
+            componentBottom[i] = projected.get(i).maxY;
+        }
 
         // Form connected components of strokes on the same line
         for (int i = 0; i < n; i++) {
@@ -256,7 +263,15 @@ public class SemanticStrokeClusterer {
                     int rootI = dsuFind(parent, i);
                     int rootJ = dsuFind(parent, j);
                     if (rootI != rootJ) {
-                        parent[rootI] = rootJ;
+                        float mergedTop = Math.min(componentTop[rootI], componentTop[rootJ]);
+                        float mergedBottom = Math.max(componentBottom[rootI], componentBottom[rootJ]);
+                        // Bound single-linkage growth: a tall ascender or detached
+                        // accent must not bridge otherwise distinct writing rows.
+                        if (mergedBottom - mergedTop <= maxLineClusterHeight) {
+                            parent[rootJ] = rootI;
+                            componentTop[rootI] = mergedTop;
+                            componentBottom[rootI] = mergedBottom;
+                        }
                     }
                 }
             }
@@ -313,7 +328,9 @@ public class SemanticStrokeClusterer {
                         float minClusterH = Math.min(c1H, c2H);
                         float cHGap = Math.max(0f, Math.max(c1Left, c2Left) - Math.min(c1Right, c2Right));
 
-                        if (cHGap <= 4.5f * medianH && cyDiff <= 0.60f * medianH
+                        float mergedHeight = Math.max(c1Bottom, c2Bottom) - Math.min(c1Top, c2Top);
+                        if (mergedHeight <= maxLineClusterHeight
+                                && cHGap <= 4.5f * medianH && cyDiff <= 0.60f * medianH
                                 && (vOverlap >= 0.12f * minClusterH || cyDiff <= 0.38f * medianH)) {
                             c1.addAll(c2);
                             clusterList.remove(j);
@@ -345,10 +362,18 @@ public class SemanticStrokeClusterer {
                         if (k == i) continue;
                         List<ProjectedStroke> target = clusterList.get(k);
                         float targetCy = 0f;
-                        for (ProjectedStroke s : target) targetCy += s.cy;
+                        float targetTop = Float.MAX_VALUE;
+                        float targetBottom = -Float.MAX_VALUE;
+                        for (ProjectedStroke s : target) {
+                            targetCy += s.cy;
+                            targetTop = Math.min(targetTop, s.minY);
+                            targetBottom = Math.max(targetBottom, s.maxY);
+                        }
                         targetCy /= target.size();
                         float dist = Math.abs(cCy - targetCy);
-                        if (dist < minDistance) {
+                        float mergedHeight = Math.max(cBottom, targetBottom)
+                                - Math.min(cTop, targetTop);
+                        if (mergedHeight <= maxLineClusterHeight && dist < minDistance) {
                             minDistance = dist;
                             bestIdx = k;
                         }

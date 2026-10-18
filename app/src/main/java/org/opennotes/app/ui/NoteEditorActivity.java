@@ -244,7 +244,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if (uri != null) {
                 try (OutputStream os = getContentResolver().openOutputStream(uri)) {
                     UserHandwritingModel.getInstance(this).exportProfile(os);
-                    Toast.makeText(this, "📤 Handwriting profile exported (.onhw) successfully!", Toast.LENGTH_LONG).show();
+                    Toast.makeText(this, "📤 Local handwriting learning exported (.onhw) successfully!", Toast.LENGTH_LONG).show();
                 } catch (Exception e) {
                     Toast.makeText(this, "Failed to export profile: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
@@ -256,7 +256,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 try (InputStream is = getContentResolver().openInputStream(uri)) {
                     UserHandwritingModel.getInstance(this).importProfile(is);
                     int count = UserHandwritingModel.getInstance(this).getLearnedCount();
-                    Toast.makeText(this, "📥 Handwriting profile imported! (" + count + " personal styles & prototypes loaded)", Toast.LENGTH_LONG).show();
+                    int pairs = UserHandwritingModel.getInstance(this).getLearnedBigramCount();
+                    Toast.makeText(this, "📥 Local learning merged into this device! " + count
+                            + " learned items, including " + pairs + " word pairs.", Toast.LENGTH_LONG).show();
                 } catch (Exception e) {
                     Toast.makeText(this, "Failed to import profile: " + e.getMessage(), Toast.LENGTH_SHORT).show();
                 }
@@ -2865,6 +2867,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         UserHandwritingModel model = UserHandwritingModel.getInstance(this);
         int learnedCount = model.getLearnedCount();
         int vocabCount = model.getCustomVocabulary().size();
+        int wordPairCount = model.getLearnedBigramCount();
 
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -2872,9 +2875,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         layout.setPadding(pad, pad, pad, pad);
 
         TextView infoText = new TextView(this);
-        infoText.setText("OpenNotes trains itself with your personal handwriting quirks, cursive ligatures, and doctor's handwriting styles offline.\n\n"
-                + "📊 Learned Styles & Prototypes: " + learnedCount + "\n"
-                + "📚 Custom Trained Vocabulary: " + vocabCount + " words");
+        infoText.setText("Your local learning stays on this device until you export it. An .onhw profile includes handwriting examples, custom vocabulary, corrections, and learned word pairs.\n\n"
+                + "📊 Learned items: " + learnedCount + "\n"
+                + "📚 Custom vocabulary: " + vocabCount + " entries\n"
+                + "🔗 Learned word pairs: " + wordPairCount);
         infoText.setTextColor(0xFFE2E8F0);
         infoText.setTextSize(14f);
         infoText.setPadding(0, 0, 0, dpToPx(16));
@@ -2887,13 +2891,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         layout.addView(btnTeach);
 
         Button btnExport = new Button(this);
-        btnExport.setText("📤 Export Profile (.onhw)");
+        btnExport.setText("📤 Export Local Learning (.onhw)");
         ThemeUtils.styleButton(btnExport, this, false);
         btnExport.setOnClickListener(v -> exportProfileLauncher.launch("my_handwriting_profile.onhw"));
         layout.addView(btnExport);
 
         Button btnImport = new Button(this);
-        btnImport.setText("📥 Import Profile (.onhw)");
+        btnImport.setText("📥 Import Local Learning (.onhw)");
         ThemeUtils.styleButton(btnImport, this, false);
         btnImport.setOnClickListener(v -> importProfileLauncher.launch("*/*"));
         layout.addView(btnImport);
@@ -3365,8 +3369,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             String[] options = {
                     "📥 Offline Handwriting Models",
                     "🎓 Train My Handwriting Style",
-                    "📤 Export Handwriting Profile (.onhw)",
-                    "📥 Import Handwriting Profile (.onhw)"
+                    "📤 Export Local Handwriting Learning (.onhw)",
+                    "📥 Import Local Handwriting Learning (.onhw)"
             };
             MaterialAlertDialogBuilder optBuilder = new MaterialAlertDialogBuilder(this)
                     .setTitle("AI & Handwriting Options")
@@ -3702,7 +3706,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         UserHandwritingModel model = UserHandwritingModel.getInstance(this);
         int learnedCount = model.getLearnedCount();
-        textModelStats.setText("Currently learned: " + learnedCount + " user styles & words. Adaptive neural matching active.");
+        textModelStats.setText("Local learning: " + learnedCount + " items, including "
+                + model.getLearnedBigramCount() + " word pairs. Export or import an .onhw profile anytime.");
 
         // Check canvas selection to prefill
         List<TextItem> selectedTexts = canvasView.getSelectedTexts();
