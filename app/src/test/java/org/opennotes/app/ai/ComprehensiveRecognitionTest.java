@@ -204,6 +204,8 @@ public class ComprehensiveRecognitionTest {
                     1, lines.size());
             Assert.assertEquals("All strokes must be preserved in the single line",
                     lineStrokes.size(), lines.get(0).strokes.size());
+            Assert.assertEquals("Three spatial word groups should remain distinct at angle " + angle + "°",
+                    3, lines.get(0).words.size());
         }
     }
 

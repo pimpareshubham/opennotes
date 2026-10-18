@@ -6,7 +6,6 @@ import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.Stroke;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -130,7 +129,6 @@ public class InkNormalizer {
                 suppressPerpendicular = true;
             }
         }
-
         // 2. Minimum Area Bounding Box / Aspect Ratio Sweep across angles [-115°, +115°]
         // Covers natural horizontal slope ([-45°, +45°]), steep angles, and vertical handwriting (+/-90°).
         float bestAngle = 0f;
@@ -145,23 +143,21 @@ public class InkNormalizer {
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);
 
-            float[] projectedX = new float[pointCount];
-            float[] projectedY = new float[pointCount];
-            int projectedCount = 0;
+            float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+            float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
             for (DrawingPoint p : allPoints) {
                 float dx = p.x - cx;
                 float dy = p.y - cy;
                 float rx = dx * cos - dy * sin;
                 float ry = dx * sin + dy * cos;
-                projectedX[projectedCount] = rx;
-                projectedY[projectedCount] = ry;
-                projectedCount++;
+                if (rx < minX) minX = rx;
+                if (rx > maxX) maxX = rx;
+                if (ry < minY) minY = ry;
+                if (ry > maxY) maxY = ry;
             }
 
-            // Trim extreme projected samples so isolated marks and long ascenders
-            // cannot dominate the angle estimate for an otherwise clear baseline.
-            float w = Math.max(1f, robustProjectionSpan(projectedX, projectedCount));
-            float h = Math.max(1f, robustProjectionSpan(projectedY, projectedCount));
+            float w = Math.max(1f, maxX - minX);
+            float h = Math.max(1f, maxY - minY);
             float ar = w / h;
             float area = w * h;
 
@@ -191,21 +187,21 @@ public class InkNormalizer {
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);
 
-            float[] projectedX = new float[pointCount];
-            float[] projectedY = new float[pointCount];
-            int projectedCount = 0;
+            float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+            float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
             for (DrawingPoint p : allPoints) {
                 float dx = p.x - cx;
                 float dy = p.y - cy;
                 float rx = dx * cos - dy * sin;
                 float ry = dx * sin + dy * cos;
-                projectedX[projectedCount] = rx;
-                projectedY[projectedCount] = ry;
-                projectedCount++;
+                if (rx < minX) minX = rx;
+                if (rx > maxX) maxX = rx;
+                if (ry < minY) minY = ry;
+                if (ry > maxY) maxY = ry;
             }
 
-            float w = Math.max(1f, robustProjectionSpan(projectedX, projectedCount));
-            float h = Math.max(1f, robustProjectionSpan(projectedY, projectedCount));
+            float w = Math.max(1f, maxX - minX);
+            float h = Math.max(1f, maxY - minY);
             float score = (w * w) / (h * (float) Math.sqrt(w * h));
             if (hasProgression && progDist >= 18f) {
                 float diff = Math.abs(normalizeAngleDiff(deg, progAngle));
@@ -230,14 +226,6 @@ public class InkNormalizer {
         if (bestAspectRatio < 1.30f && progDist < 25f && strokes.size() <= 4) return 0f;
 
         return refinedAngle;
-    }
-
-    /** Returns a trimmed coordinate span to reduce the effect of isolated ink outliers. */
-    private static float robustProjectionSpan(float[] values, int count) {
-        if (values == null || count <= 0) return 0f;
-        Arrays.sort(values, 0, count);
-        int trim = Math.min((int) (count * 0.05f), Math.max(0, (count - 1) / 2));
-        return values[count - trim - 1] - values[trim];
     }
 
     private static int countHorizontalStrokePairs(List<Stroke> strokes) {

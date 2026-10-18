@@ -470,7 +470,7 @@ public class SemanticStrokeClusterer {
                 // Handwriting often has wider intra-word gaps than print, especially
                 // around y, r, t and detached joins. Keep the threshold generous but
                 // below the typical full word gap so neighboring words stay separate.
-                } else if (hGap < 0.82f * medianH) {
+                } else if (hGap < 0.72f * medianH) {
                     sameWord = true;
                 }
 
