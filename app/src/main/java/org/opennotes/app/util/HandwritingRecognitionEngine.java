@@ -332,6 +332,7 @@ public final class HandwritingRecognitionEngine {
                                         String preferredLanguage, String preContext,
                                         Callback callback) {
         if (context == null || strokes == null || strokes.isEmpty() || callback == null) return;
+        org.opennotes.app.ai.LinguisticDictionary.getInstance(context);
         recognizeMultiHypothesis(context, strokes, preferredLanguage, preContext, false, callback);
     }
 
@@ -398,7 +399,7 @@ public final class HandwritingRecognitionEngine {
         executeSingleRecognitionPass(context, primaryStrokes, strokes, primaryPassAngle, preferredLanguage, contextText, new Callback() {
             @Override
             public void onSuccess(RecognitionResult primaryResult) {
-                RecognitionResult reconciled = disambiguateDigits(primaryResult, strokes);
+                RecognitionResult reconciled = disambiguateDigits(context, primaryResult, strokes);
                 if (reconciled != null && !reconciled.text.trim().isEmpty()) {
                     if (includeReviewSuggestions && reconciled.alternatives.size() <= 1) {
                         tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
@@ -487,7 +488,7 @@ public final class HandwritingRecognitionEngine {
                                      Callback callback) {
         if (index >= queue.size()) {
             if (accumulatedResult != null) {
-                callback.onSuccess(disambiguateDigits(accumulatedResult, originalStrokes));
+                callback.onSuccess(disambiguateDigits(context, accumulatedResult, originalStrokes));
             } else if ((preContext == null || preContext.isEmpty()) && !queue.isEmpty()) {
                 // Cross-language fallback (Devanagari <-> English) if primary language produced no candidates
                 String fallbackLang = "ENGLISH".equalsIgnoreCase(language) ? "MARATHI" : "ENGLISH";
@@ -523,7 +524,7 @@ public final class HandwritingRecognitionEngine {
             public void onSuccess(RecognitionResult candidateResult) {
                 if (candidateResult != null && !candidateResult.text.trim().isEmpty()) {
                     RecognitionResult merged = mergeCandidates(accumulatedResult, candidateResult);
-                    callback.onSuccess(disambiguateDigits(merged, originalStrokes));
+                    callback.onSuccess(disambiguateDigits(context, merged, originalStrokes));
                 } else {
                     runWaterfall(context, queue, originalStrokes, index + 1, language, preContext, accumulatedResult, callback);
                 }
@@ -664,7 +665,7 @@ public final class HandwritingRecognitionEngine {
                 primary.fontSize, merged, primary.angleDegrees, primary.startX, primary.startY);
     }
 
-    private static RecognitionResult disambiguateDigits(RecognitionResult result, List<Stroke> strokes) {
+    private static RecognitionResult disambiguateDigits(Context context, RecognitionResult result, List<Stroke> strokes) {
         if (result == null) return null;
         String text = result.text != null ? result.text : "";
         List<String> alternatives = new ArrayList<>(result.alternatives);
@@ -682,6 +683,16 @@ public final class HandwritingRecognitionEngine {
                 verifiedAlternatives.add(dis);
             }
         }
+
+        // Apply built-in tri-lingual Marathi/Hindi/English Linguistic Dictionary refinement ("final touch")
+        if (context != null) {
+            try {
+                org.opennotes.app.ai.LinguisticDictionary dict = org.opennotes.app.ai.LinguisticDictionary.getInstance(context);
+                text = dict.refineRecognizedLine(text, result.language, verifiedAlternatives);
+            } catch (Throwable ignored) {
+            }
+        }
+
         if (!verifiedAlternatives.contains(text)) {
             verifiedAlternatives.add(0, text);
         }
@@ -1165,6 +1176,16 @@ public final class HandwritingRecognitionEngine {
                     verifiedAlternatives.add(dis);
                 }
             }
+
+            // Apply built-in tri-lingual Marathi/Hindi/English Linguistic Dictionary refinement ("final touch")
+            if (context != null) {
+                try {
+                    org.opennotes.app.ai.LinguisticDictionary dict = org.opennotes.app.ai.LinguisticDictionary.getInstance(context);
+                    finalText = dict.refineRecognizedLine(finalText, lang, verifiedAlternatives);
+                } catch (Throwable ignored) {
+                }
+            }
+
             if (!verifiedAlternatives.contains(finalText)) {
                 verifiedAlternatives.add(0, finalText);
             }
@@ -1386,6 +1407,18 @@ public final class HandwritingRecognitionEngine {
                                                            List<String> alternatives, String language, String preContext) {
         if (alternatives == null || alternatives.isEmpty()) return alternatives;
         List<String> pool = new ArrayList<>(alternatives);
+        // Prioritize candidates based on authentic linguistic dictionary density
+        if (context != null && pool.size() > 1) {
+            try {
+                org.opennotes.app.ai.LinguisticDictionary dict = org.opennotes.app.ai.LinguisticDictionary.getInstance(context);
+                Collections.sort(pool, (c1, c2) -> {
+                    int s1 = dict.scoreLine(c1, language);
+                    int s2 = dict.scoreLine(c2, language);
+                    return Integer.compare(s2, s1);
+                });
+            } catch (Throwable ignored) {
+            }
+        }
 
         // Devanagari (Marathi/Hindi) linguistic and geometric feature matching
         if (InkNormalizer.isIndicLanguage(language)) {
