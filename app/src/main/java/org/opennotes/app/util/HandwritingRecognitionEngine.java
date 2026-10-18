@@ -383,7 +383,7 @@ public final class HandwritingRecognitionEngine {
         int nonShirorekhaCount = 0;
 
         for (SemanticStrokeClusterer.StrokeWord w : words) {
-            if (isRightArrow(w.strokes) || isLeftArrow(w.strokes) || isDigitOne(w.strokes) || isDash(w.strokes) || isBullet(w.strokes)) {
+            if (isRightArrow(w.strokes) || isLeftArrow(w.strokes) || isDash(w.strokes) || isBullet(w.strokes)) {
                 hasSymbolOrMixedScript = true;
                 break;
             }
@@ -475,6 +475,7 @@ public final class HandwritingRecognitionEngine {
         String wordLang = preferredLanguage;
         String defaultFont = TypefaceManager.FONT_KALAM;
         if (!hasSh && InkNormalizer.isIndicLanguage(preferredLanguage)) {
+            wordLang = "ENGLISH";
             defaultFont = TypefaceManager.FONT_CAVEAT;
         }
         final String expectedFont = defaultFont;
@@ -483,7 +484,7 @@ public final class HandwritingRecognitionEngine {
             @Override
             public void onSuccess(RecognitionResult wordRes) {
                 if (wordRes != null && wordRes.text != null && !wordRes.text.trim().isEmpty()) {
-                    String wText = wordRes.text.trim();
+                    String wText = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(wordRes.text.trim(), wordStrokes);
                     String fKey = (!hasSh || "ENGLISH".equalsIgnoreCase(wordRes.language))
                             ? TypefaceManager.FONT_CAVEAT : expectedFont;
                     accumulatedItems.add(new WordItem(wText, word.bounds, fKey));
@@ -684,15 +685,29 @@ public final class HandwritingRecognitionEngine {
                 ? transformedStrokeCopies(strokes, primaryPassAngle, false, false)
                 : strokes;
 
+        // Run ML Kit Vision OCR in parallel to cross-verify handwriting from visual bitmap
+        final String[] visionResultHolder = new String[]{null};
+        org.opennotes.app.ai.VisionTextEngine.recognizeStrokesVision(strokes, preferredLanguage, new org.opennotes.app.ai.VisionTextEngine.VisionCallback() {
+            @Override
+            public void onResult(String recognizedText, float confidence) {
+                visionResultHolder[0] = recognizedText;
+            }
+
+            @Override
+            public void onError(Exception e) {
+            }
+        });
+
         executeSingleRecognitionPass(context, primaryStrokes, strokes, primaryPassAngle, preferredLanguage, contextText, new Callback() {
             @Override
             public void onSuccess(RecognitionResult primaryResult) {
-                if (primaryResult != null && !primaryResult.text.trim().isEmpty()) {
-                    if (includeReviewSuggestions && primaryResult.alternatives.size() <= 1) {
+                RecognitionResult reconciled = reconcileWithVisionAndGeometry(primaryResult, strokes, visionResultHolder[0]);
+                if (reconciled != null && !reconciled.text.trim().isEmpty()) {
+                    if (includeReviewSuggestions && reconciled.alternatives.size() <= 1) {
                         tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                                primaryResult, primaryPassAngle != 0f, writingAngle, callback);
+                                reconciled, primaryPassAngle != 0f, writingAngle, callback);
                     } else {
-                        callback.onSuccess(primaryResult);
+                        callback.onSuccess(reconciled);
                     }
                 } else {
                     tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
@@ -775,7 +790,41 @@ public final class HandwritingRecognitionEngine {
                                      Callback callback) {
         if (index >= queue.size()) {
             if (accumulatedResult != null) {
-                callback.onSuccess(accumulatedResult);
+                // If accumulatedResult has Indic language without Shirorekha and contains Indic characters,
+                // try English model cross-check to catch digits and Latin text written in Indic mode
+                boolean isIndic = InkNormalizer.isIndicLanguage(language);
+                boolean noShirorekha = !hasShirorekha(originalStrokes);
+                boolean hasIndicChars = accumulatedResult.text != null && accumulatedResult.text.matches(".*[\\u0900-\\u097F].*");
+                if (isIndic && noShirorekha && hasIndicChars) {
+                    resolveReadyModel("ENGLISH", new ModelResolutionCallback() {
+                        @Override
+                        public void onResolved(DigitalInkRecognitionModel model, String tag) {
+                            executeSingleRecognitionPass(context, originalStrokes, originalStrokes, 0f, "ENGLISH", "", new Callback() {
+                                @Override
+                                public void onSuccess(RecognitionResult enResult) {
+                                    if (enResult != null && !enResult.text.trim().isEmpty()) {
+                                        RecognitionResult merged = mergeCandidates(enResult, accumulatedResult);
+                                        callback.onSuccess(reconcileWithVisionAndGeometry(merged, originalStrokes, null));
+                                    } else {
+                                        callback.onSuccess(reconcileWithVisionAndGeometry(accumulatedResult, originalStrokes, null));
+                                    }
+                                }
+
+                                @Override
+                                public void onFailure(Exception error) {
+                                    callback.onSuccess(reconcileWithVisionAndGeometry(accumulatedResult, originalStrokes, null));
+                                }
+                            });
+                        }
+
+                        @Override
+                        public void onNoneReady(String preferredTag) {
+                            callback.onSuccess(reconcileWithVisionAndGeometry(accumulatedResult, originalStrokes, null));
+                        }
+                    });
+                    return;
+                }
+                callback.onSuccess(reconcileWithVisionAndGeometry(accumulatedResult, originalStrokes, null));
             } else if ((preContext == null || preContext.isEmpty()) && !queue.isEmpty()) {
                 // Cross-language fallback (Devanagari <-> English) if primary language produced no candidates
                 String fallbackLang = "ENGLISH".equalsIgnoreCase(language) ? "MARATHI" : "ENGLISH";
@@ -811,7 +860,7 @@ public final class HandwritingRecognitionEngine {
             public void onSuccess(RecognitionResult candidateResult) {
                 if (candidateResult != null && !candidateResult.text.trim().isEmpty()) {
                     RecognitionResult merged = mergeCandidates(accumulatedResult, candidateResult);
-                    callback.onSuccess(merged);
+                    callback.onSuccess(reconcileWithVisionAndGeometry(merged, originalStrokes, null));
                 } else {
                     runWaterfall(context, queue, originalStrokes, index + 1, language, preContext, accumulatedResult, callback);
                 }
@@ -950,6 +999,55 @@ public final class HandwritingRecognitionEngine {
         }
         return new RecognitionResult(primary.text, primary.language, primary.bounds,
                 primary.fontSize, merged, primary.angleDegrees, primary.startX, primary.startY);
+    }
+
+    private static RecognitionResult reconcileWithVisionAndGeometry(RecognitionResult result, List<Stroke> strokes, String visionText) {
+        if (result == null) return null;
+        String text = result.text != null ? result.text : "";
+        List<String> alternatives = new ArrayList<>(result.alternatives);
+
+        // 1. Geometric & topological disambiguation (e.g. 4 vs 9, 1 vs 7)
+        String geomDisambiguated = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(text, strokes);
+        if (!geomDisambiguated.equals(text)) {
+            if (!alternatives.contains(text)) alternatives.add(text);
+            text = geomDisambiguated;
+        }
+
+        // Disambiguate all alternative candidates as well
+        List<String> verifiedAlternatives = new ArrayList<>();
+        for (String alt : alternatives) {
+            String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, strokes);
+            if (!verifiedAlternatives.contains(dis)) {
+                verifiedAlternatives.add(dis);
+            }
+        }
+        alternatives = verifiedAlternatives;
+
+        // 2. Vision OCR cross-verification
+        if (visionText != null && !visionText.trim().isEmpty()) {
+            String vTrimmed = visionText.trim();
+            vTrimmed = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(vTrimmed, strokes);
+            if (!alternatives.contains(vTrimmed)) {
+                alternatives.add(vTrimmed);
+            }
+            // If Vision OCR detects pure digits / Latin numbers (e.g. "1949"),
+            // and Digital Ink misclassified it (e.g. "1999" or Indic letters)
+            if (vTrimmed.matches("^[0-9\\s.,\\-+:/#]+$") && (!text.matches("^[0-9\\s.,\\-+:/#]+$") || (text.contains("9") && vTrimmed.contains("4")))) {
+                text = vTrimmed;
+            }
+        }
+
+        if (!alternatives.contains(text)) {
+            alternatives.add(0, text);
+        }
+
+        String finalLang = result.language;
+        if (text.matches("^[0-9\\s.,\\-+]+$") || text.matches("^[a-zA-Z0-9\\s.,\\-+!?'\"()]+$")) {
+            finalLang = "ENGLISH";
+        }
+
+        return new RecognitionResult(text, finalLang, result.bounds, result.fontSize,
+                alternatives, result.angleDegrees, result.startX, result.startY, result.wordItems);
     }
 
     private static List<Stroke> transformedStrokeCopies(List<Stroke> strokes,
@@ -1412,16 +1510,30 @@ public final class HandwritingRecognitionEngine {
                 startY = origBounds.top + 4f;
             }
 
+            String finalText = text;
+            finalText = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(finalText, originalStrokes);
+
+            List<String> verifiedAlternatives = new ArrayList<>();
+            for (String alt : rerankedAlternatives) {
+                String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, originalStrokes);
+                if (!verifiedAlternatives.contains(dis)) {
+                    verifiedAlternatives.add(dis);
+                }
+            }
+            if (!verifiedAlternatives.contains(finalText)) {
+                verifiedAlternatives.add(0, finalText);
+            }
+
             final float finalFontSize = fontSize;
-            final String finalText = text;
+            final String postText = finalText;
             final String finalLang = lang;
             final RectF finalBounds = new RectF(origBounds);
             final float finalStartX = startX;
             final float finalStartY = startY;
 
             MAIN.post(() -> callback.onSuccess(
-                    new RecognitionResult(finalText, finalLang, finalBounds, finalFontSize,
-                            rerankedAlternatives, angleDegrees, finalStartX, finalStartY)));
+                    new RecognitionResult(postText, finalLang, finalBounds, finalFontSize,
+                            verifiedAlternatives, angleDegrees, finalStartX, finalStartY)));
         } finally {
             recognizer.close();
         }
