@@ -372,300 +372,10 @@ public final class HandwritingRecognitionEngine {
                                                     String preContext,
                                                     boolean includeReviewSuggestions,
                                                     Callback callback) {
-        List<SemanticStrokeClusterer.StrokeWord> words = line.words;
-        if (words == null || words.size() <= 1) {
-            recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, includeReviewSuggestions, callback);
-            return;
-        }
-
-        boolean hasSymbolOrMixedScript = false;
-        int shirorekhaCount = 0;
-        int nonShirorekhaCount = 0;
-
-        for (SemanticStrokeClusterer.StrokeWord w : words) {
-            if (isRightArrow(w.strokes) || isLeftArrow(w.strokes) || isDash(w.strokes) || isBullet(w.strokes)) {
-                hasSymbolOrMixedScript = true;
-                break;
-            }
-            if (hasShirorekha(w.strokes)) {
-                shirorekhaCount++;
-            } else {
-                nonShirorekhaCount++;
-            }
-        }
-        if (!hasSymbolOrMixedScript && shirorekhaCount > 0 && nonShirorekhaCount > 0) {
-            hasSymbolOrMixedScript = true;
-        }
-
-        if (hasSymbolOrMixedScript && Math.abs(line.angleDegrees) < 4.0f) {
-            recognizeWordsSequentially(context, words, 0, new ArrayList<>(), preferredLanguage, preContext,
-                    line.bounds, line.angleDegrees, callback);
-        } else {
-            recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, includeReviewSuggestions, callback);
-        }
+        recognizeMultiHypothesis(context, line.strokes, preferredLanguage, preContext, includeReviewSuggestions, callback);
     }
 
-    private static void recognizeWordsSequentially(Context context,
-                                                   List<SemanticStrokeClusterer.StrokeWord> words,
-                                                   int index,
-                                                   List<WordItem> accumulatedItems,
-                                                   String preferredLanguage,
-                                                   String preContext,
-                                                   RectF lineBounds,
-                                                   float angleDegrees,
-                                                   Callback callback) {
-        if (index >= words.size()) {
-            if (accumulatedItems.isEmpty()) {
-                postFailure(callback, new IllegalArgumentException("No text recognized on line."));
-                return;
-            }
-            StringBuilder sb = new StringBuilder();
-            for (int i = 0; i < accumulatedItems.size(); i++) {
-                if (i > 0) sb.append(" ");
-                sb.append(accumulatedItems.get(i).text);
-            }
-            String fullText = sb.toString();
-            float fontSize = Math.max(26f, Math.min(65f, lineBounds.height() * 0.85f));
-            String lineLang = isLatin(preferredLanguage) ? "ENGLISH"
-                    : ("HINDI".equalsIgnoreCase(preferredLanguage) ? "HINDI" : "MARATHI");
-            if (fullText.matches("^[0-9\\s.,\\-+]+$") || fullText.matches("^[a-zA-Z0-9\\s.,\\-+!?'\"()]+$")) {
-                lineLang = "ENGLISH";
-            }
-            RecognitionResult result = new RecognitionResult(fullText, lineLang, lineBounds, fontSize,
-                    Collections.singletonList(fullText), angleDegrees, lineBounds.left, lineBounds.bottom - 4f, accumulatedItems);
-            MAIN.post(() -> callback.onSuccess(result));
-            return;
-        }
 
-        SemanticStrokeClusterer.StrokeWord word = words.get(index);
-        final List<Stroke> wordStrokes = word.strokes;
-
-        if (isRightArrow(wordStrokes)) {
-            accumulatedItems.add(new WordItem("->", word.bounds, TypefaceManager.FONT_CAVEAT));
-            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
-                    preContext, lineBounds, angleDegrees, callback);
-            return;
-        }
-        if (isLeftArrow(wordStrokes)) {
-            accumulatedItems.add(new WordItem("<-", word.bounds, TypefaceManager.FONT_CAVEAT));
-            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
-                    preContext, lineBounds, angleDegrees, callback);
-            return;
-        }
-        if (isDigitOne(wordStrokes)) {
-            accumulatedItems.add(new WordItem("1", word.bounds, TypefaceManager.FONT_CAVEAT));
-            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
-                    preContext, lineBounds, angleDegrees, callback);
-            return;
-        }
-        if (isDash(wordStrokes)) {
-            accumulatedItems.add(new WordItem("-", word.bounds, TypefaceManager.FONT_CAVEAT));
-            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
-                    preContext, lineBounds, angleDegrees, callback);
-            return;
-        }
-        if (isBullet(wordStrokes)) {
-            accumulatedItems.add(new WordItem("•", word.bounds, TypefaceManager.FONT_CAVEAT));
-            recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
-                    preContext, lineBounds, angleDegrees, callback);
-            return;
-        }
-
-        final boolean hasSh = hasShirorekha(wordStrokes);
-        String wordLang = preferredLanguage;
-        String defaultFont = TypefaceManager.FONT_KALAM;
-        if (!hasSh && InkNormalizer.isIndicLanguage(preferredLanguage)) {
-            wordLang = "ENGLISH";
-            defaultFont = TypefaceManager.FONT_CAVEAT;
-        }
-        final String expectedFont = defaultFont;
-
-        recognizeStrokes(context, wordStrokes, wordLang, preContext, new Callback() {
-            @Override
-            public void onSuccess(RecognitionResult wordRes) {
-                if (wordRes != null && wordRes.text != null && !wordRes.text.trim().isEmpty()) {
-                    String wText = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(wordRes.text.trim(), wordStrokes);
-                    String fKey = (!hasSh || "ENGLISH".equalsIgnoreCase(wordRes.language))
-                            ? TypefaceManager.FONT_CAVEAT : expectedFont;
-                    accumulatedItems.add(new WordItem(wText, word.bounds, fKey));
-                }
-                recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
-                        preContext, lineBounds, angleDegrees, callback);
-            }
-
-            @Override
-            public void onFailure(Exception error) {
-                recognizeWordsSequentially(context, words, index + 1, accumulatedItems, preferredLanguage,
-                        preContext, lineBounds, angleDegrees, callback);
-            }
-        });
-    }
-
-    public static boolean isRightArrow(List<Stroke> strokes) {
-        if (strokes == null || strokes.isEmpty() || strokes.size() > 3) return false;
-        RectF b = boundsOf(strokes);
-        if (b == null || b.width() < 22f || b.height() < 8f) return false;
-        if (b.width() < b.height() * 0.70f) return false;
-
-        for (Stroke s : strokes) {
-            if (s == null) continue;
-            RectF sb = s.getBounds();
-            if (sb != null && sb.width() > b.width() * 0.70f && sb.top <= b.top + b.height() * 0.20f && sb.width() >= sb.height() * 2.5f) {
-                return false;
-            }
-        }
-
-        if (strokes.size() >= 2) {
-            Stroke shaft = null;
-            for (Stroke s : strokes) {
-                if (s == null) continue;
-                RectF sb = s.getBounds();
-                if (sb != null && sb.width() >= sb.height() * 1.8f && sb.width() >= b.width() * 0.45f) {
-                    float relY = (sb.centerY() - b.top) / b.height();
-                    if (relY >= 0.20f && relY <= 0.80f) {
-                        shaft = s;
-                        break;
-                    }
-                }
-            }
-            if (shaft != null) {
-                RectF shaftBounds = shaft.getBounds();
-                boolean hasHeadAtRight = false;
-                for (Stroke s : strokes) {
-                    if (s == shaft || s == null) continue;
-                    RectF hb = s.getBounds();
-                    if (hb != null && hb.right >= shaftBounds.right - shaftBounds.width() * 0.40f
-                            && hb.centerX() > shaftBounds.centerX()
-                            && hb.height() >= b.height() * 0.45f) {
-                        hasHeadAtRight = true;
-                        break;
-                    }
-                }
-                if (hasHeadAtRight) return true;
-            }
-        }
-
-        if (strokes.size() == 1) {
-            Stroke s = strokes.get(0);
-            List<DrawingPoint> pts = s.getRecognitionPoints();
-            if (pts == null || pts.isEmpty()) pts = s.points;
-            if (pts != null && pts.size() >= 4) {
-                float left50X = b.left + b.width() * 0.50f;
-                float right60X = b.left + b.width() * 0.60f;
-                float leftMinY = Float.MAX_VALUE, leftMaxY = -Float.MAX_VALUE;
-                float rightMinY = Float.MAX_VALUE, rightMaxY = -Float.MAX_VALUE;
-                int leftCount = 0, rightCount = 0;
-                float sumLeftY = 0f;
-
-                for (DrawingPoint p : pts) {
-                    if (p == null) continue;
-                    if (p.x <= left50X) {
-                        leftMinY = Math.min(leftMinY, p.y);
-                        leftMaxY = Math.max(leftMaxY, p.y);
-                        sumLeftY += p.y;
-                        leftCount++;
-                    }
-                    if (p.x >= right60X) {
-                        rightMinY = Math.min(rightMinY, p.y);
-                        rightMaxY = Math.max(rightMaxY, p.y);
-                        rightCount++;
-                    }
-                }
-
-                if (leftCount >= 2 && rightCount >= 2) {
-                    float leftH = leftMaxY - leftMinY;
-                    float rightH = rightMaxY - rightMinY;
-                    float leftCenterY = sumLeftY / leftCount;
-                    float relLeftY = (leftCenterY - b.top) / b.height();
-
-                    if (relLeftY >= 0.20f && relLeftY <= 0.80f
-                            && leftH <= b.height() * 0.42f
-                            && rightH >= b.height() * 0.55f
-                            && rightH >= leftH * 1.8f) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    public static boolean isLeftArrow(List<Stroke> strokes) {
-        if (strokes == null || strokes.isEmpty() || strokes.size() > 3) return false;
-        RectF b = boundsOf(strokes);
-        if (b == null || b.width() < 22f || b.height() < 8f) return false;
-        if (b.width() < b.height() * 0.70f) return false;
-
-        if (strokes.size() >= 2) {
-            Stroke shaft = null;
-            for (Stroke s : strokes) {
-                if (s == null) continue;
-                RectF sb = s.getBounds();
-                if (sb != null && sb.width() >= sb.height() * 1.8f && sb.width() >= b.width() * 0.45f) {
-                    float relY = (sb.centerY() - b.top) / b.height();
-                    if (relY >= 0.20f && relY <= 0.80f) {
-                        shaft = s;
-                        break;
-                    }
-                }
-            }
-            if (shaft != null) {
-                RectF shaftBounds = shaft.getBounds();
-                for (Stroke s : strokes) {
-                    if (s == shaft || s == null) continue;
-                    RectF hb = s.getBounds();
-                    if (hb != null && hb.left <= shaftBounds.left + shaftBounds.width() * 0.40f
-                            && hb.centerX() < shaftBounds.centerX()
-                            && hb.height() >= b.height() * 0.45f) {
-                        return true;
-                    }
-                }
-            }
-        }
-        return false;
-    }
-
-    public static boolean isDigitOne(List<Stroke> strokes) {
-        if (strokes == null || strokes.size() != 1) return false;
-        Stroke s = strokes.get(0);
-        if (s == null) return false;
-        RectF b = s.getBounds();
-        if (b == null) return false;
-        return (b.height() >= 25f && b.width() <= 24f && (b.height() / Math.max(1f, b.width())) >= 2.5f);
-    }
-
-    public static boolean isDash(List<Stroke> strokes) {
-        if (strokes == null || strokes.size() != 1) return false;
-        Stroke s = strokes.get(0);
-        if (s == null) return false;
-        RectF b = s.getBounds();
-        if (b == null) return false;
-        return (b.width() >= 18f && b.width() <= 95f && b.height() <= 18f && (b.width() / Math.max(1f, b.height())) >= 2.6f);
-    }
-
-    public static boolean isBullet(List<Stroke> strokes) {
-        if (strokes == null || strokes.size() != 1) return false;
-        Stroke s = strokes.get(0);
-        if (s == null) return false;
-        RectF b = s.getBounds();
-        if (b == null) return false;
-        return (b.width() <= 18f && b.height() <= 18f && s.points != null && s.points.size() <= 8);
-    }
-
-    public static boolean hasShirorekha(List<Stroke> strokes) {
-        if (strokes == null || strokes.isEmpty()) return false;
-        RectF b = boundsOf(strokes);
-        if (b == null || b.width() < 10f) return false;
-        float totalW = b.width();
-        for (Stroke s : strokes) {
-            if (s == null) continue;
-            RectF sb = s.getBounds();
-            if (sb != null && (sb.width() > totalW * 0.35f && (sb.width() / Math.max(1f, sb.height())) >= 2.0f)) {
-                return true;
-            }
-        }
-        return false;
-    }
 
     private static void recognizeMultiHypothesis(Context context,
                                                  List<Stroke> strokes,
@@ -685,23 +395,10 @@ public final class HandwritingRecognitionEngine {
                 ? transformedStrokeCopies(strokes, primaryPassAngle, false, false)
                 : strokes;
 
-        // Run ML Kit Vision OCR in parallel to cross-verify handwriting from visual bitmap
-        final String[] visionResultHolder = new String[]{null};
-        org.opennotes.app.ai.VisionTextEngine.recognizeStrokesVision(strokes, preferredLanguage, new org.opennotes.app.ai.VisionTextEngine.VisionCallback() {
-            @Override
-            public void onResult(String recognizedText, float confidence) {
-                visionResultHolder[0] = recognizedText;
-            }
-
-            @Override
-            public void onError(Exception e) {
-            }
-        });
-
         executeSingleRecognitionPass(context, primaryStrokes, strokes, primaryPassAngle, preferredLanguage, contextText, new Callback() {
             @Override
             public void onSuccess(RecognitionResult primaryResult) {
-                RecognitionResult reconciled = reconcileWithVisionAndGeometry(primaryResult, strokes, visionResultHolder[0]);
+                RecognitionResult reconciled = disambiguateDigits(primaryResult, strokes);
                 if (reconciled != null && !reconciled.text.trim().isEmpty()) {
                     if (includeReviewSuggestions && reconciled.alternatives.size() <= 1) {
                         tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
@@ -790,41 +487,7 @@ public final class HandwritingRecognitionEngine {
                                      Callback callback) {
         if (index >= queue.size()) {
             if (accumulatedResult != null) {
-                // If accumulatedResult has Indic language without Shirorekha and contains Indic characters,
-                // try English model cross-check to catch digits and Latin text written in Indic mode
-                boolean isIndic = InkNormalizer.isIndicLanguage(language);
-                boolean noShirorekha = !hasShirorekha(originalStrokes);
-                boolean hasIndicChars = accumulatedResult.text != null && accumulatedResult.text.matches(".*[\\u0900-\\u097F].*");
-                if (isIndic && noShirorekha && hasIndicChars) {
-                    resolveReadyModel("ENGLISH", new ModelResolutionCallback() {
-                        @Override
-                        public void onResolved(DigitalInkRecognitionModel model, String tag) {
-                            executeSingleRecognitionPass(context, originalStrokes, originalStrokes, 0f, "ENGLISH", "", new Callback() {
-                                @Override
-                                public void onSuccess(RecognitionResult enResult) {
-                                    if (enResult != null && !enResult.text.trim().isEmpty()) {
-                                        RecognitionResult merged = mergeCandidates(enResult, accumulatedResult);
-                                        callback.onSuccess(reconcileWithVisionAndGeometry(merged, originalStrokes, null));
-                                    } else {
-                                        callback.onSuccess(reconcileWithVisionAndGeometry(accumulatedResult, originalStrokes, null));
-                                    }
-                                }
-
-                                @Override
-                                public void onFailure(Exception error) {
-                                    callback.onSuccess(reconcileWithVisionAndGeometry(accumulatedResult, originalStrokes, null));
-                                }
-                            });
-                        }
-
-                        @Override
-                        public void onNoneReady(String preferredTag) {
-                            callback.onSuccess(reconcileWithVisionAndGeometry(accumulatedResult, originalStrokes, null));
-                        }
-                    });
-                    return;
-                }
-                callback.onSuccess(reconcileWithVisionAndGeometry(accumulatedResult, originalStrokes, null));
+                callback.onSuccess(disambiguateDigits(accumulatedResult, originalStrokes));
             } else if ((preContext == null || preContext.isEmpty()) && !queue.isEmpty()) {
                 // Cross-language fallback (Devanagari <-> English) if primary language produced no candidates
                 String fallbackLang = "ENGLISH".equalsIgnoreCase(language) ? "MARATHI" : "ENGLISH";
@@ -860,7 +523,7 @@ public final class HandwritingRecognitionEngine {
             public void onSuccess(RecognitionResult candidateResult) {
                 if (candidateResult != null && !candidateResult.text.trim().isEmpty()) {
                     RecognitionResult merged = mergeCandidates(accumulatedResult, candidateResult);
-                    callback.onSuccess(reconcileWithVisionAndGeometry(merged, originalStrokes, null));
+                    callback.onSuccess(disambiguateDigits(merged, originalStrokes));
                 } else {
                     runWaterfall(context, queue, originalStrokes, index + 1, language, preContext, accumulatedResult, callback);
                 }
@@ -1001,19 +664,17 @@ public final class HandwritingRecognitionEngine {
                 primary.fontSize, merged, primary.angleDegrees, primary.startX, primary.startY);
     }
 
-    private static RecognitionResult reconcileWithVisionAndGeometry(RecognitionResult result, List<Stroke> strokes, String visionText) {
+    private static RecognitionResult disambiguateDigits(RecognitionResult result, List<Stroke> strokes) {
         if (result == null) return null;
         String text = result.text != null ? result.text : "";
         List<String> alternatives = new ArrayList<>(result.alternatives);
 
-        // 1. Geometric & topological disambiguation (e.g. 4 vs 9, 1 vs 7)
         String geomDisambiguated = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(text, strokes);
         if (!geomDisambiguated.equals(text)) {
             if (!alternatives.contains(text)) alternatives.add(text);
             text = geomDisambiguated;
         }
 
-        // Disambiguate all alternative candidates as well
         List<String> verifiedAlternatives = new ArrayList<>();
         for (String alt : alternatives) {
             String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, strokes);
@@ -1021,24 +682,8 @@ public final class HandwritingRecognitionEngine {
                 verifiedAlternatives.add(dis);
             }
         }
-        alternatives = verifiedAlternatives;
-
-        // 2. Vision OCR cross-verification
-        if (visionText != null && !visionText.trim().isEmpty()) {
-            String vTrimmed = visionText.trim();
-            vTrimmed = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(vTrimmed, strokes);
-            if (!alternatives.contains(vTrimmed)) {
-                alternatives.add(vTrimmed);
-            }
-            // If Vision OCR detects pure digits / Latin numbers (e.g. "1949"),
-            // and Digital Ink misclassified it (e.g. "1999" or Indic letters)
-            if (vTrimmed.matches("^[0-9\\s.,\\-+:/#]+$") && (!text.matches("^[0-9\\s.,\\-+:/#]+$") || (text.contains("9") && vTrimmed.contains("4")))) {
-                text = vTrimmed;
-            }
-        }
-
-        if (!alternatives.contains(text)) {
-            alternatives.add(0, text);
+        if (!verifiedAlternatives.contains(text)) {
+            verifiedAlternatives.add(0, text);
         }
 
         String finalLang = result.language;
@@ -1047,7 +692,7 @@ public final class HandwritingRecognitionEngine {
         }
 
         return new RecognitionResult(text, finalLang, result.bounds, result.fontSize,
-                alternatives, result.angleDegrees, result.startX, result.startY, result.wordItems);
+                verifiedAlternatives, result.angleDegrees, result.startX, result.startY, result.wordItems);
     }
 
     private static List<Stroke> transformedStrokeCopies(List<Stroke> strokes,
@@ -1745,36 +1390,6 @@ public final class HandwritingRecognitionEngine {
         // Devanagari (Marathi/Hindi) linguistic and geometric feature matching
         if (InkNormalizer.isIndicLanguage(language)) {
             pool = rerankDevanagariCandidates(strokes, pool);
-
-            // Shirorekha check: in Marathi/Hindi handwriting, words have a shirorekha (top headline).
-            // Numbers (0-9) and Latin words do not have a shirorekha.
-            // If the user wrote digits without a shirorekha, promote numeric candidate over accidental Devanagari dictionary words!
-            boolean hasShirorekha = false;
-            if (strokes != null && !strokes.isEmpty()) {
-                RectF b = boundsOf(strokes);
-                if (b != null && b.width() > 10f) {
-                    float totalW = b.width();
-                    for (Stroke s : strokes) {
-                        if (s == null) continue;
-                        RectF sb = s.getBounds();
-                        if (sb != null && (sb.width() > totalW * 0.35f && (sb.width() / Math.max(1f, sb.height())) >= 2.2f)) {
-                            hasShirorekha = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!hasShirorekha && !pool.isEmpty()) {
-                for (int i = 0; i < pool.size(); i++) {
-                    String c = pool.get(i).trim();
-                    if (!c.isEmpty() && c.matches("^[0-9\\s.,\\-+]+$") && pool.get(0).matches(".*[\\u0900-\\u097F].*")) {
-                        String numCand = pool.remove(i);
-                        pool.add(0, numCand);
-                        break;
-                    }
-                }
-            }
 
             UserHandwritingModel userModel = (context != null) ? UserHandwritingModel.getInstance(context) : null;
             if (userModel != null) {
