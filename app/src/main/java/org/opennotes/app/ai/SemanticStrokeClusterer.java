@@ -467,7 +467,10 @@ public class SemanticStrokeClusterer {
                     sameWord = true;
                 } else if (isShirorekha2 && (s1.minX >= s2.minX - 10f && s1.maxX <= s2.maxX + 10f)) {
                     sameWord = true;
-                } else if (hGap < 0.48f * medianH) {
+                // Handwriting often has wider intra-word gaps than print, especially
+                // around y, r, t and detached joins. Keep the threshold generous but
+                // below the typical full word gap so neighboring words stay separate.
+                } else if (hGap < 0.82f * medianH) {
                     sameWord = true;
                 }
 

@@ -47,6 +47,16 @@ public final class HandwritingRecognitionEngine {
     private static final ExecutorService WORKER = Executors.newSingleThreadExecutor();
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
     private static final int MAX_REVIEW_CANDIDATES = 32;
+    private static final Set<String> COMMON_ENGLISH_WORDS = Collections.unmodifiableSet(
+            new HashSet<>(Arrays.asList("a", "about", "all", "am", "an", "and", "are", "as", "at",
+                    "be", "because", "been", "but", "by", "can", "could", "did", "do", "for",
+                    "from", "get", "give", "go", "had", "has", "have", "he", "her", "here",
+                    "him", "his", "how", "i", "if", "in", "into", "is", "it", "its", "just",
+                    "know", "like", "me", "more", "my", "no", "not", "of", "on", "one", "or",
+                    "our", "out", "please", "see", "she", "so", "some", "take", "tell", "than",
+                    "that", "the", "their", "them", "then", "there", "these", "they", "think",
+                    "this", "to", "up", "us", "was", "we", "were", "what", "when", "where",
+                    "which", "who", "will", "with", "would", "yes", "you", "your")));
     private static final Map<String, Task<Void>> MODEL_DOWNLOADS = new HashMap<>();
     private static final Map<String, List<PendingApproval>> WAITING_APPROVALS = new HashMap<>();
 
@@ -1064,11 +1074,13 @@ public final class HandwritingRecognitionEngine {
                             callback.onFailure(originalError);
                             return;
                         }
-                        recognizedWords.add(result.text.trim());
+                        String recognizedWord = chooseSegmentCandidate(context, result,
+                                language, preContext);
+                        recognizedWords.add(recognizedWord);
                         RectF wordBounds = word.bounds != null ? new RectF(word.bounds) : boundsOf(word.strokes);
-                        wordItems.add(new WordItem(result.text.trim(), wordBounds, ""));
+                        wordItems.add(new WordItem(recognizedWord, wordBounds, ""));
                         String nextContext = (preContext == null || preContext.isEmpty())
-                                ? result.text : preContext + " " + result.text;
+                                ? recognizedWord : preContext + " " + recognizedWord;
                         recognizeWordClustersSequentially(context, words, index + 1, language,
                                 recentPreContext(nextContext, 20), recognizedWords, wordItems,
                                 originalError, callback);
@@ -1079,6 +1091,52 @@ public final class HandwritingRecognitionEngine {
                         callback.onFailure(originalError != null ? originalError : error);
                     }
                 });
+    }
+
+    /** Ranks isolated word reads using model order, known vocabulary and learned context. */
+    private static String chooseSegmentCandidate(Context context, RecognitionResult result,
+            String language, String preContext) {
+        if (result == null || result.alternatives == null || result.alternatives.isEmpty()) {
+            return result != null && result.text != null ? result.text.trim() : "";
+        }
+        LinguisticDictionary dictionary = context != null
+                ? LinguisticDictionary.getInstance(context) : null;
+        UserHandwritingModel personalModel = context != null
+                ? UserHandwritingModel.getInstance(context) : null;
+        String primary = result.text == null ? "" : result.text.trim();
+        String best = primary;
+        int primaryScore = scoreSegmentCandidate(primary, 0, language, preContext,
+                dictionary, personalModel);
+        int bestScore = primaryScore;
+        for (int i = 0; i < result.alternatives.size(); i++) {
+            String candidate = result.alternatives.get(i);
+            if (candidate == null || candidate.trim().isEmpty()) continue;
+            String trimmed = candidate.trim();
+            int score = scoreSegmentCandidate(trimmed, i, language, preContext,
+                    dictionary, personalModel);
+            // Keep the model's first choice unless another candidate has clear
+            // vocabulary/context evidence; avoid flipping on weak word-list matches.
+            if (score > bestScore && (trimmed.equals(primary) || score >= primaryScore + 2)) {
+                best = trimmed;
+                bestScore = score;
+            }
+        }
+        return best;
+    }
+
+    private static int scoreSegmentCandidate(String candidate, int modelRank, String language,
+            String preContext, LinguisticDictionary dictionary, UserHandwritingModel personalModel) {
+        String clean = candidate.toLowerCase(java.util.Locale.ROOT)
+                .replaceAll("^[^\\p{L}\\p{N}]+|[^\\p{L}\\p{N}]+$", "");
+        int score = -2 * modelRank;
+        if (!clean.isEmpty()) {
+            if ("ENGLISH".equalsIgnoreCase(language) && COMMON_ENGLISH_WORDS.contains(clean)) score += 5;
+            if (dictionary != null && dictionary.isValidWord(clean, language)) score += 2;
+        }
+        if (personalModel != null) {
+            score += personalModel.getPersonalizedContextScore(candidate, preContext);
+        }
+        return score;
     }
 
     private static void executeSingleRecognitionPass(Context context,
