@@ -11,6 +11,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.ColorDrawable;
 import androidx.core.content.ContextCompat;
 import android.media.MediaPlayer;
 import android.media.MediaRecorder;
@@ -34,6 +35,7 @@ import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
+import android.widget.PopupWindow;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -2570,11 +2572,26 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             Toast.makeText(this, "Select converted text first", Toast.LENGTH_SHORT).show();
             return;
         }
+        if (!canvasView.beginSelectedTextSpacingPreview()) return;
+
         TextItem first = selected.get(0);
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
-        int padding = dp(20);
-        layout.setPadding(padding, dp(8), padding, dp(4));
+        int padding = dp(18);
+        layout.setPadding(padding, dp(12), padding, dp(12));
+        GradientDrawable panelBackground = new GradientDrawable();
+        panelBackground.setColor(0xF128272E);
+        panelBackground.setCornerRadius(dp(20));
+        panelBackground.setStroke(dp(1), 0xFF4A4852);
+        layout.setBackground(panelBackground);
+        layout.setElevation(dp(12));
+
+        TextView heading = new TextView(this);
+        heading.setText("↕  Text spacing  ·  drag to move");
+        heading.setTextColor(0xFFF3F4F6);
+        heading.setTextSize(17f);
+        heading.setPadding(0, 0, 0, dp(8));
+        layout.addView(heading);
 
         TextView letterLabel = new TextView(this);
         TextView wordLabel = new TextView(this);
@@ -2583,25 +2600,33 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         letterSeek.setMax(100);
         wordSeek.setMax(100);
         float[] letterValue = {Math.max(-0.12f, Math.min(0.40f, first.letterSpacingEm))};
-        float[] wordValue = {Math.max(0f, Math.min(2f, first.wordSpacingEm))};
+        final float minWordSpacing = -0.50f;
+        final float maxWordSpacing = 2.0f;
+        float[] wordValue = {Math.max(minWordSpacing, Math.min(maxWordSpacing, first.wordSpacingEm))};
         letterSeek.setProgress(Math.round((letterValue[0] + 0.12f) / 0.52f * 100f));
-        wordSeek.setProgress(Math.round(wordValue[0] / 2f * 100f));
+        wordSeek.setProgress(Math.round((wordValue[0] - minWordSpacing)
+                / (maxWordSpacing - minWordSpacing) * 100f));
+        letterSeek.setContentDescription("Letter spacing");
+        wordSeek.setContentDescription("Word spacing; drag left to tighten, right to loosen");
         Runnable updateLabels = () -> {
             letterLabel.setText(String.format(Locale.getDefault(), "Letter spacing: %+.2f em", letterValue[0]));
-            wordLabel.setText(String.format(Locale.getDefault(), "Word spacing: %.2f em", wordValue[0]));
+            wordLabel.setText(String.format(Locale.getDefault(), "Word spacing: %+.2f em", wordValue[0]));
         };
         letterSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
                 letterValue[0] = -0.12f + progress / 100f * 0.52f;
+                if (Math.abs(letterValue[0]) < 0.005f) letterValue[0] = 0f;
                 updateLabels.run();
+                canvasView.updateSelectedTextSpacingPreview(letterValue[0], wordValue[0]);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
         });
         wordSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                wordValue[0] = progress / 100f * 2f;
+                wordValue[0] = minWordSpacing + progress / 100f * (maxWordSpacing - minWordSpacing);
                 updateLabels.run();
+                canvasView.updateSelectedTextSpacingPreview(letterValue[0], wordValue[0]);
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
             @Override public void onStopTrackingTouch(SeekBar seekBar) {}
@@ -2612,22 +2637,147 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         layout.addView(wordLabel);
         layout.addView(wordSeek);
         TextView hint = new TextView(this);
-        hint.setText("Adjust spacing for the selected text. Words recognized as one phrase move together.");
+        hint.setText("Drag left to tighten words or right to spread them. The canvas previews changes as you move the sliders.");
+        hint.setTextColor(0xFFB9B7C0);
         hint.setTextSize(12f);
-        hint.setPadding(0, dp(8), 0, 0);
+        hint.setPadding(0, dp(6), 0, dp(8));
         layout.addView(hint);
 
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
-                .setTitle("Text spacing")
-                .setView(layout)
-                .setNegativeButton("Cancel", null)
-                .setNeutralButton("Reset", (dialog, which) -> canvasView.adjustSelectedTextSpacing(0f, 0f))
-                .setPositiveButton("Apply", (dialog, which) -> {
-                    if (!canvasView.adjustSelectedTextSpacing(letterValue[0], wordValue[0])) {
-                        Toast.makeText(this, "Select converted text first", Toast.LENGTH_SHORT).show();
-                    }
-                });
-        ThemeUtils.showStyledDialog(builder, this);
+        LinearLayout actions = new LinearLayout(this);
+        actions.setOrientation(LinearLayout.HORIZONTAL);
+        actions.setGravity(Gravity.CENTER_VERTICAL);
+        Button reset = new Button(this);
+        reset.setText("Reset");
+        ThemeUtils.styleButton(reset, this, false);
+        reset.setOnClickListener(v -> {
+            letterSeek.setProgress(Math.round((0.12f / 0.52f) * 100f));
+            wordSeek.setProgress(Math.round((0f - minWordSpacing)
+                    / (maxWordSpacing - minWordSpacing) * 100f));
+        });
+        View spacer = new View(this);
+        actions.addView(reset);
+        actions.addView(spacer, new LinearLayout.LayoutParams(0, 1, 1f));
+        Button cancel = new Button(this);
+        cancel.setText("Cancel");
+        ThemeUtils.styleButton(cancel, this, false);
+        Button apply = new Button(this);
+        apply.setText("Apply");
+        ThemeUtils.styleButton(apply, this, true);
+        actions.addView(cancel);
+        actions.addView(apply);
+        layout.addView(actions);
+
+        View root = getWindow().getDecorView();
+        int rootWidth = Math.max(dp(280), root.getWidth());
+        int rootHeight = Math.max(dp(320), root.getHeight());
+        int panelWidth = Math.min(dp(440), rootWidth - dp(24));
+        layout.measure(View.MeasureSpec.makeMeasureSpec(panelWidth, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(rootHeight, View.MeasureSpec.AT_MOST));
+        int panelHeight = layout.getMeasuredHeight();
+        PopupWindow popup = new PopupWindow(layout, panelWidth, ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
+        popup.setOutsideTouchable(true);
+        popup.setClippingEnabled(true);
+        popup.setElevation(dp(16));
+        boolean[] committed = {false};
+        popup.setOnDismissListener(() -> {
+            if (!committed[0]) {
+                canvasView.cancelSelectedTextSpacingPreview();
+                committed[0] = true;
+            }
+        });
+        cancel.setOnClickListener(v -> popup.dismiss());
+        apply.setOnClickListener(v -> {
+            canvasView.finishSelectedTextSpacingPreview();
+            committed[0] = true;
+            popup.dismiss();
+        });
+
+        heading.setOnTouchListener((view, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                int[] panelLocation = new int[2];
+                int[] rootLocation = new int[2];
+                layout.getLocationInWindow(panelLocation);
+                root.getLocationInWindow(rootLocation);
+                view.setTag(new float[]{panelLocation[0] - rootLocation[0],
+                        panelLocation[1] - rootLocation[1], event.getRawX(), event.getRawY()});
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                Object tag = view.getTag();
+                if (tag instanceof float[]) {
+                    float[] start = (float[]) tag;
+                    int margin = dp(8);
+                    int maxX = Math.max(margin, root.getWidth() - panelWidth - margin);
+                    int maxY = Math.max(margin, root.getHeight() - panelHeight - margin);
+                    int x = Math.max(margin, Math.min(maxX,
+                            Math.round(start[0] + event.getRawX() - start[2])));
+                    int y = Math.max(margin, Math.min(maxY,
+                            Math.round(start[1] + event.getRawY() - start[3])));
+                    popup.update(x, y, -1, -1);
+                }
+                return true;
+            }
+            if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                view.setTag(null);
+                return true;
+            }
+            return true;
+        });
+
+        RectF avoidBounds = canvasView.getSelectionScreenBounds();
+        if (avoidBounds != null) {
+            int[] canvasLocation = new int[2];
+            int[] rootLocation = new int[2];
+            canvasView.getLocationInWindow(canvasLocation);
+            root.getLocationInWindow(rootLocation);
+            avoidBounds.offset(canvasLocation[0] - rootLocation[0], canvasLocation[1] - rootLocation[1]);
+        }
+        int[] popupPosition = findSpacingPopupPosition(rootWidth, rootHeight, panelWidth,
+                panelHeight, avoidBounds, dp(12));
+        popup.showAtLocation(root, Gravity.TOP | Gravity.LEFT, popupPosition[0], popupPosition[1]);
+    }
+
+    private int[] findSpacingPopupPosition(int rootWidth, int rootHeight, int panelWidth,
+                                           int panelHeight, RectF avoidBounds, int margin) {
+        float centerX = avoidBounds != null ? avoidBounds.centerX() : rootWidth * 0.5f;
+        float centerY = avoidBounds != null ? avoidBounds.centerY() : rootHeight * 0.5f;
+        float avoidLeft = avoidBounds != null ? avoidBounds.left : rootWidth * 0.5f;
+        float avoidTop = avoidBounds != null ? avoidBounds.top : rootHeight * 0.5f;
+        float avoidRight = avoidBounds != null ? avoidBounds.right : rootWidth * 0.5f;
+        float avoidBottom = avoidBounds != null ? avoidBounds.bottom : rootHeight * 0.5f;
+        float[][] candidates = {
+                {centerX - panelWidth * 0.5f, avoidTop - panelHeight - margin},
+                {centerX - panelWidth * 0.5f, avoidBottom + margin},
+                {avoidLeft - panelWidth - margin, centerY - panelHeight * 0.5f},
+                {avoidRight + margin, centerY - panelHeight * 0.5f},
+                {margin, margin}, {rootWidth - panelWidth - margin, margin},
+                {margin, rootHeight - panelHeight - margin},
+                {rootWidth - panelWidth - margin, rootHeight - panelHeight - margin}
+        };
+        int maxX = Math.max(margin, rootWidth - panelWidth - margin);
+        int maxY = Math.max(margin, rootHeight - panelHeight - margin);
+        int bestX = margin;
+        int bestY = margin;
+        double bestScore = Double.MAX_VALUE;
+        for (float[] candidate : candidates) {
+            int x = Math.max(margin, Math.min(maxX, Math.round(candidate[0])));
+            int y = Math.max(margin, Math.min(maxY, Math.round(candidate[1])));
+            float overlapWidth = Math.max(0f,
+                    Math.min(x + panelWidth, avoidRight) - Math.max(x, avoidLeft));
+            float overlapHeight = Math.max(0f,
+                    Math.min(y + panelHeight, avoidBottom) - Math.max(y, avoidTop));
+            float gapX = Math.max(0f, Math.max(avoidLeft - (x + panelWidth), x - avoidRight));
+            float gapY = Math.max(0f, Math.max(avoidTop - (y + panelHeight), y - avoidBottom));
+            double score = overlapWidth * overlapHeight * 1000d + Math.hypot(gapX, gapY);
+            if (score < bestScore) {
+                bestScore = score;
+                bestX = x;
+                bestY = y;
+            }
+        }
+        return new int[]{bestX, bestY};
     }
 
     private void showHandwritingProfileDialog() {

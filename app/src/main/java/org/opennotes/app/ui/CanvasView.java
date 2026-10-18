@@ -255,6 +255,9 @@ public class CanvasView extends View {
     private final List<ShapeItem> selectedShapes = new ArrayList<>();
     private final List<TextItem> selectedTexts = new ArrayList<>();
     private final List<ImageItem> selectedImages = new ArrayList<>();
+    private ActionRecord textSpacingPreviewRecord;
+    private List<TextItem> textSpacingPreviewTargets;
+    private Map<String, List<TextItem>> textSpacingPreviewGroups;
     private final RectF selectionBounds = new RectF();
     private boolean isMovingSelection = false;
     private float lassoMoveStartX, lassoMoveStartY;
@@ -348,6 +351,11 @@ public class CanvasView extends View {
             this.letterSpacingEm = letterSpacingEm;
             this.wordSpacingEm = wordSpacingEm;
         }
+    }
+
+    private static final class TextSpacingTargets {
+        final List<TextItem> affected = new ArrayList<>();
+        final Map<String, List<TextItem>> groups = new HashMap<>();
     }
 
 
@@ -3583,42 +3591,107 @@ public class CanvasView extends View {
         }
     }
 
-    /** Adjust selected text and keep the positions of later generated words aligned. */
-    public boolean adjustSelectedTextSpacing(float letterSpacingEm, float wordSpacingEm) {
-        if (currentPage == null || selectedTexts.isEmpty()) return false;
-        float letter = Math.max(-0.12f, Math.min(0.40f, letterSpacingEm));
-        float word = Math.max(0f, Math.min(2f, wordSpacingEm));
-        Map<String, List<TextItem>> groups = new HashMap<>();
-        List<TextItem> affected = new ArrayList<>();
-
-        for (TextItem item : selectedTexts) {
-            if (item.spacingGroupId == null || item.spacingGroupId.isEmpty()) {
-                if (!affected.contains(item)) affected.add(item);
-                continue;
-            }
-            if (!groups.containsKey(item.spacingGroupId)) {
-                List<TextItem> group = new ArrayList<>();
-                for (TextItem candidate : currentPage.texts) {
-                    if (candidate != null && item.spacingGroupId.equals(candidate.spacingGroupId)) group.add(candidate);
-                }
-                Collections.sort(group, (a, b) -> Integer.compare(a.spacingOrder, b.spacingOrder));
-                groups.put(item.spacingGroupId, group);
-            }
-            for (TextItem member : groups.get(item.spacingGroupId)) {
-                if (!affected.contains(member)) affected.add(member);
-            }
-        }
-        if (affected.isEmpty()) return false;
+    /** Begin a live spacing preview. Cancel restores the exact original layout. */
+    public boolean beginSelectedTextSpacingPreview() {
+        if (textSpacingPreviewRecord != null || currentPage == null || selectedTexts.isEmpty()) return false;
+        TextSpacingTargets targets = collectTextSpacingTargets();
+        if (targets.affected.isEmpty()) return false;
 
         ActionRecord record = new ActionRecord();
         record.type = ActionRecord.Type.STYLE_CHANGE;
         record.styleTargetsStrokes = new ArrayList<>();
         record.styleTargetsShapes = new ArrayList<>();
-        record.styleTargetsTexts = affected;
+        record.styleTargetsTexts = targets.affected;
         record.previousStrokeStyles = new ArrayList<>();
         record.previousShapeStyles = new ArrayList<>();
-        record.previousTextStyles = snapshotTextStyles(affected);
+        record.previousTextStyles = snapshotTextStyles(targets.affected);
+        textSpacingPreviewRecord = record;
+        textSpacingPreviewTargets = targets.affected;
+        textSpacingPreviewGroups = targets.groups;
+        return true;
+    }
 
+    /** Apply slider values to the canvas immediately without adding undo entries. */
+    public boolean updateSelectedTextSpacingPreview(float letterSpacingEm, float wordSpacingEm) {
+        if (textSpacingPreviewRecord == null || textSpacingPreviewTargets == null) return false;
+        restoreSelectionStyle(textSpacingPreviewRecord, false);
+        applyTextSpacing(letterSpacingEm, wordSpacingEm, textSpacingPreviewGroups);
+        updateSelectionBounds();
+        postInvalidateOnAnimation();
+        return true;
+    }
+
+    /** Commit the live preview as one undoable change. */
+    public boolean finishSelectedTextSpacingPreview() {
+        if (textSpacingPreviewRecord == null) return false;
+        ActionRecord record = textSpacingPreviewRecord;
+        record.nextTextStyles = snapshotTextStyles(record.styleTargetsTexts);
+        boolean changed = !textStyleSnapshotsEqual(record.previousTextStyles, record.nextTextStyles);
+        clearTextSpacingPreview();
+        if (!changed) {
+            updateSelectionBounds();
+            invalidate();
+            return true;
+        }
+        undoStack.push(record);
+        redoStack.clear();
+        strokeSpatialIndexDirty = true;
+        updateSelectionBounds();
+        invalidate();
+        notifyChange();
+        notifyLassoSelection();
+        return true;
+    }
+
+    /** Discard the live preview without changing the note or its undo history. */
+    public void cancelSelectedTextSpacingPreview() {
+        if (textSpacingPreviewRecord == null) return;
+        restoreSelectionStyle(textSpacingPreviewRecord, false);
+        clearTextSpacingPreview();
+        updateSelectionBounds();
+        invalidate();
+    }
+
+    /** Immediate adjustment for non-dialog callers; recorded as one undoable action. */
+    public boolean adjustSelectedTextSpacing(float letterSpacingEm, float wordSpacingEm) {
+        if (!beginSelectedTextSpacingPreview()) return false;
+        updateSelectedTextSpacingPreview(letterSpacingEm, wordSpacingEm);
+        return finishSelectedTextSpacingPreview();
+    }
+
+    private void clearTextSpacingPreview() {
+        textSpacingPreviewRecord = null;
+        textSpacingPreviewTargets = null;
+        textSpacingPreviewGroups = null;
+    }
+
+    private TextSpacingTargets collectTextSpacingTargets() {
+        TextSpacingTargets targets = new TextSpacingTargets();
+        for (TextItem item : selectedTexts) {
+            if (item.spacingGroupId == null || item.spacingGroupId.isEmpty()) {
+                if (!targets.affected.contains(item)) targets.affected.add(item);
+                continue;
+            }
+            if (!targets.groups.containsKey(item.spacingGroupId)) {
+                List<TextItem> group = new ArrayList<>();
+                for (TextItem candidate : currentPage.texts) {
+                    if (candidate != null && item.spacingGroupId.equals(candidate.spacingGroupId)) group.add(candidate);
+                }
+                Collections.sort(group, (a, b) -> Integer.compare(a.spacingOrder, b.spacingOrder));
+                targets.groups.put(item.spacingGroupId, group);
+            }
+            for (TextItem member : targets.groups.get(item.spacingGroupId)) {
+                if (!targets.affected.contains(member)) targets.affected.add(member);
+            }
+        }
+        return targets;
+    }
+
+    private void applyTextSpacing(float letterSpacingEm, float wordSpacingEm,
+                                  Map<String, List<TextItem>> groups) {
+        float letter = Math.max(-0.12f, Math.min(0.40f, letterSpacingEm));
+        // Negative word spacing tightens the natural gap; positive spacing loosens it.
+        float word = Math.max(-0.50f, Math.min(2f, wordSpacingEm));
         for (TextItem item : selectedTexts) {
             if (item.spacingGroupId == null || item.spacingGroupId.isEmpty()) {
                 item.letterSpacingEm = letter;
@@ -3626,6 +3699,7 @@ public class CanvasView extends View {
                 item.markDirty();
             }
         }
+        if (groups == null) return;
         for (List<TextItem> group : groups.values()) {
             float accumulatedShift = 0f;
             for (int i = 0; i < group.size(); i++) {
@@ -3648,7 +3722,18 @@ public class CanvasView extends View {
                 }
             }
         }
-        finishSelectionStyleChange(record);
+    }
+
+    private boolean textStyleSnapshotsEqual(List<ItemStyleSnapshot> before,
+                                            List<ItemStyleSnapshot> after) {
+        if (before == null || after == null || before.size() != after.size()) return false;
+        for (int i = 0; i < before.size(); i++) {
+            ItemStyleSnapshot a = before.get(i);
+            ItemStyleSnapshot b = after.get(i);
+            if (Float.compare(a.x, b.x) != 0 || Float.compare(a.y, b.y) != 0
+                    || Float.compare(a.letterSpacingEm, b.letterSpacingEm) != 0
+                    || Float.compare(a.wordSpacingEm, b.wordSpacingEm) != 0) return false;
+        }
         return true;
     }
 
