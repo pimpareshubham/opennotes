@@ -791,7 +791,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     appSettings.setAutoConvertTextEnabled(newState);
                 }
                 updateAutoBeautifyToolbarIcon(newState);
-                String lang = appSettings != null ? appSettings.getBeautifyLanguage() : "AUTO";
+                String lang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
                 String langDisplay = "AUTO".equalsIgnoreCase(lang)
                         ? "Auto-Detect: Marathi, English, Hindi, Digits & Symbols"
                         : ("MARATHI".equalsIgnoreCase(lang) ? "मराठी" : ("HINDI".equalsIgnoreCase(lang) ? "हिन्दी" : "English"));
@@ -2777,7 +2777,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .create();
 
         boolean initialEnabled = appSettings != null ? appSettings.isAutoBeautifyEnabled() : true;
-        String initialLang = appSettings != null ? appSettings.getBeautifyLanguage() : "AUTO";
+        String initialLang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
         String initialFont = appSettings != null ? appSettings.getBeautifyFont() : TypefaceManager.FONT_KALAM;
         boolean initialShirorekha = appSettings != null ? appSettings.isShirorekhaSnapEnabled() : true;
         boolean initialAutoConvert = appSettings != null ? appSettings.isAutoConvertTextEnabled() : true;

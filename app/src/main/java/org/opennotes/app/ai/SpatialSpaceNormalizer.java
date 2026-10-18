@@ -19,7 +19,7 @@ import java.util.List;
 public class SpatialSpaceNormalizer {
 
     public static String normalizeSpacing(String recognizedText, List<Stroke> strokes, String language) {
-        if (recognizedText == null || recognizedText.isEmpty() || strokes == null || strokes.isEmpty()) {
+        if (recognizedText == null || recognizedText.isEmpty()) {
             return recognizedText;
         }
 

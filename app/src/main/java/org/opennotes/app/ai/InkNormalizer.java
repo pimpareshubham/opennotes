@@ -78,32 +78,27 @@ public class InkNormalizer {
         final float cx = sumX / pointCount;
         final float cy = sumY / pointCount;
 
-        // 1. Calculate temporal progression vector from early strokes/points to late strokes/points
+        // 1. Calculate intra-stroke progression vector (cumulative direction of pen motion within strokes)
         float progDx = 0f, progDy = 0f;
         boolean hasProgression = false;
-        if (strokes.size() >= 2) {
-            float earlyX = 0f, earlyY = 0f; int earlyCount = 0;
-            float lateX = 0f, lateY = 0f; int lateCount = 0;
-            int nStrokes = strokes.size();
-            int split = Math.max(1, nStrokes / 3);
-            for (int i = 0; i < split; i++) {
-                RectF b = strokes.get(i).getBounds();
-                if (b != null && !b.isEmpty()) {
-                    earlyX += b.centerX(); earlyY += b.centerY(); earlyCount++;
+        for (Stroke s : strokes) {
+            if (s == null) continue;
+            List<DrawingPoint> pts = s.getRecognitionPoints();
+            if (pts == null || pts.isEmpty()) pts = s.points;
+            if (pts != null && pts.size() >= 2) {
+                DrawingPoint first = pts.get(0);
+                DrawingPoint last = pts.get(pts.size() - 1);
+                float dx = last.x - first.x;
+                float dy = last.y - first.y;
+                float d = (float) Math.hypot(dx, dy);
+                if (d >= 8f) {
+                    progDx += dx;
+                    progDy += dy;
+                    hasProgression = true;
                 }
             }
-            for (int i = nStrokes - split; i < nStrokes; i++) {
-                RectF b = strokes.get(i).getBounds();
-                if (b != null && !b.isEmpty()) {
-                    lateX += b.centerX(); lateY += b.centerY(); lateCount++;
-                }
-            }
-            if (earlyCount > 0 && lateCount > 0) {
-                progDx = (lateX / lateCount) - (earlyX / earlyCount);
-                progDy = (lateY / lateCount) - (earlyY / earlyCount);
-                hasProgression = true;
-            }
-        } else if (allPoints.size() >= 8) {
+        }
+        if (!hasProgression && allPoints.size() >= 6) {
             int k = Math.max(2, allPoints.size() / 5);
             float earlyX = 0f, earlyY = 0f;
             float lateX = 0f, lateY = 0f;
@@ -123,14 +118,15 @@ public class InkNormalizer {
                 ? (float) Math.toDegrees(Math.atan2(progDy, progDx))
                 : 0f;
 
+        boolean suppressPerpendicular = false;
         RectF bounds = getBounds(strokes);
         if (bounds != null && bounds.height() >= bounds.width() * 1.05f) {
             // Check whether strokes exhibit horizontal line structure (multiple horizontal pairs of strokes)
             int horizontalPairs = countHorizontalStrokePairs(strokes);
             if (horizontalPairs >= 2) {
                 // Multi-line paragraphs or vertical columns of numbers/words are stacked vertically.
-                // Individual lines are written horizontally (0°). Never rotate by 90°!
-                return 0f;
+                // Suppress rotating by perpendicular 90°, but allow natural slant/angles (-45° to +45°).
+                suppressPerpendicular = true;
             }
         }
 
@@ -141,6 +137,9 @@ public class InkNormalizer {
         float bestAspectRatio = 1f;
 
         for (float deg = -115f; deg <= 115f; deg += 2.0f) {
+            if (suppressPerpendicular && Math.abs(deg) >= 70f) {
+                continue;
+            }
             double rad = Math.toRadians(-deg);
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);
@@ -167,14 +166,11 @@ public class InkNormalizer {
             // Score favors high aspect ratio (elongated baseline) and compact bounding area
             float score = (w * w) / (h * (float) Math.sqrt(area));
 
-            // Temporal progression alignment bonus if the user wrote multiple strokes/points along a direction
-            if (hasProgression && progDist >= 18f) {
+            // Temporal progression alignment bonus if intra-stroke motion aligns with this angle
+            if (hasProgression && progDist >= 15f) {
                 float diff = Math.abs(normalizeAngleDiff(deg, progAngle));
                 if (diff < 45f) {
-                    score *= (1.0f + (1.0f - diff / 45f) * 0.4f);
-                } else if (diff > 135f) {
-                    // Suppress 180-degree inverted direction
-                    score *= 0.5f;
+                    score *= (1.0f + (1.0f - diff / 45f) * 0.35f);
                 }
             }
 
@@ -230,7 +226,7 @@ public class InkNormalizer {
 
         // If stroke is approximately square (aspect ratio < 1.30) and has low progression distance,
         // it is a single upright character or symbol (e.g. "क", "म", "O", "A"). Do not rotate!
-        if (bestAspectRatio < 1.30f && progDist < 25f) return 0f;
+        if (bestAspectRatio < 1.30f && progDist < 25f && strokes.size() <= 4) return 0f;
 
         return refinedAngle;
     }
@@ -242,20 +238,22 @@ public class InkNormalizer {
         for (int i = 0; i < n; i++) {
             Stroke s1 = strokes.get(i);
             if (s1 == null) continue;
-            RectF b1 = s1.getBounds();
-            if (b1 == null || b1.isEmpty()) continue;
-            float h1 = Math.max(1f, b1.height());
+            RectF b1 = getExactBounds(s1);
+            if (b1 == null) continue;
+            float h1 = Math.max(1f, b1.bottom - b1.top);
             for (int j = i + 1; j < n; j++) {
                 Stroke s2 = strokes.get(j);
                 if (s2 == null) continue;
-                RectF b2 = s2.getBounds();
-                if (b2 == null || b2.isEmpty()) continue;
-                float h2 = Math.max(1f, b2.height());
+                RectF b2 = getExactBounds(s2);
+                if (b2 == null) continue;
+                float h2 = Math.max(1f, b2.bottom - b2.top);
 
                 float vOverlap = Math.max(0f, Math.min(b1.bottom, b2.bottom) - Math.max(b1.top, b2.top));
                 float minH = Math.min(h1, h2);
                 if (vOverlap >= 0.35f * minH) {
-                    float hDist = Math.abs(b1.centerX() - b2.centerX());
+                    float cx1 = (b1.left + b1.right) * 0.5f;
+                    float cx2 = (b2.left + b2.right) * 0.5f;
+                    float hDist = Math.abs(cx1 - cx2);
                     if (hDist >= 0.50f * minH) {
                         hPairs++;
                         if (hPairs >= 4) return hPairs;
@@ -297,6 +295,45 @@ public class InkNormalizer {
             this.strokes = strokes;
             this.transform = transform;
         }
+    }
+
+    public static RectF getExactBounds(Stroke s) {
+        if (s == null) return null;
+        List<DrawingPoint> pts = s.getRecognitionPoints();
+        if (pts == null || pts.isEmpty()) pts = s.points;
+        if (pts == null || pts.isEmpty()) return s.getBounds();
+
+        float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        for (DrawingPoint p : pts) {
+            if (p != null && Float.isFinite(p.x) && Float.isFinite(p.y)) {
+                if (p.x < minX) minX = p.x;
+                if (p.x > maxX) maxX = p.x;
+                if (p.y < minY) minY = p.y;
+                if (p.y > maxY) maxY = p.y;
+            }
+        }
+        if (minX > maxX || minY > maxY) return s.getBounds();
+        return new RectF(minX, minY, maxX, maxY);
+    }
+
+    public static RectF getExactBounds(List<Stroke> strokes) {
+        if (strokes == null || strokes.isEmpty()) return new RectF();
+        float minX = Float.MAX_VALUE, maxX = -Float.MAX_VALUE;
+        float minY = Float.MAX_VALUE, maxY = -Float.MAX_VALUE;
+        boolean found = false;
+        for (Stroke s : strokes) {
+            RectF b = getExactBounds(s);
+            if (b != null && b.right >= b.left && b.bottom >= b.top) {
+                if (b.left < minX) minX = b.left;
+                if (b.right > maxX) maxX = b.right;
+                if (b.top < minY) minY = b.top;
+                if (b.bottom > maxY) maxY = b.bottom;
+                found = true;
+            }
+        }
+        if (!found) return getBounds(strokes);
+        return new RectF(minX, minY, maxX, maxY);
     }
 
     public static RectF getBounds(List<Stroke> strokes) {

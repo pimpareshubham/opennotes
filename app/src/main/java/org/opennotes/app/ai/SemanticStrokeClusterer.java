@@ -313,8 +313,8 @@ public class SemanticStrokeClusterer {
                         float minClusterH = Math.min(c1H, c2H);
                         float cHGap = Math.max(0f, Math.max(c1Left, c2Left) - Math.min(c1Right, c2Right));
 
-                        if (cHGap <= 1.25f * medianH && cyDiff <= 0.40f * medianH
-                                && (vOverlap >= 0.20f * minClusterH || cyDiff <= 0.30f * medianH)) {
+                        if (cHGap <= 4.5f * medianH && cyDiff <= 0.60f * medianH
+                                && (vOverlap >= 0.12f * minClusterH || cyDiff <= 0.38f * medianH)) {
                             c1.addAll(c2);
                             clusterList.remove(j);
                             merged = true;

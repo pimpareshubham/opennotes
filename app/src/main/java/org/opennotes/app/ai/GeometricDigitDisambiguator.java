@@ -110,7 +110,7 @@ public class GeometricDigitDisambiguator {
     public static boolean isOpenTopFour(List<Stroke> strokes) {
         if (strokes == null || strokes.isEmpty()) return false;
         try {
-            RectF b = InkNormalizer.getBounds(strokes);
+            RectF b = InkNormalizer.getExactBounds(strokes);
             if (b == null || b.height() < 12f || b.width() < 6f) return false;
 
             List<DrawingPoint> allPts = new ArrayList<>();
@@ -128,7 +128,10 @@ public class GeometricDigitDisambiguator {
             }
             if (allPts.size() < 6) return false;
 
-            float h = b.height();
+            float w = Math.max(1f, b.right - b.left);
+            float h = Math.max(1f, b.bottom - b.top);
+            if (h < 12f || w < 6f) return false;
+
             float yTop25 = b.top + h * 0.25f;
             float yMid50 = b.top + h * 0.50f;
             float yBot75 = b.top + h * 0.75f;
@@ -161,29 +164,53 @@ public class GeometricDigitDisambiguator {
             float topSpan = (topPtsCount > 0) ? (topMaxX - topMinX) : 0f;
             float midSpan = (midPtsCount > 0) ? (midMaxX - midMinX) : 0f;
 
-            // In a '9', the top loop spans almost the entire width of the character (topSpan / b.width() >= 0.65f).
+            // In a '9', the top loop spans almost the entire width of the character (topSpan / w >= 0.65f).
             // In an open '4', the top stroke is a single diagonal entry, and the middle crossbar spans wider than the top!
-            boolean midIsWiderThanTop = midSpan > topSpan * 1.25f || topSpan <= b.width() * 0.55f;
+            boolean midIsWiderThanTop = midSpan > topSpan * 1.25f || topSpan <= w * 0.55f;
 
-            // Check if there is a horizontal crossbar segment in the middle third
+            // Check for horizontal crossbar in stroke bounds or point trajectories in the middle third
             boolean hasHorizontalCrossbar = false;
-            for (int i = 0; i < allPts.size() - 1; i++) {
-                DrawingPoint p1 = allPts.get(i);
-                DrawingPoint p2 = allPts.get(i + 1);
-                if (p1.y >= b.top + h * 0.20f && p1.y <= b.top + h * 0.75f) {
-                    float dx = Math.abs(p2.x - p1.x);
-                    float dy = Math.abs(p2.y - p1.y);
-                    if (dx >= dy * 1.4f && dx >= b.width() * 0.20f) {
-                        hasHorizontalCrossbar = true;
-                        break;
+            if (strokes != null) {
+                for (Stroke s : strokes) {
+                    if (s == null) continue;
+                    RectF sb = InkNormalizer.getExactBounds(s);
+                    if (sb != null && sb.top >= b.top + h * 0.15f && sb.bottom <= b.bottom - h * 0.05f) {
+                        float sbW = sb.right - sb.left;
+                        float sbH = sb.bottom - sb.top;
+                        if (sbW >= w * 0.25f && sbW >= Math.max(1f, sbH) * 1.20f) {
+                            hasHorizontalCrossbar = true;
+                            break;
+                        }
                     }
                 }
             }
 
-            boolean stemOnRight = (botPtsCount > 0 && botMinX >= b.left + b.width() * 0.35f);
+            if (!hasHorizontalCrossbar) {
+                float runDx = 0f;
+                for (int i = 0; i < allPts.size() - 1; i++) {
+                    DrawingPoint p1 = allPts.get(i);
+                    DrawingPoint p2 = allPts.get(i + 1);
+                    if (p1.y >= b.top + h * 0.15f && p1.y <= b.top + h * 0.80f) {
+                        float dx = Math.abs(p2.x - p1.x);
+                        float dy = Math.abs(p2.y - p1.y);
+                        if (dx >= dy * 1.2f) {
+                            runDx += dx;
+                        } else {
+                            runDx = 0f;
+                        }
+                        if (runDx >= w * 0.25f) {
+                            hasHorizontalCrossbar = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            boolean stemOnRight = (botPtsCount > 0 && botMinX >= b.left + w * 0.35f);
 
             return midIsWiderThanTop && (hasHorizontalCrossbar || stemOnRight);
         } catch (Throwable t) {
+            t.printStackTrace();
             return false;
         }
     }
@@ -192,12 +219,12 @@ public class GeometricDigitDisambiguator {
                                                       List<List<Stroke>> clusters,
                                                       List<Stroke> fourCluster) {
         try {
-            RectF targetB = InkNormalizer.getBounds(fourCluster);
+            RectF targetB = InkNormalizer.getExactBounds(fourCluster);
             if (targetB == null) return text.replaceFirst("9", "4");
 
             int targetIdx = 0;
             for (int i = 0; i < clusters.size(); i++) {
-                RectF cb = InkNormalizer.getBounds(clusters.get(i));
+                RectF cb = InkNormalizer.getExactBounds(clusters.get(i));
                 if (cb != null && cb.left < targetB.left - 5f) {
                     targetIdx++;
                 }
@@ -240,8 +267,8 @@ public class GeometricDigitDisambiguator {
             if (valid.isEmpty()) return result;
 
             Collections.sort(valid, (s1, s2) -> {
-                RectF b1 = s1.getBounds();
-                RectF b2 = s2.getBounds();
+                RectF b1 = InkNormalizer.getExactBounds(s1);
+                RectF b2 = InkNormalizer.getExactBounds(s2);
                 float l1 = b1 != null ? b1.left : 0f;
                 float l2 = b2 != null ? b2.left : 0f;
                 return Float.compare(l1, l2);
@@ -252,15 +279,17 @@ public class GeometricDigitDisambiguator {
 
             for (int i = 1; i < valid.size(); i++) {
                 Stroke s = valid.get(i);
-                RectF prevB = InkNormalizer.getBounds(currentCluster);
-                RectF currB = s.getBounds();
+                RectF prevB = InkNormalizer.getExactBounds(currentCluster);
+                RectF currB = InkNormalizer.getExactBounds(s);
 
                 if (prevB != null && currB != null) {
                     float hOverlap = Math.max(0f, Math.min(prevB.right, currB.right) - Math.max(prevB.left, currB.left));
+                    float prevBW = Math.max(1f, prevB.right - prevB.left);
+                    float currBW = Math.max(1f, currB.right - currB.left);
+                    float minW = Math.min(prevBW, currBW);
                     float hGap = currB.left - prevB.right;
-                    float minW = Math.min(prevB.width(), currB.width());
 
-                    if (hOverlap >= 0.20f * minW || hGap <= Math.max(8f, minW * 0.35f)) {
+                    if (hOverlap >= 0.15f * minW || hGap <= Math.max(5f, minW * 0.35f)) {
                         currentCluster.add(s);
                     } else {
                         result.add(currentCluster);

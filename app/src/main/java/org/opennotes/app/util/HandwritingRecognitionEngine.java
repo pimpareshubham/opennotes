@@ -163,8 +163,9 @@ public final class HandwritingRecognitionEngine {
 
     /**
      * Determines whether handwriting strokes contain a Devanagari Shirorekha headline.
-     * Genuine Devanagari words possess a continuous horizontal stroke across the upper region,
-     * whereas standard Arabic digits (0-9), Latin letters (English), and symbols do NOT.
+     * Note: Genuine Devanagari words can be written either with a connected headline (formal)
+     * or without a headline (informal / fast handwriting). A detected Shirorekha confirms
+     * Devanagari script, but its absence does NOT mean the text is English.
      */
     public static boolean hasShirorekha(List<Stroke> strokes) {
         if (strokes == null || strokes.isEmpty()) return false;
@@ -442,16 +443,23 @@ public final class HandwritingRecognitionEngine {
 
         final float writingAngle = InkNormalizer.detectWritingAngleDegrees(strokes);
 
-        // Universal Automatic Script Detection:
-        // Analyzes ink topology. If ink contains Shirorekha headline, it is Devanagari (Marathi/Hindi).
-        // If ink has no Shirorekha, it is standard Digits, Latin script, or Symbols!
+        // Script selection:
+        // Respect the user's explicit language preference.
+        // If the user selected MARATHI, HINDI, or ENGLISH, ALWAYS use that language!
+        // Never override MARATHI or HINDI to ENGLISH based on absence of Shirorekha,
+        // because native speakers frequently write Devanagari without a top headline!
         final String detectedLang;
-        if (preferredLanguage == null || "AUTO".equalsIgnoreCase(preferredLanguage) || "AUTO_DETECT".equalsIgnoreCase(preferredLanguage)) {
-            detectedLang = hasShirorekha(strokes) ? "MARATHI" : "ENGLISH";
-        } else if ("MARATHI".equalsIgnoreCase(preferredLanguage) || "HINDI".equalsIgnoreCase(preferredLanguage)) {
-            detectedLang = hasShirorekha(strokes) ? preferredLanguage : "ENGLISH";
+        if ("ENGLISH".equalsIgnoreCase(preferredLanguage)) {
+            detectedLang = "ENGLISH";
+        } else if ("HINDI".equalsIgnoreCase(preferredLanguage)) {
+            detectedLang = "HINDI";
+        } else if ("MARATHI".equalsIgnoreCase(preferredLanguage)) {
+            detectedLang = "MARATHI";
         } else {
-            detectedLang = hasShirorekha(strokes) ? "MARATHI" : "ENGLISH";
+            // For AUTO or unspecified:
+            // Default to MARATHI which natively recognizes Devanagari (both with and without
+            // Shirorekha), universal Arabic digits (0-9), and Latin punctuation.
+            detectedLang = "MARATHI";
         }
 
         // For steep or vertical writing (|angle| >= 30°), deskew before the primary pass so ML Kit receives
@@ -735,8 +743,8 @@ public final class HandwritingRecognitionEngine {
         String text = result.text != null ? result.text : "";
         List<String> alternatives = new ArrayList<>(result.alternatives);
 
-        // 1. If text contains stray Devanagari numerals and ink has NO Shirorekha, convert to standard Arabic digits
-        if (text.matches(".*[०-९].*") && !hasShirorekha(strokes)) {
+        // 1. If text contains stray Devanagari numerals, convert to standard universal Arabic digits (0-9)
+        if (text.matches(".*[०-९].*")) {
             text = convertDevanagariDigitsToArabic(text);
         }
 
@@ -752,7 +760,7 @@ public final class HandwritingRecognitionEngine {
 
         List<String> verifiedAlternatives = new ArrayList<>();
         for (String alt : alternatives) {
-            if (alt.matches(".*[०-९].*") && !hasShirorekha(strokes)) {
+            if (alt.matches(".*[०-९].*")) {
                 alt = convertDevanagariDigitsToArabic(alt);
             }
             String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, strokes);
@@ -1245,7 +1253,7 @@ public final class HandwritingRecognitionEngine {
             }
 
             String finalText = text;
-            if (finalText.matches(".*[०-९].*") && !hasShirorekha(originalStrokes)) {
+            if (finalText.matches(".*[०-९].*")) {
                 finalText = convertDevanagariDigitsToArabic(finalText);
             }
             finalText = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(finalText, originalStrokes);
@@ -1253,7 +1261,7 @@ public final class HandwritingRecognitionEngine {
 
             List<String> verifiedAlternatives = new ArrayList<>();
             for (String alt : rerankedAlternatives) {
-                if (alt.matches(".*[०-९].*") && !hasShirorekha(originalStrokes)) {
+                if (alt.matches(".*[०-९].*")) {
                     alt = convertDevanagariDigitsToArabic(alt);
                 }
                 String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, originalStrokes);
@@ -1278,7 +1286,11 @@ public final class HandwritingRecognitionEngine {
 
             final float finalFontSize = fontSize;
             final String postText = finalText;
-            final String finalLang = lang;
+            String computedLang = lang;
+            if (postText.matches("^[0-9\\s.,\\-+]+$") || postText.matches("^[a-zA-Z0-9\\s.,\\-+!?'\"()]+$")) {
+                computedLang = "ENGLISH";
+            }
+            final String finalLang = computedLang;
             final RectF finalBounds = new RectF(origBounds);
             final float finalStartX = startX;
             final float finalStartY = startY;

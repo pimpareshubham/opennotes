@@ -198,7 +198,7 @@ public class AppSettings {
     }
 
     public String getBeautifyLanguage() {
-        return prefs.getString(KEY_BEAUTIFY_LANGUAGE, "AUTO");
+        return prefs.getString(KEY_BEAUTIFY_LANGUAGE, "MARATHI");
     }
 
     public void setBeautifyLanguage(String language) {
