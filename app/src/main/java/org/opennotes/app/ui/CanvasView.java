@@ -1419,8 +1419,17 @@ public class CanvasView extends View {
             float baseStartX = (result.startX != 0f || result.startY != 0f) ? result.startX : result.bounds.left;
             float baseStartY = (result.startX != 0f || result.startY != 0f) ? result.startY : result.bounds.bottom - 4f;
             float itemAngle = (Math.abs(result.angleDegrees) >= 4.0f) ? result.angleDegrees : 0f;
+            if (result.startX == 0f && result.startY == 0f && result.bounds != null) {
+                if (itemAngle <= -50f && itemAngle >= -130f) {
+                    baseStartX = result.bounds.right - Math.max(4f, result.fontSize * 0.15f);
+                    baseStartY = result.bounds.bottom - 4f;
+                } else if (itemAngle >= 50f && itemAngle <= 130f) {
+                    baseStartX = result.bounds.left + Math.max(4f, result.fontSize * 0.15f);
+                    baseStartY = result.bounds.top + 4f;
+                }
+            }
 
-            if (result.wordItems != null && !result.wordItems.isEmpty()) {
+            if (result.wordItems != null && !result.wordItems.isEmpty() && Math.abs(itemAngle) < 4.0f) {
                 for (org.opennotes.app.util.HandwritingRecognitionEngine.WordItem wItem : result.wordItems) {
                     if (wItem == null || wItem.text == null || wItem.text.trim().isEmpty()) continue;
                     String fKey = (beautifyFontKey != null && !beautifyFontKey.isEmpty())
@@ -1447,7 +1456,7 @@ public class CanvasView extends View {
                 textPaint.setTypeface(org.opennotes.app.util.TypefaceManager.getTypeface(getContext(), fontKey));
                 float spaceWidth = textPaint.measureText(" ");
 
-                if (words.length <= 1) {
+                if (words.length <= 1 || Math.abs(itemAngle) >= 4.0f) {
                     convertedTexts.add(new TextItem(subLine, lineStartX, lineBaselineY, textColor, result.fontSize, fontKey, itemAngle));
                 } else {
                     float totalWordsWidth = 0f;

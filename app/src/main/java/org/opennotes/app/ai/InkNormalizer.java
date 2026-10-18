@@ -124,19 +124,23 @@ public class InkNormalizer {
                 : 0f;
 
         RectF bounds = getBounds(strokes);
-        if (bounds != null && bounds.height() >= bounds.width() * 1.02f) {
-            // Multi-line paragraphs or vertical columns of numbers/words are stacked vertically.
-            // Individual lines are written horizontally (0°). Never rotate by 90°!
-            return 0f;
+        if (bounds != null && bounds.height() >= bounds.width() * 1.05f) {
+            // Check whether strokes exhibit horizontal line structure (multiple horizontal pairs of strokes)
+            int horizontalPairs = countHorizontalStrokePairs(strokes);
+            if (horizontalPairs >= 2) {
+                // Multi-line paragraphs or vertical columns of numbers/words are stacked vertically.
+                // Individual lines are written horizontally (0°). Never rotate by 90°!
+                return 0f;
+            }
         }
 
-        // 2. Minimum Area Bounding Box / Aspect Ratio Sweep across angles [-40°, +40°]
-        // Human handwriting slopes naturally between -40° and +40°.
+        // 2. Minimum Area Bounding Box / Aspect Ratio Sweep across angles [-115°, +115°]
+        // Covers natural horizontal slope ([-45°, +45°]), steep angles, and vertical handwriting (+/-90°).
         float bestAngle = 0f;
         float maxScore = -1f;
         float bestAspectRatio = 1f;
 
-        for (float deg = -40f; deg <= 40f; deg += 2.0f) {
+        for (float deg = -115f; deg <= 115f; deg += 2.0f) {
             double rad = Math.toRadians(-deg);
             float cos = (float) Math.cos(rad);
             float sin = (float) Math.sin(rad);
@@ -220,11 +224,46 @@ public class InkNormalizer {
         // If angle is close to horizontal (+/- 3.5°), snap to 0° to avoid jitter on normal horizontal writing.
         if (Math.abs(refinedAngle) < 3.5f) return 0f;
 
+        // If angle is close to vertical (+/- 3.5° of +90° or -90°), snap to +/-90°
+        if (Math.abs(refinedAngle - 90f) < 3.5f) return 90f;
+        if (Math.abs(refinedAngle - (-90f)) < 3.5f) return -90f;
+
         // If stroke is approximately square (aspect ratio < 1.30) and has low progression distance,
         // it is a single upright character or symbol (e.g. "क", "म", "O", "A"). Do not rotate!
         if (bestAspectRatio < 1.30f && progDist < 25f) return 0f;
 
         return refinedAngle;
+    }
+
+    private static int countHorizontalStrokePairs(List<Stroke> strokes) {
+        if (strokes == null || strokes.size() < 2) return 0;
+        int hPairs = 0;
+        int n = strokes.size();
+        for (int i = 0; i < n; i++) {
+            Stroke s1 = strokes.get(i);
+            if (s1 == null) continue;
+            RectF b1 = s1.getBounds();
+            if (b1 == null || b1.isEmpty()) continue;
+            float h1 = Math.max(1f, b1.height());
+            for (int j = i + 1; j < n; j++) {
+                Stroke s2 = strokes.get(j);
+                if (s2 == null) continue;
+                RectF b2 = s2.getBounds();
+                if (b2 == null || b2.isEmpty()) continue;
+                float h2 = Math.max(1f, b2.height());
+
+                float vOverlap = Math.max(0f, Math.min(b1.bottom, b2.bottom) - Math.max(b1.top, b2.top));
+                float minH = Math.min(h1, h2);
+                if (vOverlap >= 0.35f * minH) {
+                    float hDist = Math.abs(b1.centerX() - b2.centerX());
+                    if (hDist >= 0.50f * minH) {
+                        hPairs++;
+                        if (hPairs >= 4) return hPairs;
+                    }
+                }
+            }
+        }
+        return hPairs;
     }
 
     private static float normalizeAngleDiff(float a, float b) {

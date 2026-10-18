@@ -397,7 +397,7 @@ public final class HandwritingRecognitionEngine {
             hasSymbolOrMixedScript = true;
         }
 
-        if (hasSymbolOrMixedScript) {
+        if (hasSymbolOrMixedScript && Math.abs(line.angleDegrees) < 4.0f) {
             recognizeWordsSequentially(context, words, 0, new ArrayList<>(), preferredLanguage, preContext,
                     line.bounds, line.angleDegrees, callback);
         } else {
@@ -677,21 +677,26 @@ public final class HandwritingRecognitionEngine {
 
         final float writingAngle = InkNormalizer.detectWritingAngleDegrees(strokes);
 
-        // PRIMARY PASS: Always evaluate raw, unrotated handwriting first!
-        // Google's Digital Ink ML models are trained on natural human handwriting with natural slant.
-        executeSingleRecognitionPass(context, strokes, strokes, 0f, preferredLanguage, contextText, new Callback() {
+        // For steep or vertical writing (|angle| >= 30°), deskew before the primary pass so ML Kit receives
+        // canonical horizontal ink. For natural slant (|angle| < 30°), evaluate unrotated first.
+        final float primaryPassAngle = (Math.abs(writingAngle) >= 30.0f) ? writingAngle : 0f;
+        List<Stroke> primaryStrokes = (primaryPassAngle != 0f)
+                ? transformedStrokeCopies(strokes, primaryPassAngle, false, false)
+                : strokes;
+
+        executeSingleRecognitionPass(context, primaryStrokes, strokes, primaryPassAngle, preferredLanguage, contextText, new Callback() {
             @Override
             public void onSuccess(RecognitionResult primaryResult) {
                 if (primaryResult != null && !primaryResult.text.trim().isEmpty()) {
                     if (includeReviewSuggestions && primaryResult.alternatives.size() <= 1) {
                         tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                                primaryResult, false, writingAngle, callback);
+                                primaryResult, primaryPassAngle != 0f, writingAngle, callback);
                     } else {
                         callback.onSuccess(primaryResult);
                     }
                 } else {
                     tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                            null, false, writingAngle, callback);
+                            null, primaryPassAngle != 0f, writingAngle, callback);
                 }
             }
 
@@ -702,7 +707,7 @@ public final class HandwritingRecognitionEngine {
                     return;
                 }
                 tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
-                        null, false, writingAngle, callback);
+                        null, primaryPassAngle != 0f, writingAngle, callback);
             }
         });
     }
@@ -727,11 +732,23 @@ public final class HandwritingRecognitionEngine {
                                                  Callback callback) {
         List<AngleHypothesis> hypotheses = new ArrayList<>();
 
-        if (Math.abs(writingAngle) >= 4.0f) {
+        if (primaryWasDeskewed) {
+            hypotheses.add(new AngleHypothesis(originalStrokes, 0f));
+        } else if (Math.abs(writingAngle) >= 4.0f) {
             hypotheses.add(new AngleHypothesis(
                     transformedStrokeCopies(originalStrokes, writingAngle, false, false), writingAngle));
         }
-        // Test common tilt variations: +15°, -15°, +30°, -30°, +45°, -45°, +90°, -90°
+
+        RectF bounds = boundsOf(originalStrokes);
+        if (bounds != null && bounds.height() > bounds.width() * 1.3f) {
+            // Priority vertical hypotheses for tall handwriting
+            hypotheses.add(new AngleHypothesis(
+                    transformedStrokeCopies(originalStrokes, -90f, false, false), -90f));
+            hypotheses.add(new AngleHypothesis(
+                    transformedStrokeCopies(originalStrokes, 90f, false, false), 90f));
+        }
+
+        // Test common tilt variations: +15°, -15°, +30°, -30°, +45°, -45°
         hypotheses.add(new AngleHypothesis(
                 transformedStrokeCopies(originalStrokes, 15f, false, false), 15f));
         hypotheses.add(new AngleHypothesis(
@@ -744,13 +761,6 @@ public final class HandwritingRecognitionEngine {
                 transformedStrokeCopies(originalStrokes, 45f, false, false), 45f));
         hypotheses.add(new AngleHypothesis(
                 transformedStrokeCopies(originalStrokes, -45f, false, false), -45f));
-        RectF bounds = boundsOf(originalStrokes);
-        if (bounds != null && bounds.height() > bounds.width() * 1.5f) {
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, 90f, false, false), 90f));
-            hypotheses.add(new AngleHypothesis(
-                    transformedStrokeCopies(originalStrokes, -90f, false, false), -90f));
-        }
 
         runWaterfall(context, hypotheses, originalStrokes, 0, language, preContext, primaryResult, callback);
     }
@@ -1392,12 +1402,22 @@ public final class HandwritingRecognitionEngine {
             float startX = origBounds.left;
             float startY = origBounds.bottom - 4f;
 
+            if (angleDegrees <= -50f && angleDegrees >= -130f) {
+                // Vertical upward writing (e.g. -90°)
+                startX = origBounds.right - Math.max(4f, fontSize * 0.15f);
+                startY = origBounds.bottom - 4f;
+            } else if (angleDegrees >= 50f && angleDegrees <= 130f) {
+                // Vertical downward writing (e.g. +90°)
+                startX = origBounds.left + Math.max(4f, fontSize * 0.15f);
+                startY = origBounds.top + 4f;
+            }
+
             final float finalFontSize = fontSize;
             final String finalText = text;
             final String finalLang = lang;
             final RectF finalBounds = new RectF(origBounds);
-            final float finalStartX = origBounds.left;
-            final float finalStartY = origBounds.bottom - 4f;
+            final float finalStartX = startX;
+            final float finalStartY = startY;
 
             MAIN.post(() -> callback.onSuccess(
                     new RecognitionResult(finalText, finalLang, finalBounds, finalFontSize,
