@@ -103,7 +103,7 @@ public class CanvasView extends View {
     private float strokeStabilization = 0.35f;
     private boolean straightLineAssist = false;
     private boolean isAutoBeautifyEnabled = true;
-    private String beautifyLanguage = "MARATHI";
+    private String beautifyLanguage = "AUTO";
     private String beautifyFontKey = "KALAM";
     private boolean isShirorekhaSnapEnabled = true;
     private float beautifySmoothing = 0.65f;
@@ -869,7 +869,7 @@ public class CanvasView extends View {
     }
 
     public void setBeautifyLanguage(String language) {
-        this.beautifyLanguage = (language != null) ? language : "MARATHI";
+        this.beautifyLanguage = (language != null) ? language : "AUTO";
     }
 
     public String getBeautifyLanguage() {

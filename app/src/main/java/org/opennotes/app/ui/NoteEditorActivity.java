@@ -791,10 +791,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     appSettings.setAutoConvertTextEnabled(newState);
                 }
                 updateAutoBeautifyToolbarIcon(newState);
-                String lang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
-                String langDisplay = "MARATHI".equalsIgnoreCase(lang) ? "मराठी" : ("HINDI".equalsIgnoreCase(lang) ? "हिन्दी" : "English");
+                String lang = appSettings != null ? appSettings.getBeautifyLanguage() : "AUTO";
+                String langDisplay = "AUTO".equalsIgnoreCase(lang)
+                        ? "Auto-Detect: Marathi, English, Hindi, Digits & Symbols"
+                        : ("MARATHI".equalsIgnoreCase(lang) ? "मराठी" : ("HINDI".equalsIgnoreCase(lang) ? "हिन्दी" : "English"));
                 if (newState) {
-                    Toast.makeText(this, "✨ Auto-Beautification ON (" + langDisplay + ")\nLong-press icon to customize language & font", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "✨ Auto-Beautification ON (" + langDisplay + ")", Toast.LENGTH_SHORT).show();
                 } else {
                     Toast.makeText(this, "Auto-Beautification & Conversion OFF", Toast.LENGTH_SHORT).show();
                 }
@@ -2752,6 +2754,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         View view = LayoutInflater.from(this).inflate(R.layout.dialog_auto_beautify_settings, null);
 
         SwitchCompat switchEnableBeautify = view.findViewById(R.id.switchEnableBeautify);
+        TextView btnLangAuto = view.findViewById(R.id.btnLangAuto);
         TextView btnLangEnglish = view.findViewById(R.id.btnLangEnglish);
         TextView btnLangMarathi = view.findViewById(R.id.btnLangMarathi);
         TextView btnLangHindi = view.findViewById(R.id.btnLangHindi);
@@ -2774,7 +2777,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .create();
 
         boolean initialEnabled = appSettings != null ? appSettings.isAutoBeautifyEnabled() : true;
-        String initialLang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
+        String initialLang = appSettings != null ? appSettings.getBeautifyLanguage() : "AUTO";
         String initialFont = appSettings != null ? appSettings.getBeautifyFont() : TypefaceManager.FONT_KALAM;
         boolean initialShirorekha = appSettings != null ? appSettings.isShirorekhaSnapEnabled() : true;
         boolean initialAutoConvert = appSettings != null ? appSettings.isAutoConvertTextEnabled() : true;
@@ -2794,9 +2797,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         final Runnable[] updateDialogUi = new Runnable[1];
         updateDialogUi[0] = () -> {
+            boolean isAuto = "AUTO".equalsIgnoreCase(selectedLang[0]) || "AUTO_DETECT".equalsIgnoreCase(selectedLang[0]);
             boolean isMar = "MARATHI".equalsIgnoreCase(selectedLang[0]);
             boolean isHin = "HINDI".equalsIgnoreCase(selectedLang[0]);
             boolean isEng = "ENGLISH".equalsIgnoreCase(selectedLang[0]);
+
+            if (btnLangAuto != null) {
+                btnLangAuto.setBackgroundResource(isAuto ? R.drawable.bg_tool_button_active : R.drawable.bg_floating_pill);
+                ((TextView) btnLangAuto).setTextColor(isAuto ? 0xFFFFFFFF : 0xFF94A3B8);
+            }
 
             btnLangMarathi.setBackgroundResource(isMar ? R.drawable.bg_tool_button_active : R.drawable.bg_floating_pill);
             btnLangMarathi.setTextColor(isMar ? 0xFFFFFFFF : 0xFF94A3B8);
@@ -2849,7 +2858,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 }
             }
 
-            if (isMar) {
+            if (isAuto) {
+                textBeautifyPreview.setText("Auto-Detect: 1949 248 माझे Book 123");
+            } else if (isMar) {
                 textBeautifyPreview.setText("माझे सुंदर सुलेखन • OpenNotes");
             } else if (isHin) {
                 textBeautifyPreview.setText("सुंदर हस्तलेख और सुलेखन • OpenNotes");
@@ -2858,6 +2869,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             }
             textBeautifyPreview.setTypeface(TypefaceManager.getTypeface(this, selectedFont[0]));
         };
+
+        if (btnLangAuto != null) {
+            btnLangAuto.setOnClickListener(v -> {
+                selectedLang[0] = "AUTO";
+                if (updateDialogUi[0] != null) updateDialogUi[0].run();
+            });
+        }
 
         btnLangMarathi.setOnClickListener(v -> {
             selectedLang[0] = "MARATHI";

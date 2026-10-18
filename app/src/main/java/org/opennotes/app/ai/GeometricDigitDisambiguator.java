@@ -49,6 +49,23 @@ public class GeometricDigitDisambiguator {
             List<List<Stroke>> characterClusters = clusterStrokesIntoCharacters(validStrokes);
             String cleanedDigits = trimmed.replaceAll("[^0-9]", "");
 
+            // Count how many '4's are already recognized in the text
+            int recognizedFours = 0;
+            for (int i = 0; i < recognizedText.length(); i++) {
+                if (recognizedText.charAt(i) == '4') recognizedFours++;
+            }
+
+            int openTopFourClusters = 0;
+            for (List<Stroke> cluster : characterClusters) {
+                if (isOpenTopFour(cluster)) openTopFourClusters++;
+            }
+
+            // If all open-top four clusters were ALREADY recognized as '4' (e.g. in "249", '4' is already recognized),
+            // then there is NO misclassified '4'! Leave legitimate '9's completely untouched!
+            if (openTopFourClusters <= recognizedFours) {
+                return recognizedText;
+            }
+
             if (characterClusters.size() == cleanedDigits.length()) {
                 StringBuilder corrected = new StringBuilder();
                 int digitIdx = 0;
@@ -69,7 +86,8 @@ public class GeometricDigitDisambiguator {
                 return corrected.toString();
             }
 
-            // Fallback if stroke cluster count differs from digit count
+            // Fallback if stroke cluster count differs from digit count:
+            // Only replace if a cluster is an open top 4 AND its position matches an unrecognized 4
             for (List<Stroke> charStrokes : characterClusters) {
                 if (isOpenTopFour(charStrokes)) {
                     return replaceMatchingNineWithFour(recognizedText, characterClusters, charStrokes);

@@ -75,7 +75,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Note Language"
+        android:text="Recognition &amp; Auto-Detection Engine"
         android:textColor="@color/text_secondary"
         android:textSize="12sp"
         android:textStyle="bold"
@@ -83,50 +83,70 @@
 
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="38dp"
-        android:orientation="horizontal"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
         android:layout_marginBottom="16dp">
 
         <TextView
-            android:id="@+id/btnLangEnglish"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
+            android:id="@+id/btnLangAuto"
+            android:layout_width="match_parent"
+            android:layout_height="38dp"
             android:gravity="center"
-            android:text="English"
-            android:textColor="@color/text_secondary"
-            android:textSize="12sp"
-            android:background="@drawable/bg_floating_pill"
-            android:clickable="true"
-            android:focusable="true" />
-
-        <TextView
-            android:id="@+id/btnLangMarathi"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:layout_marginStart="6dp"
-            android:gravity="center"
-            android:text="मराठी (Marathi)"
+            android:text="✨ Universal Auto-Detect (Marathi, English, Hindi, 0-9, Symbols)"
             android:textColor="#FFFFFF"
             android:textSize="12sp"
+            android:textStyle="bold"
             android:background="@drawable/bg_tool_button_active"
+            android:layout_marginBottom="6dp"
             android:clickable="true"
             android:focusable="true" />
 
-        <TextView
-            android:id="@+id/btnLangHindi"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:layout_marginStart="6dp"
-            android:gravity="center"
-            android:text="हिन्दी (Hindi)"
-            android:textColor="@color/text_secondary"
-            android:textSize="12sp"
-            android:background="@drawable/bg_floating_pill"
-            android:clickable="true"
-            android:focusable="true" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="34dp"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/btnLangMarathi"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:gravity="center"
+                android:text="मराठी (Force)"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp"
+                android:background="@drawable/bg_floating_pill"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/btnLangEnglish"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginStart="6dp"
+                android:gravity="center"
+                android:text="English / 0-9"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp"
+                android:background="@drawable/bg_floating_pill"
+                android:clickable="true"
+                android:focusable="true" />
+
+            <TextView
+                android:id="@+id/btnLangHindi"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:layout_marginStart="6dp"
+                android:gravity="center"
+                android:text="हिन्दी"
+                android:textColor="@color/text_secondary"
+                android:textSize="11sp"
+                android:background="@drawable/bg_floating_pill"
+                android:clickable="true"
+                android:focusable="true" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Font Style Selector -->

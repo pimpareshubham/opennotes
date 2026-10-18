@@ -243,10 +243,10 @@ public class SemanticStrokeClusterer {
                 } else {
                     // Main character strokes on the same line:
                     // Consecutive characters in words have substantial vertical overlap and horizontal proximity
-                    if (hGap <= 2.5f * medianH) {
+                    if (hGap <= 1.25f * medianH) {
                         if (vOverlap >= 0.15f * minH && cyDist <= 0.85f * medianH) {
                             isSameLine = true;
-                        } else if (hGap <= 1.4f * medianH && cyDist <= 0.75f * medianH) {
+                        } else if (hGap <= 0.85f * medianH && cyDist <= 0.75f * medianH) {
                             isSameLine = true;
                         }
                     }
@@ -313,8 +313,8 @@ public class SemanticStrokeClusterer {
                         float minClusterH = Math.min(c1H, c2H);
                         float cHGap = Math.max(0f, Math.max(c1Left, c2Left) - Math.min(c1Right, c2Right));
 
-                        if (cHGap <= 2.5f * medianH && cyDiff <= 0.50f * medianH
-                                && (vOverlap >= 0.20f * minClusterH || cyDiff <= 0.35f * medianH)) {
+                        if (cHGap <= 1.25f * medianH && cyDiff <= 0.40f * medianH
+                                && (vOverlap >= 0.20f * minClusterH || cyDiff <= 0.30f * medianH)) {
                             c1.addAll(c2);
                             clusterList.remove(j);
                             merged = true;

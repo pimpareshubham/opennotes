@@ -153,10 +153,63 @@ public final class HandwritingRecognitionEngine {
             return new String[]{"en-US", "en-IN", "en", "en-GB"};
         } else if ("HINDI".equalsIgnoreCase(language)) {
             return new String[]{"hi", "hi-IN", "mr-IN", "mr"};
+        } else if ("AUTO".equalsIgnoreCase(language) || "AUTO_DETECT".equalsIgnoreCase(language)) {
+            return new String[]{"mr-IN", "mr", "en-US", "en-IN", "hi", "hi-IN"};
         } else {
             // Marathi default
             return new String[]{"mr-IN", "mr", "hi", "hi-IN"};
         }
+    }
+
+    /**
+     * Determines whether handwriting strokes contain a Devanagari Shirorekha headline.
+     * Genuine Devanagari words possess a continuous horizontal stroke across the upper region,
+     * whereas standard Arabic digits (0-9), Latin letters (English), and symbols do NOT.
+     */
+    public static boolean hasShirorekha(List<Stroke> strokes) {
+        if (strokes == null || strokes.isEmpty()) return false;
+        RectF totalBounds = boundsOf(strokes);
+        if (totalBounds == null || totalBounds.width() < 12f || totalBounds.height() < 12f) return false;
+
+        float totalW = totalBounds.width();
+        float totalH = totalBounds.height();
+
+        for (Stroke s : strokes) {
+            if (s == null) continue;
+            RectF sb = s.getBounds();
+            if (sb == null) continue;
+
+            if (sb.width() >= 18f && sb.width() >= totalW * 0.30f) {
+                float aspect = sb.width() / Math.max(1f, sb.height());
+                if (aspect >= 2.2f && sb.top <= totalBounds.top + totalH * 0.48f) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Converts stray Devanagari numerals to standard universal Arabic digits (0-9).
+     */
+    public static String convertDevanagariDigitsToArabic(String text) {
+        if (text == null) return "";
+        char[] devDigits = {'०', '१', '२', '३', '४', '५', '६', '७', '८', '९'};
+        char[] arDigits = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9'};
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            boolean replaced = false;
+            for (int d = 0; d < 10; d++) {
+                if (c == devDigits[d]) {
+                    sb.append(arDigits[d]);
+                    replaced = true;
+                    break;
+                }
+            }
+            if (!replaced) sb.append(c);
+        }
+        return sb.toString();
     }
 
     /**
@@ -389,6 +442,18 @@ public final class HandwritingRecognitionEngine {
 
         final float writingAngle = InkNormalizer.detectWritingAngleDegrees(strokes);
 
+        // Universal Automatic Script Detection:
+        // Analyzes ink topology. If ink contains Shirorekha headline, it is Devanagari (Marathi/Hindi).
+        // If ink has no Shirorekha, it is standard Digits, Latin script, or Symbols!
+        final String detectedLang;
+        if (preferredLanguage == null || "AUTO".equalsIgnoreCase(preferredLanguage) || "AUTO_DETECT".equalsIgnoreCase(preferredLanguage)) {
+            detectedLang = hasShirorekha(strokes) ? "MARATHI" : "ENGLISH";
+        } else if ("MARATHI".equalsIgnoreCase(preferredLanguage) || "HINDI".equalsIgnoreCase(preferredLanguage)) {
+            detectedLang = hasShirorekha(strokes) ? preferredLanguage : "ENGLISH";
+        } else {
+            detectedLang = hasShirorekha(strokes) ? "MARATHI" : "ENGLISH";
+        }
+
         // For steep or vertical writing (|angle| >= 30°), deskew before the primary pass so ML Kit receives
         // canonical horizontal ink. For natural slant (|angle| < 30°), evaluate unrotated first.
         final float primaryPassAngle = (Math.abs(writingAngle) >= 30.0f) ? writingAngle : 0f;
@@ -396,19 +461,19 @@ public final class HandwritingRecognitionEngine {
                 ? transformedStrokeCopies(strokes, primaryPassAngle, false, false)
                 : strokes;
 
-        executeSingleRecognitionPass(context, primaryStrokes, strokes, primaryPassAngle, preferredLanguage, contextText, new Callback() {
+        executeSingleRecognitionPass(context, primaryStrokes, strokes, primaryPassAngle, detectedLang, contextText, new Callback() {
             @Override
             public void onSuccess(RecognitionResult primaryResult) {
                 RecognitionResult reconciled = disambiguateDigits(context, primaryResult, strokes);
                 if (reconciled != null && !reconciled.text.trim().isEmpty()) {
                     if (includeReviewSuggestions && reconciled.alternatives.size() <= 1) {
-                        tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
+                        tryAlternativeHypothesis(context, strokes, detectedLang, contextText,
                                 reconciled, primaryPassAngle != 0f, writingAngle, callback);
                     } else {
                         callback.onSuccess(reconciled);
                     }
                 } else {
-                    tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
+                    tryAlternativeHypothesis(context, strokes, detectedLang, contextText,
                             null, primaryPassAngle != 0f, writingAngle, callback);
                 }
             }
@@ -419,7 +484,7 @@ public final class HandwritingRecognitionEngine {
                     callback.onFailure(error);
                     return;
                 }
-                tryAlternativeHypothesis(context, strokes, preferredLanguage, contextText,
+                tryAlternativeHypothesis(context, strokes, detectedLang, contextText,
                         null, primaryPassAngle != 0f, writingAngle, callback);
             }
         });
@@ -670,15 +735,28 @@ public final class HandwritingRecognitionEngine {
         String text = result.text != null ? result.text : "";
         List<String> alternatives = new ArrayList<>(result.alternatives);
 
+        // 1. If text contains stray Devanagari numerals and ink has NO Shirorekha, convert to standard Arabic digits
+        if (text.matches(".*[०-९].*") && !hasShirorekha(strokes)) {
+            text = convertDevanagariDigitsToArabic(text);
+        }
+
+        // 2. Geometric digit disambiguation (open-top 4 vs 9)
         String geomDisambiguated = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(text, strokes);
         if (!geomDisambiguated.equals(text)) {
             if (!alternatives.contains(text)) alternatives.add(text);
             text = geomDisambiguated;
         }
 
+        // 3. Spatial and Topological Space Normalization (e.g. "24 8" -> "248", "B ook" -> "Book")
+        text = org.opennotes.app.ai.SpatialSpaceNormalizer.normalizeSpacing(text, strokes, result.language);
+
         List<String> verifiedAlternatives = new ArrayList<>();
         for (String alt : alternatives) {
+            if (alt.matches(".*[०-९].*") && !hasShirorekha(strokes)) {
+                alt = convertDevanagariDigitsToArabic(alt);
+            }
             String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, strokes);
+            dis = org.opennotes.app.ai.SpatialSpaceNormalizer.normalizeSpacing(dis, strokes, result.language);
             if (!verifiedAlternatives.contains(dis)) {
                 verifiedAlternatives.add(dis);
             }
@@ -1167,11 +1245,19 @@ public final class HandwritingRecognitionEngine {
             }
 
             String finalText = text;
+            if (finalText.matches(".*[०-९].*") && !hasShirorekha(originalStrokes)) {
+                finalText = convertDevanagariDigitsToArabic(finalText);
+            }
             finalText = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(finalText, originalStrokes);
+            finalText = org.opennotes.app.ai.SpatialSpaceNormalizer.normalizeSpacing(finalText, originalStrokes, lang);
 
             List<String> verifiedAlternatives = new ArrayList<>();
             for (String alt : rerankedAlternatives) {
+                if (alt.matches(".*[०-९].*") && !hasShirorekha(originalStrokes)) {
+                    alt = convertDevanagariDigitsToArabic(alt);
+                }
                 String dis = org.opennotes.app.ai.GeometricDigitDisambiguator.disambiguateDigits(alt, originalStrokes);
+                dis = org.opennotes.app.ai.SpatialSpaceNormalizer.normalizeSpacing(dis, originalStrokes, lang);
                 if (!verifiedAlternatives.contains(dis)) {
                     verifiedAlternatives.add(dis);
                 }
