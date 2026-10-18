@@ -176,7 +176,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     // Floating Contextual Lasso Action Bar
     private HorizontalScrollView lassoFloatingActionBar;
-    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoConvertText, btnLassoTeach;
+    private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoSpacing, btnLassoConvertText, btnLassoTeach;
 
     // Fullscreen Zen mode
     private ImageView btnExitFullscreen;
@@ -442,6 +442,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnLassoStyle = findViewById(R.id.btnLassoStyle);
         btnLassoDuplicate = findViewById(R.id.btnLassoDuplicate);
         btnLassoColor = findViewById(R.id.btnLassoColor);
+        btnLassoSpacing = findViewById(R.id.btnLassoSpacing);
 
         btnLassoConvertText = findViewById(R.id.btnLassoConvertText);
         btnLassoTeach = findViewById(R.id.btnLassoTeach);
@@ -1069,6 +1070,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 canvasView.setSelectionColor(color);
             });
         });
+        btnLassoSpacing.setOnClickListener(v -> showTextSpacingDialog());
 
         if (btnLassoConvertText != null) {
             btnLassoConvertText.setOnClickListener(v -> {
@@ -2120,6 +2122,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (btnLassoPaste != null) {
             btnLassoPaste.setEnabled(hasClipboard);
             btnLassoPaste.setAlpha(hasClipboard ? 1f : 0.45f);
+        }
+        if (btnLassoSpacing != null) {
+            boolean hasSelectedText = canvasView.hasSelectedText();
+            btnLassoSpacing.setEnabled(hasSelectedText);
+            btnLassoSpacing.setAlpha(hasSelectedText ? 1f : 0.45f);
         }
     }
 

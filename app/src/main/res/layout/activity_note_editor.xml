@@ -1153,6 +1153,29 @@
             android:layout_height="18dp"
             android:background="@color/divider" />
 
+        <!-- Adjust letter and word spacing for selected converted text -->
+        <TextView
+            android:id="@+id/btnLassoSpacing"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:minWidth="48dp"
+            android:minHeight="48dp"
+            android:gravity="center"
+            android:paddingHorizontal="10dp"
+            android:text="↔"
+            android:textColor="@color/accent"
+            android:textSize="12sp"
+            android:background="?selectableItemBackgroundBorderless"
+            android:clickable="true"
+            android:focusable="true"
+            android:enabled="false"
+            android:alpha="0.45"
+            android:contentDescription="Adjust letter and word spacing of selected text" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="18dp"
+            android:background="@color/divider" />
 
 
         <!-- Convert to Text (✍️ Text Convert) -->
