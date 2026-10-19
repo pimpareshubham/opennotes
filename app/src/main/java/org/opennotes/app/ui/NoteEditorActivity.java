@@ -1559,12 +1559,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
             // 1. Tool properties popup menu (Frame 50)
             if (cardToolProperties != null && cardToolProperties.getVisibility() == View.VISIBLE) {
-                Rect cardRect = new Rect();
-                cardToolProperties.getGlobalVisibleRect(cardRect);
-                if (!cardRect.contains((int) rawX, (int) rawY)) {
+                // If touch is NOT inside cardToolProperties (using screen coordinates + 8dp slop for edges/slider thumbs)
+                if (!isTouchInsideView(cardToolProperties, rawX, rawY, dpToPx(8))) {
                     // Check if clicked the active tool button (its own onClick will toggle/handle it)
                     View activeToolBtn = getActiveToolButtonView();
-                    boolean clickedActiveTool = isTouchInsideView(activeToolBtn, (int) rawX, (int) rawY);
+                    boolean clickedActiveTool = isTouchInsideView(activeToolBtn, rawX, rawY, dpToPx(4));
                     if (!clickedActiveTool) {
                         closeToolPropertiesCard();
                         closedAnyMenu = true;
@@ -1574,9 +1573,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
             // 2. Long press paste popup
             if (layoutLongPressPastePopup != null && layoutLongPressPastePopup.getVisibility() == View.VISIBLE) {
-                Rect pasteRect = new Rect();
-                layoutLongPressPastePopup.getGlobalVisibleRect(pasteRect);
-                if (!pasteRect.contains((int) rawX, (int) rawY)) {
+                if (!isTouchInsideView(layoutLongPressPastePopup, rawX, rawY, dpToPx(8))) {
                     hideLongPressPastePopup();
                     closedAnyMenu = true;
                 }
@@ -1588,7 +1585,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 // so no accidental ink dot, line, or gesture is drawn on the page!
                 // But if they clicked another toolbar control (undo, redo, tool, export, etc.),
                 // dispatch it so the toolbar button activates!
-                if (isTouchOnlyOnCanvas((int) rawX, (int) rawY)) {
+                if (isTouchOnlyOnCanvas(rawX, rawY)) {
                     return true;
                 }
             }
@@ -1609,27 +1606,33 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
-    private boolean isTouchInsideView(View v, int rawX, int rawY) {
-        if (v == null || v.getVisibility() != View.VISIBLE) return false;
-        Rect rect = new Rect();
-        v.getGlobalVisibleRect(rect);
-        return rect.contains(rawX, rawY);
+    private boolean isTouchInsideView(View v, float rawX, float rawY) {
+        return isTouchInsideView(v, rawX, rawY, 0);
     }
 
-    private boolean isTouchOnlyOnCanvas(int rawX, int rawY) {
+    private boolean isTouchInsideView(View v, float rawX, float rawY, int slop) {
+        if (v == null || v.getVisibility() != View.VISIBLE) return false;
+        int[] location = new int[2];
+        v.getLocationOnScreen(location);
+        int left = location[0] - slop;
+        int top = location[1] - slop;
+        int right = location[0] + v.getWidth() + slop;
+        int bottom = location[1] + v.getHeight() + slop;
+        return rawX >= left && rawX <= right && rawY >= top && rawY <= bottom;
+    }
+
+    private boolean isTouchOnlyOnCanvas(float rawX, float rawY) {
         if (canvasView == null) return false;
-        Rect canvasRect = new Rect();
-        canvasView.getGlobalVisibleRect(canvasRect);
-        if (!canvasRect.contains(rawX, rawY)) {
+        if (!isTouchInsideView(canvasView, rawX, rawY)) {
             return false;
         }
 
         View[] toolbarContainers = {
                 topBar, mainToolDock, floatingViewportPill, floatingPageNavPill,
-                btnExitFullscreen, lassoFloatingActionBar
+                btnExitFullscreen, lassoFloatingActionBar, cardToolProperties, layoutLongPressPastePopup
         };
         for (View v : toolbarContainers) {
-            if (isTouchInsideView(v, rawX, rawY)) {
+            if (isTouchInsideView(v, rawX, rawY, dpToPx(4))) {
                 return false;
             }
         }
