@@ -3,13 +3,8 @@ package org.opennotes.app.db;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
-import android.database.CursorWindow;
-import android.database.sqlite.SQLiteCursor;
-import android.database.sqlite.SQLiteCursorDriver;
 import android.database.sqlite.SQLiteDatabase;
 import android.database.sqlite.SQLiteOpenHelper;
-import android.database.sqlite.SQLiteQuery;
-import android.os.Build;
 import android.util.Log;
 
 import org.opennotes.app.model.Notebook;
@@ -29,19 +24,6 @@ import java.util.zip.GZIPOutputStream;
 public class NotesDbHelper extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "opennotes.db";
     private static final int DATABASE_VERSION = 4;
-
-    private static class LargeCursorFactory implements SQLiteDatabase.CursorFactory {
-        @Override
-        public Cursor newCursor(SQLiteDatabase db, SQLiteCursorDriver masterQuery, String editTable, SQLiteQuery query) {
-            SQLiteCursor cursor = new SQLiteCursor(masterQuery, editTable, query);
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                try {
-                    cursor.setWindow(new CursorWindow("OpenNotesLargeWindow", 100 * 1024 * 1024L));
-                } catch (Throwable ignored) {}
-            }
-            return cursor;
-        }
-    }
 
     // Notebooks table
     public static final String TABLE_NOTEBOOKS = "notebooks";
@@ -73,6 +55,27 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     public static final String COL_PAGE_CREATED_AT = "created_at";
     public static final String COL_PAGE_UPDATED_AT = "updated_at";
 
+    /** Safe projection preventing large rows from ever exceeding Android's default CursorWindow. */
+    public static final String[] SAFE_PAGE_COLUMNS = new String[]{
+            COL_PAGE_ID,
+            COL_PAGE_NB_ID,
+            COL_PAGE_INDEX,
+            COL_PAGE_TEMPLATE,
+            COL_PAGE_BG_COLOR,
+            COL_PAGE_IS_INFINITE,
+            COL_PAGE_CANVAS_HEIGHT,
+            "CASE WHEN " + COL_PAGE_STROKES + " LIKE 'GZFILE:%' THEN " + COL_PAGE_STROKES
+                    + " WHEN LENGTH(" + COL_PAGE_STROKES + ") <= 262144 THEN " + COL_PAGE_STROKES
+                    + " ELSE 'LEGACY_LARGE' END AS " + COL_PAGE_STROKES,
+            COL_PAGE_SHAPES,
+            COL_PAGE_TEXTS,
+            "CASE WHEN " + COL_PAGE_IMAGES + " LIKE 'GZFILE:%' THEN " + COL_PAGE_IMAGES
+                    + " WHEN LENGTH(" + COL_PAGE_IMAGES + ") <= 262144 THEN " + COL_PAGE_IMAGES
+                    + " ELSE 'LEGACY_LARGE' END AS " + COL_PAGE_IMAGES,
+            COL_PAGE_CREATED_AT,
+            COL_PAGE_UPDATED_AT
+    };
+
     private static NotesDbHelper instance;
     private final Context appContext;
 
@@ -89,7 +92,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     }
 
     private NotesDbHelper(Context context) {
-        super(context, DATABASE_NAME, new LargeCursorFactory(), DATABASE_VERSION);
+        super(context, DATABASE_NAME, null, DATABASE_VERSION);
         this.appContext = context.getApplicationContext();
     }
 
@@ -436,10 +439,10 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         return nb;
     }
 
-    // --- Large Data Offloading to Prevent CursorWindow Row Too Big Exceptions ---
+    // --- File-Based Storage for Drawings (Zero CursorWindow Limits) ---
 
     private String writeLargeDataToFile(String prefix, long pageKey, String data) {
-        if (data == null || data.length() < 100 * 1024) {
+        if (data == null || data.isEmpty() || "[]".equals(data.trim())) {
             return data;
         }
         if (appContext == null) return data;
@@ -453,7 +456,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             }
             return "GZFILE:" + file.getName();
         } catch (Exception e) {
-            Log.e("NotesDbHelper", "Failed to write large data to file, storing in DB directly", e);
+            Log.e("NotesDbHelper", "Failed to write data to file, storing in DB directly", e);
             return data;
         }
     }
@@ -482,43 +485,88 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         return storedValue;
     }
 
+    /** Safely reads large legacy unmigrated SQLite text in 256KB chunks without exceeding CursorWindow. */
+    private String readColumnChunked(SQLiteDatabase db, long pageId, String columnName) {
+        Cursor c = null;
+        int totalLen = 0;
+        try {
+            c = db.rawQuery("SELECT LENGTH(" + columnName + ") FROM " + TABLE_PAGES + " WHERE " + COL_PAGE_ID + "=?",
+                    new String[]{String.valueOf(pageId)});
+            if (c != null && c.moveToFirst()) {
+                totalLen = c.getInt(0);
+            }
+        } catch (Exception e) {
+            Log.w("NotesDbHelper", "Failed getting length for " + columnName + ": " + e.getMessage());
+        } finally {
+            if (c != null) c.close();
+        }
+
+        if (totalLen <= 0) return "";
+
+        StringBuilder sb = new StringBuilder(totalLen);
+        int chunkSize = 256 * 1024;
+        int offset = 1; // SQLite SUBSTR is 1-based
+        while (offset <= totalLen) {
+            Cursor chunkCursor = null;
+            try {
+                chunkCursor = db.rawQuery(
+                        "SELECT SUBSTR(" + columnName + ", ?, ?) FROM " + TABLE_PAGES + " WHERE " + COL_PAGE_ID + "=?",
+                        new String[]{String.valueOf(offset), String.valueOf(chunkSize), String.valueOf(pageId)});
+                if (chunkCursor != null && chunkCursor.moveToFirst()) {
+                    String part = chunkCursor.getString(0);
+                    if (part != null) {
+                        sb.append(part);
+                    }
+                }
+            } catch (Exception e) {
+                Log.w("NotesDbHelper", "Failed reading chunk for " + columnName + " at " + offset + ": " + e.getMessage());
+            } finally {
+                if (chunkCursor != null) chunkCursor.close();
+            }
+            offset += chunkSize;
+        }
+
+        String fullContent = sb.toString();
+        // Immediately offload to file and update SQLite row so future queries are instant and tiny!
+        String prefix = columnName.equals(COL_PAGE_IMAGES) ? "images" : "strokes";
+        String fileRef = writeLargeDataToFile(prefix, pageId, fullContent);
+        if (fileRef.startsWith("GZFILE:")) {
+            try {
+                ContentValues cv = new ContentValues();
+                cv.put(columnName, fileRef);
+                db.update(TABLE_PAGES, cv, COL_PAGE_ID + "=?", new String[]{String.valueOf(pageId)});
+            } catch (Exception e) {
+                Log.w("NotesDbHelper", "Failed to update migrated file ref: " + e.getMessage());
+            }
+        }
+        return fullContent;
+    }
+
     public synchronized void migrateLargeBlobsToFile() {
         SQLiteDatabase db = getWritableDatabase();
         Cursor c = null;
+        List<Long> largePageIds = new ArrayList<>();
         try {
-            c = db.query(TABLE_PAGES,
-                    new String[]{COL_PAGE_ID, COL_PAGE_NB_ID, COL_PAGE_INDEX, COL_PAGE_STROKES, COL_PAGE_IMAGES},
-                    "LENGTH(" + COL_PAGE_STROKES + ") > 100000 OR LENGTH(" + COL_PAGE_IMAGES + ") > 100000",
-                    null, null, null, null);
+            c = db.rawQuery("SELECT " + COL_PAGE_ID + " FROM " + TABLE_PAGES
+                    + " WHERE (NOT " + COL_PAGE_STROKES + " LIKE 'GZFILE:%' AND LENGTH(" + COL_PAGE_STROKES + ") > 100000) "
+                    + " OR (NOT " + COL_PAGE_IMAGES + " LIKE 'GZFILE:%' AND LENGTH(" + COL_PAGE_IMAGES + ") > 100000)", null);
             if (c != null) {
                 while (c.moveToNext()) {
-                    long pageId = c.getLong(0);
-                    long nbId = c.getLong(1);
-                    int pageIdx = c.getInt(2);
-                    String strokes = c.getString(3);
-                    String images = c.getString(4);
-                    long pageKey = pageId != 0 ? pageId : (nbId * 10000L + pageIdx);
-
-                    ContentValues cv = new ContentValues();
-                    boolean needsUpdate = false;
-                    if (strokes != null && strokes.length() >= 100 * 1024 && !strokes.startsWith("GZFILE:")) {
-                        cv.put(COL_PAGE_STROKES, writeLargeDataToFile("strokes", pageKey, strokes));
-                        needsUpdate = true;
-                    }
-                    if (images != null && images.length() >= 100 * 1024 && !images.startsWith("GZFILE:")) {
-                        cv.put(COL_PAGE_IMAGES, writeLargeDataToFile("images", pageKey, images));
-                        needsUpdate = true;
-                    }
-                    if (needsUpdate) {
-                        db.update(TABLE_PAGES, cv, COL_PAGE_ID + "=?", new String[]{String.valueOf(pageId)});
-                    }
+                    largePageIds.add(c.getLong(0));
                 }
             }
         } catch (Throwable t) {
-            Log.w("NotesDbHelper", "Migration of large blobs deferred: " + t.getMessage());
+            Log.w("NotesDbHelper", "Check for large blobs deferred: " + t.getMessage());
         } finally {
-            if (c != null) {
-                c.close();
+            if (c != null) c.close();
+        }
+
+        for (Long pageId : largePageIds) {
+            try {
+                readColumnChunked(db, pageId, COL_PAGE_STROKES);
+                readColumnChunked(db, pageId, COL_PAGE_IMAGES);
+            } catch (Throwable t) {
+                Log.w("NotesDbHelper", "Failed migrating page " + pageId + ": " + t.getMessage());
             }
         }
     }
@@ -596,20 +644,13 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         Cursor c = null;
         Page page = null;
         try {
-            c = db.query(TABLE_PAGES, null,
+            c = db.query(TABLE_PAGES, SAFE_PAGE_COLUMNS,
                     COL_PAGE_NB_ID + "=? AND " + COL_PAGE_INDEX + "=?",
                     new String[]{String.valueOf(notebookId), String.valueOf(pageIndex)},
                     null, null, null);
 
-            if (c instanceof SQLiteCursor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                try {
-                    CursorWindow window = new CursorWindow("OpenNotesPageWindow", 100 * 1024 * 1024L);
-                    ((SQLiteCursor) c).setWindow(window);
-                } catch (Throwable ignored) {}
-            }
-
             if (c != null && c.moveToFirst()) {
-                page = cursorToPage(c);
+                page = cursorToPage(c, db);
             }
         } finally {
             if (c != null) {
@@ -624,21 +665,14 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         try {
-            c = db.query(TABLE_PAGES, null,
+            c = db.query(TABLE_PAGES, SAFE_PAGE_COLUMNS,
                     COL_PAGE_NB_ID + "=?",
                     new String[]{String.valueOf(notebookId)},
                     null, null, COL_PAGE_INDEX + " ASC");
 
-            if (c instanceof SQLiteCursor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                try {
-                    CursorWindow window = new CursorWindow("OpenNotesPagesWindow", 100 * 1024 * 1024L);
-                    ((SQLiteCursor) c).setWindow(window);
-                } catch (Throwable ignored) {}
-            }
-
             if (c != null) {
                 while (c.moveToNext()) {
-                    list.add(cursorToPage(c));
+                    list.add(cursorToPage(c, db));
                 }
             }
         } finally {
@@ -701,7 +735,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         db.update(TABLE_NOTEBOOKS, nbCv, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
     }
 
-    private Page cursorToPage(Cursor c) {
+    private Page cursorToPage(Cursor c, SQLiteDatabase db) {
         long nbId = c.getLong(c.getColumnIndexOrThrow(COL_PAGE_NB_ID));
         int idx = c.getInt(c.getColumnIndexOrThrow(COL_PAGE_INDEX));
         String tpl = c.getString(c.getColumnIndexOrThrow(COL_PAGE_TEMPLATE));
@@ -713,20 +747,32 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         boolean isInf = (infIdx != -1 && !c.isNull(infIdx)) && c.getInt(infIdx) == 1;
 
         Page page = new Page(nbId, idx, PaperTemplate.fromString(tpl), bgColor, isInf);
-        page.id = c.getLong(c.getColumnIndexOrThrow(COL_PAGE_ID));
+        long pageId = c.getLong(c.getColumnIndexOrThrow(COL_PAGE_ID));
+        page.id = pageId;
 
         int hIdx = c.getColumnIndex(COL_PAGE_CANVAS_HEIGHT);
         if (hIdx != -1 && !c.isNull(hIdx)) {
             page.canvasHeight = c.getFloat(hIdx);
         }
 
-        page.strokesFromJson(readLargeDataFromFile(c.getString(c.getColumnIndexOrThrow(COL_PAGE_STROKES))));
+        String rawStrokes = c.getString(c.getColumnIndexOrThrow(COL_PAGE_STROKES));
+        if ("LEGACY_LARGE".equals(rawStrokes) && db != null) {
+            rawStrokes = readColumnChunked(db, pageId, COL_PAGE_STROKES);
+        }
+        page.strokesFromJson(readLargeDataFromFile(rawStrokes));
+
         page.shapesFromJson(c.getString(c.getColumnIndexOrThrow(COL_PAGE_SHAPES)));
         page.textsFromJson(c.getString(c.getColumnIndexOrThrow(COL_PAGE_TEXTS)));
+
         int imgIdx = c.getColumnIndex(COL_PAGE_IMAGES);
         if (imgIdx != -1 && !c.isNull(imgIdx)) {
-            page.imagesFromJson(readLargeDataFromFile(c.getString(imgIdx)));
+            String rawImages = c.getString(imgIdx);
+            if ("LEGACY_LARGE".equals(rawImages) && db != null) {
+                rawImages = readColumnChunked(db, pageId, COL_PAGE_IMAGES);
+            }
+            page.imagesFromJson(readLargeDataFromFile(rawImages));
         }
+
         page.createdAt = c.getLong(c.getColumnIndexOrThrow(COL_PAGE_CREATED_AT));
         page.updatedAt = c.getLong(c.getColumnIndexOrThrow(COL_PAGE_UPDATED_AT));
         return page;
