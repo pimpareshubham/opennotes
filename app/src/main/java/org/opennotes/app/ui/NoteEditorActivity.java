@@ -694,7 +694,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if (isFinishing() || isDestroyed()) return;
                     currentNotebook = loadedNotebook;
                     pages = resultPages;
-                    textNotebookTitle.setText(currentNotebook.title);
+                    if (textNotebookTitle != null) {
+                        textNotebookTitle.setText(currentNotebook.title);
+                    }
                     updateFavoriteIcon();
                     currentPageIndex = hasRestoredEditorState
                             ? Math.max(0, Math.min(restoredPageIndex, resultPages.size() - 1)) : 0;
@@ -773,6 +775,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         textTitle.setTypeface(null, android.graphics.Typeface.BOLD);
                         textNotebookTitle = textTitle;
                         activeTabView = tabView;
+                        tabContainer.setOnClickListener(v -> showRenameNotebookDialog());
                     } else {
                         tabContainer.setBackgroundResource(R.drawable.bg_tab_inactive);
                         textTitle.setTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_secondary));
@@ -903,6 +906,34 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             }
         });
         popup.show();
+    }
+
+    private void showRenameNotebookDialog() {
+        if (currentNotebook == null) return;
+        android.widget.EditText input = new android.widget.EditText(this);
+        input.setText(currentNotebook.title);
+        input.setSelectAllOnFocus(true);
+        input.setTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_primary));
+
+        androidx.appcompat.app.AlertDialog dialog = new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
+                .setTitle("Rename Notebook")
+                .setView(input)
+                .setPositiveButton("Save", (d, which) -> {
+                    String newTitle = input.getText().toString().trim();
+                    if (!newTitle.isEmpty()) {
+                        currentNotebook.title = newTitle;
+                        if (textNotebookTitle != null) {
+                            textNotebookTitle.setText(newTitle);
+                        }
+                        Notebook snapshot = currentNotebook;
+                        saveExecutor.execute(() -> dbHelper.updateNotebook(snapshot));
+                        renderDocumentTabs();
+                    }
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .create();
+        org.opennotes.app.util.ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
     }
 
     private void loadCurrentPage() {
