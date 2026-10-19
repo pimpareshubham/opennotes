@@ -543,7 +543,9 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     @Override
     public void onNotebookFavoriteClick(Notebook notebook) {
         notebook.isFavorite = !notebook.isFavorite;
-        notebookIoExecutor.execute(() -> dbHelper.updateNotebook(notebook));
+        final long id = notebook.id;
+        final boolean fav = notebook.isFavorite;
+        notebookIoExecutor.execute(() -> dbHelper.setFavorite(id, fav));
         loadNotebooks();
     }
 

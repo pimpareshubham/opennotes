@@ -929,12 +929,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void updateFavoriteIcon() {
+        if (btnFavorite == null) return;
         if (currentNotebook != null && currentNotebook.isFavorite) {
             btnFavorite.setImageResource(R.drawable.ic_star_filled);
             btnFavorite.setColorFilter(0xFFF59E0B);
+            btnFavorite.setContentDescription("Bookmarked in Favorites");
         } else {
             btnFavorite.setImageResource(R.drawable.ic_star_outline);
             btnFavorite.setColorFilter(0xFF94A3B8);
+            btnFavorite.setContentDescription("Bookmark note");
         }
     }
 
@@ -1191,11 +1194,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         // Viewport Pill
         btnFavorite.setOnClickListener(v -> {
             if (currentNotebook != null) {
+                saveCurrentPage();
                 currentNotebook.isFavorite = !currentNotebook.isFavorite;
-                Notebook notebookSnapshot = currentNotebook;
-                saveExecutor.execute(() -> dbHelper.updateNotebook(notebookSnapshot));
+                final boolean fav = currentNotebook.isFavorite;
+                saveExecutor.execute(() -> dbHelper.setFavorite(notebookId, fav));
                 updateFavoriteIcon();
-                Toast.makeText(this, currentNotebook.isFavorite ? "Added to Favorites ★" : "Removed from Favorites", Toast.LENGTH_SHORT).show();
+                btnFavorite.animate().scaleX(1.35f).scaleY(1.35f).setDuration(120)
+                        .withEndAction(() -> btnFavorite.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start())
+                        .start();
+                Toast.makeText(this, fav ? "Bookmarked ★ (Saved to Favorites)" : "Removed from Favorites", Toast.LENGTH_SHORT).show();
             }
         });
 
