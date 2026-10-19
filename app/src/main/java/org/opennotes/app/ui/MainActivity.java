@@ -557,44 +557,48 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
 
     @Override
     public void onNotebookMoreClick(Notebook notebook, View anchorView) {
-        androidx.appcompat.widget.PopupMenu popup = new androidx.appcompat.widget.PopupMenu(this, anchorView);
-        popup.getMenu().add(0, 1, 0, "Open");
-        popup.getMenu().add(0, 2, 1, R.string.rename);
-        popup.getMenu().add(0, 3, 2, R.string.duplicate);
-        popup.getMenu().add(0, 4, 3, R.string.export_pdf);
-        popup.getMenu().add(0, 5, 4, R.string.delete);
-
-        popup.setOnMenuItemClickListener(item -> {
-            switch (item.getItemId()) {
-                case 1:
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle(notebook.title)
+                .setSubtitle(notebook.pageCount + (notebook.pageCount == 1 ? " page" : " pages") + " • Notebook Options")
+                .setHeaderSymbol("📓")
+                .addOption(1, "📖", "Open Notebook", "Read or continue writing in this notebook", false, () -> {
                     openNotebook(notebook.id);
-                    return true;
-                case 2:
+                })
+                .addOption(2, "✏️", getString(R.string.rename), "Change notebook title", false, () -> {
                     showRenameDialog(notebook);
-                    return true;
-                case 3:
+                })
+                .addOption(3, "📑", getString(R.string.duplicate), "Create a full copy with all pages", false, () -> {
                     duplicateNotebook(notebook);
-                    return true;
-                case 4:
+                })
+                .addOption(4, "📤", getString(R.string.export_pdf), "Export and share as PDF document", false, () -> {
                     exportNotebookPdf(notebook);
-                    return true;
-                case 5:
+                })
+                .addDestructiveOption(5, "🗑️", getString(R.string.delete), "Permanently remove notebook and its pages", () -> {
                     showDeleteConfirmDialog(notebook);
-                    return true;
-            }
-            return false;
-        });
-        popup.show();
+                })
+                .show();
     }
 
     private void showRenameDialog(Notebook notebook) {
+        android.widget.FrameLayout container = new android.widget.FrameLayout(this);
+        int padH = org.opennotes.app.util.ThemeUtils.dp(this, 24);
+        int padV = org.opennotes.app.util.ThemeUtils.dp(this, 12);
+        container.setPadding(padH, padV, padH, padV);
+
         EditText input = new EditText(this);
         input.setText(notebook.title);
         input.setSelectAllOnFocus(true);
+        input.setTextColor(0xFFF8FAFC);
+        input.setHintTextColor(0xFF64748B);
+        input.setTextSize(16);
+        input.setBackgroundResource(R.drawable.bg_search_bar);
+        input.setPadding(org.opennotes.app.util.ThemeUtils.dp(this, 14), org.opennotes.app.util.ThemeUtils.dp(this, 12),
+                org.opennotes.app.util.ThemeUtils.dp(this, 14), org.opennotes.app.util.ThemeUtils.dp(this, 12));
+        container.addView(input);
 
         androidx.appcompat.app.AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setTitle(R.string.rename)
-                .setView(input)
+                .setView(container)
                 .setPositiveButton("Save", (d, which) -> {
                     String newTitle = input.getText().toString().trim();
                     if (!newTitle.isEmpty()) {

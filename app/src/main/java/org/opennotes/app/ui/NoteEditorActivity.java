@@ -1089,50 +1089,57 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showTabsDropdown(List<Notebook> openNotes) {
-        if (textTabCountBadge == null) return;
-        androidx.appcompat.widget.PopupMenu popup = new androidx.appcompat.widget.PopupMenu(this, textTabCountBadge);
-        for (int i = 0; i < openNotes.size(); i++) {
-            Notebook nb = openNotes.get(i);
-            String title = (nb.id == notebookId ? "✓ " : "   ") + nb.title;
-            popup.getMenu().add(0, (int) nb.id, i, title);
-        }
-        int newTabMenuId = 999999;
-        int closeOthersMenuId = 999998;
-        popup.getMenu().add(1, newTabMenuId, 100, "+ New Note");
-        if (openNotes.size() > 1) {
-            popup.getMenu().add(1, closeOthersMenuId, 101, "Close Other Tabs");
+        if (openNotes == null || openNotes.isEmpty()) return;
+        ModernOptionsSelectorDialog.Builder builder = new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Open Notebook Tabs")
+                .setSubtitle("Switch between open documents or manage tabs")
+                .setHeaderSymbol("📑");
+
+        for (Notebook nb : openNotes) {
+            boolean isCurrent = (nb.id == notebookId);
+            builder.addOption((int) nb.id, isCurrent ? "📖" : "📄", nb.title,
+                    isCurrent ? "Currently active note" : "Tap to switch to this tab", isCurrent, () -> {
+                        switchToNotebook(nb.id);
+                    });
         }
 
-        popup.setOnMenuItemClickListener(item -> {
-            int itemId = item.getItemId();
-            if (itemId == newTabMenuId) {
-                showCreateNotebookDialog();
-                return true;
-            } else if (itemId == closeOthersMenuId) {
+        builder.addOption(999999, "➕", "New Note", "Create and open a new notebook in a tab", false, this::showCreateNotebookDialog);
+
+        if (openNotes.size() > 1) {
+            builder.addDestructiveOption(999998, "✕", "Close Other Tabs", "Keep only the current notebook open", () -> {
                 synchronized (openNotebookIds) {
                     openNotebookIds.clear();
                     openNotebookIds.add(notebookId);
                 }
                 renderDocumentTabs();
-                return true;
-            } else {
-                switchToNotebook((long) itemId);
-                return true;
-            }
-        });
-        popup.show();
+            });
+        }
+
+        builder.show();
     }
 
     private void showRenameNotebookDialog() {
         if (currentNotebook == null) return;
+        android.widget.FrameLayout container = new android.widget.FrameLayout(this);
+        int padH = org.opennotes.app.util.ThemeUtils.dp(this, 24);
+        int padV = org.opennotes.app.util.ThemeUtils.dp(this, 12);
+        container.setPadding(padH, padV, padH, padV);
+
         android.widget.EditText input = new android.widget.EditText(this);
         input.setText(currentNotebook.title);
         input.setSelectAllOnFocus(true);
         input.setTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_primary));
+        input.setHintTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_hint));
+        input.setBackgroundResource(R.drawable.bg_search_bar);
+        int innerPadH = org.opennotes.app.util.ThemeUtils.dp(this, 16);
+        int innerPadV = org.opennotes.app.util.ThemeUtils.dp(this, 12);
+        input.setPadding(innerPadH, innerPadV, innerPadH, innerPadV);
+        input.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+        container.addView(input);
 
         androidx.appcompat.app.AlertDialog dialog = new com.google.android.material.dialog.MaterialAlertDialogBuilder(this)
                 .setTitle("Rename Notebook")
-                .setView(input)
+                .setView(container)
                 .setPositiveButton("Save", (d, which) -> {
                     String newTitle = input.getText().toString().trim();
                     if (!newTitle.isEmpty()) {
@@ -2197,47 +2204,47 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void showEraserOptionsDialog() {
         boolean onlyHighlighter = canvasView.isEraseOnlyHighlighter();
-        String[] options = {
-                "🧹 Normal Eraser (Erase all strokes & text)" + (!onlyHighlighter ? "  ✓" : ""),
-                "🖍️ Highlighter Eraser (Highlighter only, preserve pen & text)" + (onlyHighlighter ? "  ✓" : ""),
-                "🗑️ Clear Entire Page"
-        };
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+        new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Eraser Options")
-                .setItems(options, (dialog, which) -> {
-                    if (which == 0) {
-                        canvasView.setEraseOnlyHighlighter(false);
-                        toolEraser.setColorFilter(0xFF38BDF8);
-                    } else if (which == 1) {
-                        canvasView.setEraseOnlyHighlighter(true);
-                        toolEraser.setColorFilter(0xFFF59E0B);
-                    } else if (which == 2) {
-                        showClearCanvasDialog();
-                    }
-                })
-                .setNegativeButton("Cancel", null);
-        ThemeUtils.showStyledDialog(builder, this);
+                .setSubtitle("Select eraser targeting mode or clear canvas")
+                .setHeaderSymbol("🧹")
+                .addOption(1, "🧹", "Normal Eraser",
+                        "Erase all strokes, pen ink, and handwritten text",
+                        !onlyHighlighter, () -> {
+                            canvasView.setEraseOnlyHighlighter(false);
+                            toolEraser.setColorFilter(0xFF38BDF8);
+                        })
+                .addOption(2, "🖍️", "Highlighter Eraser",
+                        "Highlighter only • Preserves your pen ink and text",
+                        onlyHighlighter, () -> {
+                            canvasView.setEraseOnlyHighlighter(true);
+                            toolEraser.setColorFilter(0xFFF59E0B);
+                        })
+                .addDestructiveOption(3, "🗑️", "Clear Entire Page",
+                        "Remove all ink drawings and handwriting on this page",
+                        this::showClearCanvasDialog)
+                .show();
     }
 
     private void showLassoOptionsDialog() {
         boolean isRect = canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE;
-        String[] options = {
-                "➰ Freehand Lasso (Draw boundary around items)" + (!isRect ? "  ✓" : ""),
-                "📐 Rectangular Marquee (Drag box to select items)" + (isRect ? "  ✓" : "")
-        };
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+        new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Lasso Selection Mode")
-                .setItems(options, (dialog, which) -> {
-                    if (which == 0) {
-                        canvasView.setLassoMode(CanvasView.LassoMode.FREEHAND);
-                        toolLasso.setColorFilter(0xFF38BDF8);
-                    } else {
-                        canvasView.setLassoMode(CanvasView.LassoMode.RECTANGLE);
-                        toolLasso.setColorFilter(0xFF10B981);
-                    }
-                })
-                .setNegativeButton("Cancel", null);
-        ThemeUtils.showStyledDialog(builder, this);
+                .setSubtitle("Choose how you lasso strokes and items on canvas")
+                .setHeaderSymbol("➰")
+                .addOption(1, "➰", "Freehand Lasso",
+                        "Draw a freeform outline around items to select",
+                        !isRect, () -> {
+                            canvasView.setLassoMode(CanvasView.LassoMode.FREEHAND);
+                            toolLasso.setColorFilter(0xFF38BDF8);
+                        })
+                .addOption(2, "📐", "Rectangular Marquee",
+                        "Drag a bounding box to quickly select rectangular regions",
+                        isRect, () -> {
+                            canvasView.setLassoMode(CanvasView.LassoMode.RECTANGLE);
+                            toolLasso.setColorFilter(0xFF10B981);
+                        })
+                .show();
     }
 
     private void showClearCanvasDialog() {
@@ -2367,39 +2374,32 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         Collections.sort(sortedOptions);
 
         int currentReset = ZoomFavoritesManager.getDefaultResetZoom(this);
-        List<String> displayItems = new ArrayList<>();
-        List<Integer> optionValues = new ArrayList<>();
+
+        ModernOptionsSelectorDialog.Builder builder = new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Reset Zoom Target")
+                .setSubtitle("Choose your favorite zoom level for one-tap reset")
+                .setHeaderSymbol("★");
 
         for (int zoom : sortedOptions) {
-            String label = "★ " + zoom + "%";
-            if (zoom == currentReset) {
-                label += "  ✓ (Active Reset)";
-            }
-            displayItems.add(label);
-            optionValues.add(zoom);
+            boolean isCurrent = (zoom == currentReset);
+            String desc;
+            if (zoom <= 75) desc = "Wide overview for seeing entire page layout";
+            else if (zoom == 100) desc = "Standard 100% natural handwriting size";
+            else if (zoom <= 150) desc = "Comfortable enlarged writing and reading";
+            else desc = "High-precision detailed note taking";
+
+            final int chosenZoom = zoom;
+            builder.addOption(zoom, "★", zoom + "% Zoom", desc, isCurrent, () -> {
+                ZoomFavoritesManager.setDefaultResetZoom(this, chosenZoom);
+                canvasView.resetZoom(chosenZoom);
+                Toast.makeText(this, "Reset zoom set to " + chosenZoom + "% ★", Toast.LENGTH_SHORT).show();
+            });
         }
 
-        displayItems.add("⚙️ All Zoom Levels / Manage Favorites…");
-        optionValues.add(-1);
+        builder.addOption(-1, "⚙️", "All Zoom Levels / Manage Favorites…",
+                "Pick custom zoom percentage or edit starred favorites", false, this::showZoomPickerDialog);
 
-        String[] items = displayItems.toArray(new String[0]);
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
-                .setTitle("Select Reset Zoom (Favorites)")
-                .setItems(items, (dialog, which) -> {
-                    if (which >= 0 && which < optionValues.size()) {
-                        int chosenZoom = optionValues.get(which);
-                        if (chosenZoom == -1) {
-                            showZoomPickerDialog();
-                        } else {
-                            ZoomFavoritesManager.setDefaultResetZoom(this, chosenZoom);
-                            canvasView.resetZoom(chosenZoom);
-                            Toast.makeText(this, "Reset zoom set to " + chosenZoom + "% ★", Toast.LENGTH_SHORT).show();
-                        }
-                    }
-                })
-                .setNegativeButton("Cancel", null);
-
-        ThemeUtils.showStyledDialog(builder, this);
+        builder.show();
     }
 
     private void showZoomPickerDialog() {
@@ -2909,121 +2909,143 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 ShapeItem.Type.COORDINATE_AXIS,
                 ShapeItem.Type.TABLE
         };
+        final String[] symbols = {"⬜", "⭕", "➖", "➡️", "🔺", "⭐", "📈", "▦"};
 
-        String fillStyleName = canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.SOLID ? "Solid Fill" :
-                (canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.TRANSLUCENT ? "Translucent Tint (20%)" : "Outline Only");
+        CanvasView.ShapeFillStyle currentFill = canvasView.getShapeFillStyle();
+        String fillStyleName = currentFill == CanvasView.ShapeFillStyle.SOLID ? "Solid Fill" :
+                (currentFill == CanvasView.ShapeFillStyle.TRANSLUCENT ? "Translucent Tint (20%)" : "Outline Only");
 
-        final String[] options = new String[shapes.length + 3];
-        System.arraycopy(shapes, 0, options, 0, shapes.length);
-        options[shapes.length] = "🎨 Style: Outline Only" + (canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.OUTLINE ? "  ✓" : "");
-        options[shapes.length + 1] = "🎨 Style: Translucent Tint Wash" + (canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.TRANSLUCENT ? "  ✓" : "");
-        options[shapes.length + 2] = "🎨 Style: Solid Opaque Fill" + (canvasView.getShapeFillStyle() == CanvasView.ShapeFillStyle.SOLID ? "  ✓" : "");
+        ModernOptionsSelectorDialog.Builder builder = new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Select Shape Tool")
+                .setSubtitle("Current Fill Style: " + fillStyleName)
+                .setHeaderSymbol("📐");
 
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
-                .setTitle("Select Shape (Fill: " + fillStyleName + ")")
-                .setItems(options, (dialog, which) -> {
-                    if (which < shapes.length) {
-                        canvasView.setShapeType(types[which]);
-                        canvasView.setTool(DrawingTool.SHAPE);
-                        updateToolUi(DrawingTool.SHAPE);
-                        Toast.makeText(this, "Draw " + shapes[which] + " (" + fillStyleName + ")", Toast.LENGTH_SHORT).show();
-                    } else if (which == shapes.length) {
-                        canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.OUTLINE);
-                        Toast.makeText(this, "Shape Fill: Outline Only", Toast.LENGTH_SHORT).show();
-                        showShapeSelectorDialog();
-                    } else if (which == shapes.length + 1) {
-                        canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.TRANSLUCENT);
-                        Toast.makeText(this, "Shape Fill: Translucent Tint Wash", Toast.LENGTH_SHORT).show();
-                        showShapeSelectorDialog();
-                    } else if (which == shapes.length + 2) {
-                        canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.SOLID);
-                        Toast.makeText(this, "Shape Fill: Solid Opaque Fill", Toast.LENGTH_SHORT).show();
-                        showShapeSelectorDialog();
-                    }
-                })
-                .setNegativeButton("Cancel", null);
-        ThemeUtils.showStyledDialog(builder, this);
+        for (int i = 0; i < shapes.length; i++) {
+            final int idx = i;
+            boolean isCurType = (canvasView.getTool() == DrawingTool.SHAPE && canvasView.getShapeType() == types[i]);
+            builder.addOption(i, symbols[i], shapes[i], "Draw precision " + shapes[i].toLowerCase(Locale.US), isCurType, () -> {
+                canvasView.setShapeType(types[idx]);
+                canvasView.setTool(DrawingTool.SHAPE);
+                updateToolUi(DrawingTool.SHAPE);
+                Toast.makeText(this, "Draw " + shapes[idx] + " (" + fillStyleName + ")", Toast.LENGTH_SHORT).show();
+            });
+        }
+
+        builder.addOption(100, "🎨", "Style: Outline Only", "Crisp contour border without interior fill",
+                currentFill == CanvasView.ShapeFillStyle.OUTLINE, () -> {
+            canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.OUTLINE);
+            showShapeSelectorDialog();
+        });
+        builder.addOption(101, "🎨", "Style: Translucent Tint Wash", "Subtle 20% transparent color wash",
+                currentFill == CanvasView.ShapeFillStyle.TRANSLUCENT, () -> {
+            canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.TRANSLUCENT);
+            showShapeSelectorDialog();
+        });
+        builder.addOption(102, "🎨", "Style: Solid Opaque Fill", "Fully opaque filled geometric shapes",
+                currentFill == CanvasView.ShapeFillStyle.SOLID, () -> {
+            canvasView.setShapeFillStyle(CanvasView.ShapeFillStyle.SOLID);
+            showShapeSelectorDialog();
+        });
+
+        builder.show();
     }
 
-
     private void showRulerAngleDialog() {
-        final String[] angles = {"0° (Horizontal Snap)", "30° Angle Guide", "45° Diagonal Snap", "60° Angle Guide", "90° (Vertical Snap)", "120° Angle Guide", "150° Angle Guide", "Disable Ruler Assist"};
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+        new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Ruler & Angle Guide")
-                .setItems(angles, (dialog, which) -> {
-                    if (which == 7) {
-                        canvasView.setStraightLineAssist(false);
-                        if (switchStraightLine != null) switchStraightLine.setChecked(false);
-                        if (btnRuler != null) btnRuler.setColorFilter(0xFF94A3B8);
-                        Toast.makeText(this, "Ruler Guide Disabled", Toast.LENGTH_SHORT).show();
-                    } else {
-                        canvasView.setStraightLineAssist(true);
-                        if (switchStraightLine != null) switchStraightLine.setChecked(true);
-                        if (btnRuler != null) btnRuler.setColorFilter(0xFF38BDF8);
-                        Toast.makeText(this, "Ruler Angle Snap: " + angles[which], Toast.LENGTH_SHORT).show();
-                    }
+                .setSubtitle("Snap strokes to precise architectural angles")
+                .setHeaderSymbol("📏")
+                .addOption(0, "━", "0° Horizontal Snap", "Snap strokes perfectly horizontal across canvas", false, () -> {
+                    enableRulerSnap("0° (Horizontal Snap)");
                 })
-                .setNegativeButton("Cancel", null);
-        ThemeUtils.showStyledDialog(builder, this);
+                .addOption(30, "⟋", "30° Isometric Snap", "Isometric technical drawing angle guide", false, () -> {
+                    enableRulerSnap("30° Angle Guide");
+                })
+                .addOption(45, "╱", "45° Diagonal Snap", "Diagonal line angle guide", false, () -> {
+                    enableRulerSnap("45° Diagonal Snap");
+                })
+                .addOption(60, "╱", "60° Triangle Snap", "Equilateral triangular guide", false, () -> {
+                    enableRulerSnap("60° Angle Guide");
+                })
+                .addOption(90, "│", "90° Vertical Snap", "Snap strokes perfectly vertical straight down", false, () -> {
+                    enableRulerSnap("90° (Vertical Snap)");
+                })
+                .addDestructiveOption(999, "✕", "Disable Ruler Assist", "Turn off angle and line snapping guide", () -> {
+                    canvasView.setStraightLineAssist(false);
+                    if (switchStraightLine != null) switchStraightLine.setChecked(false);
+                    if (btnRuler != null) btnRuler.setColorFilter(0xFF94A3B8);
+                    Toast.makeText(this, "Ruler Guide Disabled", Toast.LENGTH_SHORT).show();
+                })
+                .show();
+    }
+
+    private void enableRulerSnap(String angleLabel) {
+        canvasView.setStraightLineAssist(true);
+        if (switchStraightLine != null) switchStraightLine.setChecked(true);
+        if (btnRuler != null) btnRuler.setColorFilter(0xFF38BDF8);
+        Toast.makeText(this, "Ruler Angle Snap: " + angleLabel, Toast.LENGTH_SHORT).show();
     }
 
     private void showExportDialog() {
-        String[] options = {
-                "🚀 Direct Share as PDF (WhatsApp, Drive, Gmail…)",
-                "🚀 Direct Share Page as PNG Image (WhatsApp, Drive…)",
-                "📄 Save Notebook as PDF to Device",
-                "🖼️ Save Page as PNG Image to Device",
-                "📦 Save and share editable original notebook (.opennote)",
-                "📥 Restore editable original notebook (.opennote)"
-        };
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+        new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Export & Share Note")
-                .setItems(options, (dialog, which) -> {
-                    if (which == 4) {
-                        saveCurrentPage();
-                        exportNativeNotebookLauncher.launch(safeArchiveName(
-                                currentNotebook != null ? currentNotebook.title : "OpenNotes notebook"));
-                        return;
-                    }
-                    if (which == 5) {
-                        importNativeNotebookLauncher.launch(new String[]{"*/*"});
-                        return;
-                    }
+                .setSubtitle("Export notebook pages or share editable backup")
+                .setHeaderSymbol("📤")
+                .addOption(1, "🚀", "Direct Share as PDF", "Send complete multi-page PDF to WhatsApp, Gmail, Drive…", false, () -> {
                     saveCurrentPage();
-                    boolean directShare = (which == 0 || which == 1);
-                    boolean isPdf = (which == 0 || which == 2);
-                    if (isPdf) {
-                        try {
-                            File pdfFile = PdfExporter.exportNotebookToPdf(this, notebookId);
-                            if (pdfFile != null) {
-                                if (directShare) {
-                                    shareFile(pdfFile, "application/pdf");
-                                    Toast.makeText(this, "✓ PDF ready! Opening share options…", Toast.LENGTH_SHORT).show();
-                                } else {
-                                    showExportSuccessDialog(pdfFile, "application/pdf");
-                                }
-                            }
-                        } catch (Exception e) {
-                            ErrorDialog.show(this, "PDF export failed", e);
+                    try {
+                        File pdfFile = PdfExporter.exportNotebookToPdf(this, notebookId);
+                        if (pdfFile != null) {
+                            shareFile(pdfFile, "application/pdf");
+                            Toast.makeText(this, "✓ PDF ready! Opening share options…", Toast.LENGTH_SHORT).show();
                         }
-                    } else {
-                        try {
-                            File imgFile = ImageExporter.exportPageToImage(this, canvasView, currentNotebook.title, currentPageIndex);
-                            if (imgFile != null) {
-                                if (directShare) {
-                                    shareFile(imgFile, "image/png");
-                                    Toast.makeText(this, "✓ Image ready! Opening share options…", Toast.LENGTH_SHORT).show();
-                                } else {
-                                    showExportSuccessDialog(imgFile, "image/png");
-                                }
-                            }
-                        } catch (Exception e) {
-                            ErrorDialog.show(this, "Image export failed", e);
-                        }
+                    } catch (Exception e) {
+                        ErrorDialog.show(this, "PDF export failed", e);
                     }
                 })
-                .setNegativeButton("Cancel", null);
-        ThemeUtils.showStyledDialog(builder, this);
+                .addOption(2, "🖼️", "Direct Share Current Page (PNG)", "Share current page as high-resolution PNG image", false, () -> {
+                    saveCurrentPage();
+                    try {
+                        File imgFile = ImageExporter.exportPageToImage(this, canvasView, currentNotebook.title, currentPageIndex);
+                        if (imgFile != null) {
+                            shareFile(imgFile, "image/png");
+                            Toast.makeText(this, "✓ Image ready! Opening share options…", Toast.LENGTH_SHORT).show();
+                        }
+                    } catch (Exception e) {
+                        ErrorDialog.show(this, "Image export failed", e);
+                    }
+                })
+                .addOption(3, "📄", "Save Notebook as PDF to Device", "Save entire PDF document directly to Downloads/Storage", false, () -> {
+                    saveCurrentPage();
+                    try {
+                        File pdfFile = PdfExporter.exportNotebookToPdf(this, notebookId);
+                        if (pdfFile != null) {
+                            showExportSuccessDialog(pdfFile, "application/pdf");
+                        }
+                    } catch (Exception e) {
+                        ErrorDialog.show(this, "PDF export failed", e);
+                    }
+                })
+                .addOption(4, "🖼️", "Save Page as PNG Image", "Save high-res image to device photo gallery", false, () -> {
+                    saveCurrentPage();
+                    try {
+                        File imgFile = ImageExporter.exportPageToImage(this, canvasView, currentNotebook.title, currentPageIndex);
+                        if (imgFile != null) {
+                            showExportSuccessDialog(imgFile, "image/png");
+                        }
+                    } catch (Exception e) {
+                        ErrorDialog.show(this, "Image export failed", e);
+                    }
+                })
+                .addOption(5, "📦", "Save & Share Editable Notebook (.opennote)", "Export native vector backup with all pages and layers", false, () -> {
+                    saveCurrentPage();
+                    exportNativeNotebookLauncher.launch(safeArchiveName(
+                            currentNotebook != null ? currentNotebook.title : "OpenNotes notebook"));
+                })
+                .addOption(6, "📥", "Restore Editable Notebook (.opennote)", "Import and restore an .opennote archive file", false, () -> {
+                    importNativeNotebookLauncher.launch(new String[]{"*/*"});
+                })
+                .show();
     }
 
     private void showExportSuccessDialog(File file, String mimeType) {
@@ -3205,14 +3227,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             Toast.makeText(NoteEditorActivity.this, "Cannot delete the only page in the notebook", Toast.LENGTH_SHORT).show();
                             return;
                         }
-                        new MaterialAlertDialogBuilder(NoteEditorActivity.this)
+                        AlertDialog delDialog = new MaterialAlertDialogBuilder(NoteEditorActivity.this)
                                 .setTitle("Delete Page " + (pos + 1) + "?")
                                 .setMessage("Are you sure you want to delete Page " + (pos + 1) + "? This action cannot be undone.")
                                 .setPositiveButton("Delete", (d, w) -> {
                                     deletePageAt(pos, dialog, this);
                                 })
                                 .setNegativeButton("Cancel", null)
-                                .show();
+                                .create();
+                        ThemeUtils.styleDialog(delDialog, NoteEditorActivity.this);
+                        delDialog.show();
                     });
                 }
             }
@@ -3284,44 +3308,32 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     : PaperTemplate.RULED);
         String currentTplName = currentTpl.getDisplayName();
 
-        PopupMenu popup = new PopupMenu(this, anchor);
-        popup.getMenu().add(0, 100, 0, "➕ Same as Current (" + currentTplName + ")");
-        popup.getMenu().add(0, 1, 1, "Ruled Lines");
-        popup.getMenu().add(0, 2, 2, "Math Grid");
-        popup.getMenu().add(0, 3, 3, "Dot Grid");
-        popup.getMenu().add(0, 4, 4, "Blank Page");
-        popup.getMenu().add(0, 5, 5, "Cornell Note");
+        ModernOptionsSelectorDialog.Builder builder = new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Add New Page")
+                .setSubtitle("Choose paper template layout")
+                .setHeaderSymbol("➕");
 
         final PaperTemplate sameTpl = currentTpl;
-        popup.setOnMenuItemClickListener(item -> {
-            PaperTemplate chosen;
-            switch (item.getItemId()) {
-                case 100:
-                    chosen = sameTpl;
-                    break;
-                case 1:
-                    chosen = PaperTemplate.RULED;
-                    break;
-                case 2:
-                    chosen = PaperTemplate.GRID;
-                    break;
-                case 3:
-                    chosen = PaperTemplate.DOTS;
-                    break;
-                case 4:
-                    chosen = PaperTemplate.BLANK;
-                    break;
-                case 5:
-                    chosen = PaperTemplate.CORNELL;
-                    break;
-                default:
-                    chosen = sameTpl;
-                    break;
-            }
-            addNewPageWithTemplate(chosen, overviewDialog, overviewAdapter);
-            return true;
-        });
-        popup.show();
+        builder.addOption(100, "➕", "Same as Current (" + currentTplName + ")",
+                "Continue writing with current template layout", true,
+                () -> addNewPageWithTemplate(sameTpl, overviewDialog, overviewAdapter));
+
+        builder.addOption(1, "📏", "Ruled Lines", "Classic notebook lined paper for handwriting", false,
+                () -> addNewPageWithTemplate(PaperTemplate.RULED, overviewDialog, overviewAdapter));
+
+        builder.addOption(2, "📐", "Math Grid", "Square grid for notes, graphs and math", false,
+                () -> addNewPageWithTemplate(PaperTemplate.GRID, overviewDialog, overviewAdapter));
+
+        builder.addOption(3, "•", "Dot Grid", "Subtle dot grid for bullet journaling and layouts", false,
+                () -> addNewPageWithTemplate(PaperTemplate.DOTS, overviewDialog, overviewAdapter));
+
+        builder.addOption(4, "⬜", "Blank Page", "Clean canvas for free sketching and diagrams", false,
+                () -> addNewPageWithTemplate(PaperTemplate.BLANK, overviewDialog, overviewAdapter));
+
+        builder.addOption(5, "📑", "Cornell Note", "Structured cue column and summary section", false,
+                () -> addNewPageWithTemplate(PaperTemplate.CORNELL, overviewDialog, overviewAdapter));
+
+        builder.show();
     }
 
     private void addNewPageWithTemplate(PaperTemplate template, AlertDialog overviewDialog, RecyclerView.Adapter overviewAdapter) {
@@ -3368,55 +3380,25 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showMoreMenu() {
-        PopupMenu popup = new PopupMenu(this, btnMenu);
-        popup.getMenu().add(0, 1, 0, "Paper Template");
-        popup.getMenu().add(0, 2, 1, "Page Background Color");
-        popup.getMenu().add(0, 3, 2, "Zen Fullscreen Mode");
-        popup.getMenu().add(0, 4, 3, "Palm Rejection (Stylus Only)");
-        popup.getMenu().add(0, 5, 4, "✨ Auto-Beautification Settings");
-        popup.getMenu().add(0, 6, 5, "Clear Canvas");
-        popup.getMenu().add(0, 7, 6, "Select All Content");
-        popup.getMenu().add(0, 8, 7, "Convert Entire Page to Beautiful Font");
-        popup.getMenu().add(0, 9, 8, "Paste from Clipboard");
-        popup.getMenu().add(0, 10, 9, "📥 Offline Handwriting Models");
-        popup.getMenu().add(0, 11, 10, "🎓 Teach My Handwriting");
-        popup.getMenu().add(0, 12, 11, "📤 Export Handwriting Profile (.onhw)");
-        popup.getMenu().add(0, 13, 12, "📥 Import Handwriting Profile (.onhw)");
-        popup.getMenu().add(0, 14, 13, "↔ Adjust selected text spacing");
         boolean isFavNotebook = currentNotebook != null && currentNotebook.isFavorite;
-        popup.getMenu().add(0, 15, 14, isFavNotebook ? "★ Remove Note from Favorites" : "☆ Bookmark Note to Favorites");
-        popup.getMenu().findItem(9).setEnabled(canvasView.hasClipboardContents());
-        popup.getMenu().findItem(14).setEnabled(canvasView.hasSelectedText());
+        boolean hasClipboard = canvasView != null && canvasView.hasClipboardContents();
+        boolean isStylusOnly = canvasView != null && canvasView.isStylusOnly();
 
-        popup.setOnMenuItemClickListener(item -> {
-            switch (item.getItemId()) {
-                case 1:
-                    showTemplateSelectionDialog();
-                    return true;
-                case 2:
-                    showPageColorSelectionDialog();
-                    return true;
-                case 3:
-                    setZenFullscreen(true);
-                    return true;
-                case 4:
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Note Options & Tools")
+                .setSubtitle("Page settings, utilities, and handwriting tools")
+                .setHeaderSymbol("⚙️")
+                .addOption(1, "📄", "Paper Template", "Switch lined, grid, dots or blank layout", false, this::showTemplateSelectionDialog)
+                .addOption(2, "🎨", "Page Background Color", "AMOLED black, dark obsidian, warm ivory, pure white", false, this::showPageColorSelectionDialog)
+                .addOption(3, "📺", "Zen Fullscreen Mode", "Distraction-free canvas with hidden toolbars", false, () -> setZenFullscreen(true))
+                .addOption(4, "🖐️", "Palm Rejection (Stylus Only)", isStylusOnly ? "Stylus-only drawing active (touch rejected)" : "Touch & stylus drawing enabled", isStylusOnly, () -> {
                     boolean next = !canvasView.isStylusOnly();
                     canvasView.setStylusOnly(next);
                     if (appSettings != null) appSettings.setStylusOnly(next);
                     Toast.makeText(this, next ? "Palm Rejection ON (Stylus-only drawing)" : "Touch & Stylus drawing ON", Toast.LENGTH_SHORT).show();
-                    return true;
-                case 5:
-                    showAutoBeautifySettingsDialog();
-                    return true;
-                case 6:
-                    MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
-                            .setTitle("Clear Canvas")
-                            .setMessage("Are you sure you want to clear all strokes on this page?")
-                            .setPositiveButton("Clear", (d, w) -> canvasView.clearAll())
-                            .setNegativeButton("Cancel", null);
-                    ThemeUtils.showStyledDialog(builder, this);
-                    return true;
-                case 7:
+                })
+                .addOption(5, "✨", "Auto-Beautification Settings", "Configure automatic shape & stroke smoothing", false, this::showAutoBeautifySettingsDialog)
+                .addOption(7, "➰", "Select All Content", "Select all ink strokes and items on this page", false, () -> {
                     if (!canvasView.selectAllContent()) {
                         Toast.makeText(this, "There is no content on this page to select", Toast.LENGTH_SHORT).show();
                     } else if (canvasView.getTool() != DrawingTool.LASSO) {
@@ -3424,35 +3406,29 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         updateToolUi(DrawingTool.LASSO);
                         if (appSettings != null) appSettings.setLastTool(DrawingTool.LASSO);
                     }
-                    return true;
-                case 8:
+                })
+                .addOption(8, "✍️", "Convert Page to Beautiful Font", "Transform all handwriting on page to digital text", false, () -> {
                     if (!canvasView.convertPageToBeautifulText()) {
                         Toast.makeText(this, "There is no handwriting on this page to convert", Toast.LENGTH_SHORT).show();
                     }
-                    return true;
-                case 9:
-                    if (!canvasView.hasClipboardContents()) {
-                        Toast.makeText(this, "Copy or cut content before pasting", Toast.LENGTH_SHORT).show();
-                    } else {
+                })
+                .addCustomOption(new ModernOptionsSelectorDialog.OptionItem(9, "📋", 0, "Paste from Clipboard",
+                        hasClipboard ? "Paste copied strokes, text or images" : "Clipboard empty", false, false, hasClipboard, null, v -> {
+                    if (canvasView.hasClipboardContents()) {
                         canvasView.pasteSelection();
                     }
-                    return true;
-                case 10:
-                    showDownloadModelsDialog();
-                    return true;
-                case 11:
-                    showHandwritingProfileDialog();
-                    return true;
-                case 12:
+                }))
+                .addOption(10, "📥", "Offline Handwriting Models", "Manage on-device ML Kit language engines", false, this::showDownloadModelsDialog)
+                .addOption(11, "🎓", "Teach My Handwriting", "Train local personal handwriting recognition", false, this::showHandwritingProfileDialog)
+                .addOption(12, "📤", "Export Handwriting Profile (.onhw)", "Save your trained personal profile to file", false, () -> {
                     exportProfileLauncher.launch("my_handwriting_profile.onhw");
-                    return true;
-                case 13:
+                })
+                .addOption(13, "📥", "Import Handwriting Profile (.onhw)", "Load trained profile from backup file", false, () -> {
                     importProfileLauncher.launch("*/*");
-                    return true;
-                case 14:
-                    showTextSpacingDialog();
-                    return true;
-                case 15:
+                })
+                .addOption(14, "↔", "Adjust Text Spacing", "Fine-tune character and word spacing of selected text", false, this::showTextSpacingDialog)
+                .addOption(15, isFavNotebook ? "★" : "☆", isFavNotebook ? "Remove from Favorites" : "Bookmark to Favorites",
+                        isFavNotebook ? "This notebook is currently starred" : "Pin this notebook to favorites on home screen", isFavNotebook, () -> {
                     if (currentNotebook != null) {
                         saveCurrentPage();
                         currentNotebook.isFavorite = !currentNotebook.isFavorite;
@@ -3460,11 +3436,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         saveExecutor.execute(() -> dbHelper.setFavorite(notebookId, fav));
                         Toast.makeText(this, fav ? "Bookmarked ★ (Saved to Favorites)" : "Removed from Favorites", Toast.LENGTH_SHORT).show();
                     }
-                    return true;
-            }
-            return false;
-        });
-        popup.show();
+                })
+                .addDestructiveOption(6, "🗑️", "Clear Canvas", "Erase all strokes on this page", () -> {
+                    MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                            .setTitle("Clear Canvas")
+                            .setMessage("Are you sure you want to clear all strokes on this page?")
+                            .setPositiveButton("Clear", (d, w) -> canvasView.clearAll())
+                            .setNegativeButton("Cancel", null);
+                    ThemeUtils.showStyledDialog(builder, this);
+                })
+                .show();
     }
 
     private void showTextSpacingDialog() {
@@ -3796,55 +3777,60 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showPageSettingsMenu() {
-        PopupMenu popup = new PopupMenu(this, btnSettingsSliders != null ? btnSettingsSliders : btnMenu);
-        popup.getMenu().add(0, 1, 0, "Paper Template");
-        popup.getMenu().add(0, 2, 1, "Page Background Color");
-        popup.getMenu().add(0, 3, 2, "Palm Rejection (Stylus Only)");
-        popup.getMenu().add(0, 4, 3, "✨ Auto-Beautification Settings");
-        popup.getMenu().add(0, 5, 4, "Clear Canvas");
-        popup.setOnMenuItemClickListener(item -> {
-            switch (item.getItemId()) {
-                case 1:
-                    showTemplateSelectionDialog();
-                    return true;
-                case 2:
-                    showPageColorSelectionDialog();
-                    return true;
-                case 3:
+        boolean isStylusOnly = canvasView != null && canvasView.isStylusOnly();
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Page & Canvas Settings")
+                .setSubtitle("Configure background, drawing mode and tools")
+                .setHeaderSymbol("🎛️")
+                .addOption(1, "📄", "Paper Template", "Switch lined, grid, dots or blank layout", false, this::showTemplateSelectionDialog)
+                .addOption(2, "🎨", "Page Background Color", "AMOLED black, dark obsidian, warm ivory, pure white", false, this::showPageColorSelectionDialog)
+                .addOption(3, "🖐️", "Palm Rejection (Stylus Only)", isStylusOnly ? "Stylus-only drawing active (touch rejected)" : "Touch & stylus drawing enabled", isStylusOnly, () -> {
                     boolean next = !canvasView.isStylusOnly();
                     canvasView.setStylusOnly(next);
                     if (appSettings != null) appSettings.setStylusOnly(next);
                     Toast.makeText(this, next ? "Palm Rejection ON (Stylus-only drawing)" : "Touch & Stylus drawing ON", Toast.LENGTH_SHORT).show();
-                    return true;
-                case 4:
-                    showAutoBeautifySettingsDialog();
-                    return true;
-                case 5:
+                })
+                .addOption(4, "✨", "Auto-Beautification Settings", "Configure automatic shape & stroke smoothing", false, this::showAutoBeautifySettingsDialog)
+                .addDestructiveOption(5, "🗑️", "Clear Canvas", "Erase all strokes on this page", () -> {
                     MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                             .setTitle("Clear Canvas")
                             .setMessage("Are you sure you want to clear all strokes on this page?")
                             .setPositiveButton("Clear", (d, w) -> canvasView.clearAll())
                             .setNegativeButton("Cancel", null);
                     ThemeUtils.showStyledDialog(builder, this);
-                    return true;
-            }
-            return false;
-        });
-        popup.show();
+                })
+                .show();
     }
 
     private void showTemplateSelectionDialog() {
-        String[] templates = {"Blank", "Ruled Lines", "Grid Paper", "Dot Grid", "Cornell Notes"};
-        PaperTemplate[] tpls = {PaperTemplate.BLANK, PaperTemplate.RULED, PaperTemplate.GRID, PaperTemplate.DOTS, PaperTemplate.CORNELL};
+        PaperTemplate active = (currentPage != null && currentPage.template != null)
+                ? currentPage.template : PaperTemplate.RULED;
 
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+        new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Select Paper Template")
-                .setItems(templates, (dialog, which) -> {
-                    canvasView.setPaperTemplate(tpls[which]);
+                .setSubtitle("Change the background ruling for this page")
+                .setHeaderSymbol("📄")
+                .addOption(1, "⬜", "Blank Page", "Clean canvas with no lines", active == PaperTemplate.BLANK, () -> {
+                    canvasView.setPaperTemplate(PaperTemplate.BLANK);
                     saveCurrentPage();
                 })
-                .setNegativeButton("Cancel", null);
-        ThemeUtils.showStyledDialog(builder, this);
+                .addOption(2, "📏", "Ruled Lines", "Standard handwriting ruled lines", active == PaperTemplate.RULED, () -> {
+                    canvasView.setPaperTemplate(PaperTemplate.RULED);
+                    saveCurrentPage();
+                })
+                .addOption(3, "📐", "Grid Paper", "Precision square grid for math and graphs", active == PaperTemplate.GRID, () -> {
+                    canvasView.setPaperTemplate(PaperTemplate.GRID);
+                    saveCurrentPage();
+                })
+                .addOption(4, "•", "Dot Grid", "Minimal dot matrix for journaling", active == PaperTemplate.DOTS, () -> {
+                    canvasView.setPaperTemplate(PaperTemplate.DOTS);
+                    saveCurrentPage();
+                })
+                .addOption(5, "📑", "Cornell Notes", "Cue margin, notes area, and summary box", active == PaperTemplate.CORNELL, () -> {
+                    canvasView.setPaperTemplate(PaperTemplate.CORNELL);
+                    saveCurrentPage();
+                })
+                .show();
     }
 
     private void showPageColorSelectionDialog() {
@@ -4184,32 +4170,19 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
 
         dialog.setButton(AlertDialog.BUTTON_NEUTRAL, "⚙️ AI & Models", (d, w) -> {
-            String[] options = {
-                    "📥 Offline Handwriting Models",
-                    "🎓 Teach My Handwriting",
-                    "📤 Export Local Handwriting Learning (.onhw)",
-                    "📥 Import Local Handwriting Learning (.onhw)"
-            };
-            MaterialAlertDialogBuilder optBuilder = new MaterialAlertDialogBuilder(this)
+            new ModernOptionsSelectorDialog.Builder(this)
                     .setTitle("AI & Handwriting Options")
-                    .setItems(options, (optDialog, which) -> {
-                        switch (which) {
-                            case 0:
-                                showDownloadModelsDialog();
-                                break;
-                            case 1:
-                                showHandwritingProfileDialog();
-                                break;
-                            case 2:
-                                exportProfileLauncher.launch("my_handwriting_profile.onhw");
-                                break;
-                            case 3:
-                                importProfileLauncher.launch("*/*");
-                                break;
-                        }
+                    .setSubtitle("Manage on-device ML Kit models and handwriting training")
+                    .setHeaderSymbol("🤖")
+                    .addOption(0, "📥", "Offline Handwriting Models", "Manage offline Digital Ink recognition models", false, this::showDownloadModelsDialog)
+                    .addOption(1, "🎓", "Teach My Handwriting", "Train local personal handwriting recognition", false, this::showHandwritingProfileDialog)
+                    .addOption(2, "📤", "Export Local Handwriting Learning (.onhw)", "Backup trained handwriting profile to file", false, () -> {
+                        exportProfileLauncher.launch("my_handwriting_profile.onhw");
                     })
-                    .setNegativeButton("Cancel", null);
-            ThemeUtils.showStyledDialog(optBuilder, this);
+                    .addOption(3, "📥", "Import Local Handwriting Learning (.onhw)", "Restore trained handwriting profile from file", false, () -> {
+                        importProfileLauncher.launch("*/*");
+                    })
+                    .show();
         });
 
         ThemeUtils.styleDialog(dialog, this);
@@ -4327,26 +4300,23 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showInsertPhotoDialog() {
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this);
-        builder.setTitle("Insert Image");
-        String[] options = {"Take Photo with Camera", "Choose from Gallery"};
-        builder.setItems(options, (dialog, which) -> {
-            if (which == 0) {
-                try {
-                    File photoFile = new File(getCacheDir(), "camera_" + System.currentTimeMillis() + ".jpg");
-                    tempCameraPhotoUri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", photoFile);
-                    takePictureLauncher.launch(tempCameraPhotoUri);
-                } catch (Exception e) {
-                    Toast.makeText(this, "Camera error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
-                }
-            } else {
-                imagePickerLauncher.launch("image/*");
-            }
-        });
-        builder.setNegativeButton("Cancel", null);
-        AlertDialog dialog = builder.create();
-        ThemeUtils.styleDialog(dialog, this);
-        dialog.show();
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Insert Image")
+                .setSubtitle("Add visual media to your notebook page")
+                .setHeaderSymbol("📷")
+                .addOption(1, "📷", "Take Photo with Camera", "Capture a picture and insert directly on canvas", false, () -> {
+                    try {
+                        File photoFile = new File(getCacheDir(), "camera_" + System.currentTimeMillis() + ".jpg");
+                        tempCameraPhotoUri = FileProvider.getUriForFile(this, getPackageName() + ".fileprovider", photoFile);
+                        takePictureLauncher.launch(tempCameraPhotoUri);
+                    } catch (Exception e) {
+                        Toast.makeText(this, "Camera error: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .addOption(2, "🖼️", "Choose from Gallery", "Select photos from your device storage", false, () -> {
+                    imagePickerLauncher.launch("image/*");
+                })
+                .show();
     }
 
     private void showDownloadModelsDialog() {
@@ -4869,11 +4839,25 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     @Override
     public void onRequestTextInput(float x, float y) {
+        FrameLayout container = new FrameLayout(this);
+        int padH = ThemeUtils.dp(this, 24);
+        int padV = ThemeUtils.dp(this, 12);
+        container.setPadding(padH, padV, padH, padV);
+
         EditText input = new EditText(this);
         input.setHint("Type note text...");
+        input.setTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_primary));
+        input.setHintTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_hint));
+        input.setBackgroundResource(R.drawable.bg_search_bar);
+        int innerPadH = ThemeUtils.dp(this, 16);
+        int innerPadV = ThemeUtils.dp(this, 12);
+        input.setPadding(innerPadH, innerPadV, innerPadH, innerPadV);
+        input.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 15);
+        container.addView(input);
+
         MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Insert Text")
-                .setView(input)
+                .setView(container)
                 .setPositiveButton("Insert", (d, w) -> {
                     String text = input.getText().toString();
                     if (!text.trim().isEmpty()) {

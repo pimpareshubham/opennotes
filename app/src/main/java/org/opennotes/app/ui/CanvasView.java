@@ -1261,13 +1261,19 @@ public class CanvasView extends View {
                 alternatives.setText("Suggestions");
                 org.opennotes.app.util.ThemeUtils.styleButton(alternatives, getContext(), false);
                 alternatives.setOnClickListener(view -> {
-                    CharSequence[] options = line.result.alternatives.toArray(new String[0]);
-                    com.google.android.material.dialog.MaterialAlertDialogBuilder sugBuilder =
-                            new com.google.android.material.dialog.MaterialAlertDialogBuilder(getContext())
-                                    .setTitle("Suggestions for this line")
-                                    .setItems(options, (dialog, which) -> editor.setText(options[which]))
-                                    .setNegativeButton("Cancel", null);
-                    org.opennotes.app.util.ThemeUtils.showStyledDialog(sugBuilder, getContext());
+                    ModernOptionsSelectorDialog.Builder sugBuilder =
+                            new ModernOptionsSelectorDialog.Builder(getContext())
+                                    .setTitle("Handwriting Suggestions")
+                                    .setSubtitle("Select the intended word or phrase")
+                                    .setHeaderSymbol("💡");
+                    int idx = 0;
+                    for (String alt : line.result.alternatives) {
+                        final String choice = alt;
+                        sugBuilder.addOption(idx++, "✍️", choice, "Replace with this recognition", false, () -> {
+                            editor.setText(choice);
+                        });
+                    }
+                    sugBuilder.show();
                 });
                 btnRow.addView(alternatives);
             }

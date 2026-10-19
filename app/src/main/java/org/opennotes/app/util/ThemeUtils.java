@@ -91,6 +91,15 @@ public final class ThemeUtils {
     public static void styleDialog(AlertDialog dialog, Context context) {
         if (dialog == null) return;
         Context ctx = (context != null) ? context : dialog.getContext();
+        boolean isDark = isDarkMode(ctx);
+        if (dialog.getWindow() != null) {
+            GradientDrawable windowBg = new GradientDrawable();
+            windowBg.setShape(GradientDrawable.RECTANGLE);
+            windowBg.setCornerRadius(dp(ctx, 24));
+            windowBg.setColor(isDark ? 0xFF24242B : 0xFFFFFFFF);
+            windowBg.setStroke(dp(ctx, 1), isDark ? 0xFF33333E : 0xFFE2E8F0);
+            dialog.getWindow().setBackgroundDrawable(windowBg);
+        }
         dialog.setOnShowListener(d -> applyDialogButtonTheme(dialog, ctx));
         if (dialog.isShowing()) {
             applyDialogButtonTheme(dialog, ctx);
