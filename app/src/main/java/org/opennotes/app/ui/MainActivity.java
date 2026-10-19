@@ -1,5 +1,6 @@
 package org.opennotes.app.ui;
 
+import android.content.ClipData;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -42,7 +43,9 @@ import org.opennotes.app.model.PaperTemplate;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -56,6 +59,15 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     private ImageView btnClearSearch;
     private ImageView btnToggleViewMode;
     private ChipGroup filterChipGroup;
+
+    private View layoutNormalTopBar;
+    private View layoutSelectionBar;
+    private ImageView btnCloseSelection;
+    private TextView textSelectionCount;
+    private com.google.android.material.button.MaterialButton btnSelectAll;
+    private ImageView btnBatchShare;
+    private ImageView btnBatchDelete;
+    private ExtendedFloatingActionButton fabNew;
 
     private boolean isGridView = true;
     private String currentFolder = "All";
@@ -108,11 +120,19 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
 
         btnToggleViewMode.setImageResource(isGridView ? R.drawable.ic_view_grid : R.drawable.ic_view_list);
 
-        ExtendedFloatingActionButton fabNew = findViewById(R.id.fabNewNotebook);
+        layoutNormalTopBar = findViewById(R.id.layoutNormalTopBar);
+        layoutSelectionBar = findViewById(R.id.layoutSelectionBar);
+        btnCloseSelection = findViewById(R.id.btnCloseSelection);
+        textSelectionCount = findViewById(R.id.textSelectionCount);
+        btnSelectAll = findViewById(R.id.btnSelectAll);
+        btnBatchShare = findViewById(R.id.btnBatchShare);
+        btnBatchDelete = findViewById(R.id.btnBatchDelete);
+        fabNew = findViewById(R.id.fabNewNotebook);
         View btnEmptyCreate = findViewById(R.id.btnEmptyCreate);
 
         setupRecyclerView();
         setupFiltersAndSearch();
+        setupSelectionBar();
 
         fabNew.setOnClickListener(v -> showCreateNotebookDialog());
         btnEmptyCreate.setOnClickListener(v -> showCreateNotebookDialog());
@@ -631,6 +651,156 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 .create();
         org.opennotes.app.util.ThemeUtils.styleDialog(dialog, this);
         dialog.show();
+    }
+
+    @Override
+    public void onNotebookLongClick(Notebook notebook) {
+        if (adapter != null && !adapter.isSelectionMode()) {
+            adapter.startSelection(notebook.id);
+        }
+    }
+
+    @Override
+    public void onSelectionModeChanged(boolean isSelectionMode, int selectedCount) {
+        if (layoutNormalTopBar != null) {
+            layoutNormalTopBar.setVisibility(isSelectionMode ? View.GONE : View.VISIBLE);
+        }
+        if (layoutSelectionBar != null) {
+            layoutSelectionBar.setVisibility(isSelectionMode ? View.VISIBLE : View.GONE);
+        }
+        if (fabNew != null) {
+            if (isSelectionMode) fabNew.hide(); else fabNew.show();
+        }
+        if (textSelectionCount != null) {
+            textSelectionCount.setText(selectedCount + (selectedCount == 1 ? " note selected" : " notes selected"));
+        }
+        if (btnSelectAll != null && adapter != null) {
+            btnSelectAll.setText(adapter.areAllSelected() ? "Deselect all" : "Select all");
+        }
+        boolean hasSelection = selectedCount > 0;
+        if (btnBatchShare != null) {
+            btnBatchShare.setEnabled(hasSelection);
+            btnBatchShare.setAlpha(hasSelection ? 1.0f : 0.35f);
+        }
+        if (btnBatchDelete != null) {
+            btnBatchDelete.setEnabled(hasSelection);
+            btnBatchDelete.setAlpha(hasSelection ? 1.0f : 0.35f);
+        }
+    }
+
+    private void setupSelectionBar() {
+        if (btnCloseSelection != null) {
+            btnCloseSelection.setOnClickListener(v -> {
+                if (adapter != null) adapter.exitSelectionMode();
+            });
+        }
+        if (btnSelectAll != null) {
+            btnSelectAll.setOnClickListener(v -> {
+                if (adapter != null) {
+                    if (adapter.areAllSelected()) {
+                        adapter.deselectAll();
+                    } else {
+                        adapter.selectAll();
+                    }
+                }
+            });
+        }
+        if (btnBatchDelete != null) {
+            btnBatchDelete.setOnClickListener(v -> showBatchDeleteConfirmDialog());
+        }
+        if (btnBatchShare != null) {
+            btnBatchShare.setOnClickListener(v -> exportSelectedNotebooks());
+        }
+    }
+
+    private void showBatchDeleteConfirmDialog() {
+        if (adapter == null || adapter.getSelectedCount() == 0) return;
+        final int count = adapter.getSelectedCount();
+        final Set<Long> selectedIds = adapter.getSelectedNotebookIds();
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setTitle(R.string.delete)
+                .setMessage("Delete " + count + (count == 1 ? " notebook?" : " notebooks?")
+                        + " All pages will be permanently deleted.")
+                .setPositiveButton(R.string.delete, (d, which) -> {
+                    notebookIoExecutor.execute(() -> {
+                        for (Long id : selectedIds) {
+                            dbHelper.deleteNotebook(id);
+                        }
+                        runOnUiThread(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            if (adapter != null) adapter.exitSelectionMode();
+                            loadNotebooks();
+                            Toast.makeText(this, count + (count == 1 ? " notebook deleted" : " notebooks deleted"), Toast.LENGTH_SHORT).show();
+                        });
+                    });
+                })
+                .setNegativeButton(R.string.cancel, null)
+                .create();
+        org.opennotes.app.util.ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
+    }
+
+    private void exportSelectedNotebooks() {
+        if (adapter == null || adapter.getSelectedCount() == 0) return;
+        final int count = adapter.getSelectedCount();
+        final Set<Long> selectedIds = adapter.getSelectedNotebookIds();
+
+        Toast.makeText(this, "Exporting " + count + (count == 1 ? " notebook" : " notebooks") + " to PDF…", Toast.LENGTH_SHORT).show();
+
+        notebookIoExecutor.execute(() -> {
+            ArrayList<Uri> uris = new ArrayList<>();
+            for (Long id : selectedIds) {
+                try {
+                    File pdf = PdfExporter.exportNotebookToPdf(MainActivity.this, id);
+                    if (pdf != null) {
+                        Uri uri = FileProvider.getUriForFile(MainActivity.this, getPackageName() + ".fileprovider", pdf);
+                        uris.add(uri);
+                    }
+                } catch (Exception e) {
+                    android.util.Log.e("MainActivity", "Failed to export notebook " + id, e);
+                }
+            }
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                if (uris.isEmpty()) {
+                    Toast.makeText(MainActivity.this, "Failed to export notebooks", Toast.LENGTH_SHORT).show();
+                    return;
+                }
+                Intent shareIntent;
+                if (uris.size() == 1) {
+                    shareIntent = new Intent(Intent.ACTION_SEND);
+                    shareIntent.setType("application/pdf");
+                    shareIntent.putExtra(Intent.EXTRA_STREAM, uris.get(0));
+                    shareIntent.setClipData(android.content.ClipData.newRawUri("Notebook PDF", uris.get(0)));
+                } else {
+                    shareIntent = new Intent(Intent.ACTION_SEND_MULTIPLE);
+                    shareIntent.setType("application/pdf");
+                    shareIntent.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+                    android.content.ClipData clipData = android.content.ClipData.newRawUri("Notebooks PDF", uris.get(0));
+                    for (int i = 1; i < uris.size(); i++) {
+                        clipData.addItem(new android.content.ClipData.Item(uris.get(i)));
+                    }
+                    shareIntent.setClipData(clipData);
+                }
+                shareIntent.putExtra(Intent.EXTRA_SUBJECT, "Exported " + uris.size() + " notebooks from OpenNotes");
+                shareIntent.putExtra(Intent.EXTRA_TEXT, "Exported " + uris.size() + " notebooks from OpenNotes");
+                shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                Intent chooser = Intent.createChooser(shareIntent, "Share " + uris.size() + " notebooks with…");
+                chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(chooser);
+                if (adapter != null) adapter.exitSelectionMode();
+            });
+        });
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (adapter != null && adapter.isSelectionMode()) {
+            adapter.exitSelectionMode();
+            return;
+        }
+        super.onBackPressed();
     }
 
     @Override

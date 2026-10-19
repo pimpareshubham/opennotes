@@ -33,6 +33,7 @@
             android:paddingHorizontal="10dp">
 
             <HorizontalScrollView
+                android:id="@+id/tabScrollView"
                 android:layout_width="0dp"
                 android:layout_height="match_parent"
                 android:layout_weight="1"
@@ -43,84 +44,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="match_parent"
                     android:orientation="horizontal"
-                    android:gravity="center_vertical">
-
-                    <!-- Active Document Tab -->
-                    <LinearLayout
-                        android:id="@+id/activeDocTab"
-                        android:layout_width="wrap_content"
-                        android:layout_height="@dimen/editor_tab_height"
-                        android:background="@drawable/bg_tab_active"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingHorizontal="12dp">
-
-                        <TextView
-                            android:id="@+id/textNotebookTitle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:maxWidth="160dp"
-                            android:text="11 P1"
-                            android:textColor="@color/text_primary"
-                            android:textSize="@dimen/editor_tab_text_size"
-                            android:textStyle="bold"
-                            android:maxLines="1"
-                            android:ellipsize="end" />
-
-                        <ImageView
-                            android:id="@+id/btnCloseDocTab"
-                            android:layout_width="@dimen/editor_tab_close_size"
-                            android:layout_height="@dimen/editor_tab_close_size"
-                            android:layout_marginStart="8dp"
-                            android:padding="2dp"
-                            android:src="@drawable/ic_close_tab"
-                            app:tint="@color/text_secondary"
-                            android:background="?selectableItemBackgroundBorderless" />
-                    </LinearLayout>
-
-                    <!-- Inactive Tab Preview -->
-                    <LinearLayout
-                        android:id="@+id/inactiveDocTab"
-                        android:layout_width="wrap_content"
-                        android:layout_height="@dimen/editor_tab_height"
-                        android:layout_marginStart="6dp"
-                        android:background="@drawable/bg_tab_inactive"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:paddingHorizontal="10dp">
-
-                        <TextView
-                            android:id="@+id/textInactiveDocTitle"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:maxWidth="120dp"
-                            android:text="Unnamed note"
-                            android:textColor="@color/text_secondary"
-                            android:textSize="@dimen/editor_tab_text_size"
-                            android:maxLines="1"
-                            android:ellipsize="end" />
-
-                        <ImageView
-                            android:id="@+id/btnCloseInactiveDocTab"
-                            android:layout_width="@dimen/editor_tab_close_size"
-                            android:layout_height="@dimen/editor_tab_close_size"
-                            android:layout_marginStart="6dp"
-                            android:padding="2dp"
-                            android:src="@drawable/ic_close_tab"
-                            app:tint="@color/text_secondary" />
-                    </LinearLayout>
-
-                    <!-- Add Tab '+' Button -->
-                    <ImageView
-                        android:id="@+id/btnNewTab"
-                        android:layout_width="@dimen/editor_floating_action_size"
-                        android:layout_height="@dimen/editor_floating_action_size"
-                        android:layout_marginStart="6dp"
-                        android:padding="6dp"
-                        android:src="@drawable/ic_add"
-                        app:tint="@color/text_secondary"
-                        android:background="?selectableItemBackgroundBorderless" />
-                </LinearLayout>
+                    android:gravity="center_vertical" />
             </HorizontalScrollView>
 
             <!-- Tab Count Dropdown (e.g. '3 ▾') -->

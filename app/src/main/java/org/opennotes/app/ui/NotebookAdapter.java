@@ -12,13 +12,17 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.recyclerview.widget.RecyclerView;
 
+import com.google.android.material.card.MaterialCardView;
+
 import org.opennotes.app.R;
 import org.opennotes.app.model.Notebook;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
 
@@ -30,6 +34,8 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         void onNotebookFavoriteClick(Notebook notebook);
         void onNotebookMoreClick(Notebook notebook, View anchorView);
         void onCreateNewNotebookClick();
+        void onNotebookLongClick(Notebook notebook);
+        void onSelectionModeChanged(boolean isSelectionMode, int selectedCount);
     }
 
     private final Context context;
@@ -37,6 +43,8 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     private final OnNotebookClickListener listener;
     private final SimpleDateFormat dateFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm", Locale.getDefault());
     private boolean isSearching = false;
+    private boolean isSelectionMode = false;
+    private final Set<Long> selectedNotebookIds = new HashSet<>();
 
     public NotebookAdapter(Context context, List<Notebook> notebooks, OnNotebookClickListener listener) {
         this.context = context;
@@ -51,11 +59,95 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     public void updateData(List<Notebook> newNotebooks, boolean isSearching) {
         this.notebooks = newNotebooks;
         this.isSearching = isSearching;
+        // Clean up selected IDs that no longer exist
+        if (isSelectionMode && notebooks != null) {
+            Set<Long> validIds = new HashSet<>();
+            for (Notebook nb : notebooks) {
+                validIds.add(nb.id);
+            }
+            selectedNotebookIds.retainAll(validIds);
+            if (listener != null) {
+                listener.onSelectionModeChanged(true, selectedNotebookIds.size());
+            }
+        }
         notifyDataSetChanged();
+    }
+
+    public boolean isSelectionMode() {
+        return isSelectionMode;
+    }
+
+    public void startSelection(long initialId) {
+        isSelectionMode = true;
+        selectedNotebookIds.clear();
+        if (initialId != -1) {
+            selectedNotebookIds.add(initialId);
+        }
+        notifyDataSetChanged();
+        if (listener != null) {
+            listener.onSelectionModeChanged(true, selectedNotebookIds.size());
+        }
+    }
+
+    public void exitSelectionMode() {
+        isSelectionMode = false;
+        selectedNotebookIds.clear();
+        notifyDataSetChanged();
+        if (listener != null) {
+            listener.onSelectionModeChanged(false, 0);
+        }
+    }
+
+    public void toggleSelection(long id) {
+        if (selectedNotebookIds.contains(id)) {
+            selectedNotebookIds.remove(id);
+        } else {
+            selectedNotebookIds.add(id);
+        }
+        notifyDataSetChanged();
+        if (listener != null) {
+            listener.onSelectionModeChanged(isSelectionMode, selectedNotebookIds.size());
+        }
+    }
+
+    public void selectAll() {
+        if (notebooks != null) {
+            for (Notebook nb : notebooks) {
+                selectedNotebookIds.add(nb.id);
+            }
+        }
+        notifyDataSetChanged();
+        if (listener != null) {
+            listener.onSelectionModeChanged(isSelectionMode, selectedNotebookIds.size());
+        }
+    }
+
+    public void deselectAll() {
+        selectedNotebookIds.clear();
+        notifyDataSetChanged();
+        if (listener != null) {
+            listener.onSelectionModeChanged(isSelectionMode, 0);
+        }
+    }
+
+    public boolean areAllSelected() {
+        if (notebooks == null || notebooks.isEmpty()) return false;
+        return selectedNotebookIds.size() >= notebooks.size();
+    }
+
+    public Set<Long> getSelectedNotebookIds() {
+        return new HashSet<>(selectedNotebookIds);
+    }
+
+    public int getSelectedCount() {
+        return selectedNotebookIds.size();
     }
 
     @Override
     public int getItemViewType(int position) {
+        if (isSelectionMode) {
+            return VIEW_TYPE_NOTEBOOK;
+        }
         if (!isSearching && position == 0) {
             return VIEW_TYPE_NEW_NOTEBOOK;
         }
@@ -88,10 +180,11 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         }
 
         NotebookViewHolder holder = (NotebookViewHolder) baseHolder;
-        int notebookIndex = isSearching ? position : position - 1;
-        if (notebookIndex < 0 || notebookIndex >= notebooks.size()) return;
+        int notebookIndex = (isSearching || isSelectionMode) ? position : position - 1;
+        if (notebookIndex < 0 || notebooks == null || notebookIndex >= notebooks.size()) return;
 
         Notebook nb = notebooks.get(notebookIndex);
+        boolean isSelected = selectedNotebookIds.contains(nb.id);
 
         holder.titleView.setText(nb.title);
         holder.pagesBadge.setText(nb.pageCount + (nb.pageCount == 1 ? " page" : " pages"));
@@ -113,28 +206,60 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             holder.btnFavorite.setColorFilter(0xFF94A3B8);
         }
 
-        holder.itemView.setOnClickListener(v -> {
-            v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(80)
-                    .withEndAction(() -> {
-                        v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start();
-                        if (listener != null) listener.onNotebookClick(nb);
-                    }).start();
-        });
+        float density = context.getResources().getDisplayMetrics().density;
 
-        holder.btnFavorite.setOnClickListener(v -> {
-            v.animate().scaleX(1.4f).scaleY(1.4f).rotation(30f).setDuration(120)
-                    .withEndAction(() -> v.animate().scaleX(1.0f).scaleY(1.0f).rotation(0f).setDuration(120).start()).start();
-            if (listener != null) listener.onNotebookFavoriteClick(nb);
-        });
+        if (isSelectionMode) {
+            holder.checkSelect.setVisibility(View.VISIBLE);
+            holder.checkSelect.setImageResource(isSelected ? R.drawable.ic_check_circle_filled : R.drawable.ic_check_circle_outline);
+            holder.checkSelect.setColorFilter(isSelected ? 0xFF38BDF8 : 0xFF94A3B8);
+            holder.cardView.setStrokeColor(isSelected ? 0xFF38BDF8 : 0xFF2E2E38);
+            holder.cardView.setStrokeWidth(Math.round((isSelected ? 2.5f : 1f) * density));
+            holder.btnFavorite.setVisibility(View.GONE);
+            holder.btnMore.setVisibility(View.GONE);
 
-        holder.btnMore.setOnClickListener(v -> {
-            if (listener != null) listener.onNotebookMoreClick(nb, holder.btnMore);
-        });
+            holder.itemView.setOnClickListener(v -> toggleSelection(nb.id));
+            holder.itemView.setOnLongClickListener(v -> {
+                toggleSelection(nb.id);
+                return true;
+            });
+        } else {
+            holder.checkSelect.setVisibility(View.GONE);
+            holder.cardView.setStrokeColor(0xFF2E2E38);
+            holder.cardView.setStrokeWidth(Math.round(1f * density));
+            holder.btnFavorite.setVisibility(View.VISIBLE);
+            holder.btnMore.setVisibility(View.VISIBLE);
+
+            holder.itemView.setOnClickListener(v -> {
+                v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(80)
+                        .withEndAction(() -> {
+                            v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start();
+                            if (listener != null) listener.onNotebookClick(nb);
+                        }).start();
+            });
+
+            holder.itemView.setOnLongClickListener(v -> {
+                if (listener != null) {
+                    listener.onNotebookLongClick(nb);
+                }
+                return true;
+            });
+
+            holder.btnFavorite.setOnClickListener(v -> {
+                v.animate().scaleX(1.4f).scaleY(1.4f).rotation(30f).setDuration(120)
+                        .withEndAction(() -> v.animate().scaleX(1.0f).scaleY(1.0f).rotation(0f).setDuration(120).start()).start();
+                if (listener != null) listener.onNotebookFavoriteClick(nb);
+            });
+
+            holder.btnMore.setOnClickListener(v -> {
+                if (listener != null) listener.onNotebookMoreClick(nb, holder.btnMore);
+            });
+        }
     }
 
     @Override
     public int getItemCount() {
-        if (isSearching) {
+        if (notebooks == null) return 0;
+        if (isSelectionMode || isSearching) {
             return notebooks.size();
         }
         return notebooks.size() + 1;
@@ -147,21 +272,25 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     }
 
     public static class NotebookViewHolder extends RecyclerView.ViewHolder {
+        MaterialCardView cardView;
         View coverView;
         TextView titleView;
         TextView pagesBadge;
         TextView dateView;
         ImageView btnFavorite;
         ImageView btnMore;
+        ImageView checkSelect;
 
         public NotebookViewHolder(@NonNull View itemView) {
             super(itemView);
+            cardView = itemView.findViewById(R.id.notebookCard);
             coverView = itemView.findViewById(R.id.coverContainer);
             titleView = itemView.findViewById(R.id.textNotebookTitle);
             pagesBadge = itemView.findViewById(R.id.textPagesBadge);
             dateView = itemView.findViewById(R.id.textNotebookDate);
             btnFavorite = itemView.findViewById(R.id.btnFavorite);
             btnMore = itemView.findViewById(R.id.btnMore);
+            checkSelect = itemView.findViewById(R.id.checkSelect);
         }
     }
 }

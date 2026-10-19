@@ -114,8 +114,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private CanvasView canvasView;
     private LinearLayout topBar;
     private ImageView btnBack;
-    private LinearLayout activeDocTab;
+    private static final List<Long> openNotebookIds = new ArrayList<>();
+    private LinearLayout layoutDocumentTabs;
+    private TextView textTabCountBadge;
+    private HorizontalScrollView tabScrollView;
     private TextView textNotebookTitle;
+    private LinearLayout activeDocTab;
     private ImageView btnCloseDocTab, btnNewTab;
 
     // Top Tool Dock
@@ -323,6 +327,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             return;
         }
 
+        synchronized (openNotebookIds) {
+            if (!openNotebookIds.contains(notebookId)) {
+                openNotebookIds.add(notebookId);
+            }
+        }
+
         bindViews();
         applyResponsiveEditorLayout();
         loadNotebookData();
@@ -349,6 +359,25 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
     }
 
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        long newId = intent.getLongExtra("notebook_id", -1);
+        if (newId != -1) {
+            synchronized (openNotebookIds) {
+                if (!openNotebookIds.contains(newId)) {
+                    openNotebookIds.add(newId);
+                }
+            }
+            if (newId != notebookId) {
+                switchToNotebook(newId);
+            } else {
+                renderDocumentTabs();
+            }
+        }
+    }
+
     private void bindViews() {
         canvasView = findViewById(R.id.canvasView);
         topBar = findViewById(R.id.topBar);
@@ -362,10 +391,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             return insets;
         });
         btnBack = findViewById(R.id.btnBack);
-        activeDocTab = findViewById(R.id.activeDocTab);
+        layoutDocumentTabs = findViewById(R.id.layoutDocumentTabs);
+        tabScrollView = findViewById(R.id.tabScrollView);
+        textTabCountBadge = findViewById(R.id.textTabCountBadge);
         textNotebookTitle = findViewById(R.id.textNotebookTitle);
-        btnCloseDocTab = findViewById(R.id.btnCloseDocTab);
-        btnNewTab = findViewById(R.id.btnNewTab);
 
         mainToolDock = findViewById(R.id.mainToolDock);
         btnUndo = findViewById(R.id.btnUndo);
@@ -515,12 +544,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         int pillButtonSize = getResources().getDimensionPixelSize(R.dimen.editor_floating_action_size);
 
         setViewHeight(findViewById(R.id.layoutTabsRow), tabRowHeight);
-        setViewHeight(findViewById(R.id.activeDocTab), tabHeight);
-        setViewHeight(findViewById(R.id.inactiveDocTab), tabHeight);
-        setViewSize(findViewById(R.id.btnNewTab), pillButtonSize, pillButtonSize);
-        int tabCloseSize = getResources().getDimensionPixelSize(R.dimen.editor_tab_close_size);
-        setViewSize(btnCloseDocTab, tabCloseSize, tabCloseSize);
-        setViewSize(findViewById(R.id.btnCloseInactiveDocTab), tabCloseSize, tabCloseSize);
         setViewHeight(findViewById(R.id.layoutTopHeader), headerHeight);
         int[] headerActions = {
                 R.id.btnBack, R.id.btnCloudSync, R.id.btnCamera, R.id.btnCrop, R.id.btnMic,
@@ -549,18 +572,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 R.id.btnPrevPage, R.id.btnNextPage, R.id.btnAddPage
         };
         for (int id : pillActions) setViewSize(findViewById(id), pillButtonSize, pillButtonSize);
-        textNotebookTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                getResources().getDimensionPixelSize(R.dimen.editor_tab_text_size));
-        textNotebookTitle.setMaxWidth(dp(getResources().getConfiguration().screenWidthDp >= 600
-                ? 240 : 160));
-        TextView inactiveTitle = findViewById(R.id.textInactiveDocTitle);
-        inactiveTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                getResources().getDimensionPixelSize(R.dimen.editor_tab_text_size));
-        inactiveTitle.setMaxWidth(dp(getResources().getConfiguration().screenWidthDp >= 600
-                ? 200 : 120));
-        TextView tabCount = findViewById(R.id.textTabCountBadge);
-        tabCount.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
-                getResources().getDimensionPixelSize(R.dimen.editor_tab_text_size));
+        if (textNotebookTitle != null) {
+            textNotebookTitle.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    getResources().getDimensionPixelSize(R.dimen.editor_tab_text_size));
+            textNotebookTitle.setMaxWidth(dp(getResources().getConfiguration().screenWidthDp >= 600
+                    ? 240 : 160));
+        }
+        if (textTabCountBadge != null) {
+            textTabCountBadge.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
+                    getResources().getDimensionPixelSize(R.dimen.editor_tab_text_size));
+        }
         textPageCounter.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
                 getResources().getDimensionPixelSize(R.dimen.editor_page_counter_text_size));
         textZoomPercent.setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX,
@@ -683,9 +704,188 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             restoredZoom, restoredPanX, restoredPanY, restoredScrollY));
                     hasRestoredEditorState = false;
                 }
+                renderDocumentTabs();
                 canvasView.setEnabled(true);
             });
         });
+    }
+
+    private void renderDocumentTabs() {
+        if (layoutDocumentTabs == null) return;
+        saveExecutor.execute(() -> {
+            List<Notebook> loadedNotebooks = new ArrayList<>();
+            List<Long> toRemove = new ArrayList<>();
+            synchronized (openNotebookIds) {
+                if (!openNotebookIds.contains(notebookId)) {
+                    openNotebookIds.add(notebookId);
+                }
+                for (Long id : openNotebookIds) {
+                    Notebook nb = dbHelper.getNotebook(id);
+                    if (nb != null) {
+                        loadedNotebooks.add(nb);
+                    } else {
+                        toRemove.add(id);
+                    }
+                }
+                openNotebookIds.removeAll(toRemove);
+            }
+
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                layoutDocumentTabs.removeAllViews();
+                LayoutInflater inflater = LayoutInflater.from(NoteEditorActivity.this);
+                int tabHeight = getResources().getDimensionPixelSize(R.dimen.editor_tab_height);
+                int tabCloseSize = getResources().getDimensionPixelSize(R.dimen.editor_tab_close_size);
+                int screenWidthDp = getResources().getConfiguration().screenWidthDp;
+                int maxTabWidth = dp(screenWidthDp >= 600 ? 200 : 140);
+                View activeTabView = null;
+
+                for (Notebook nb : loadedNotebooks) {
+                    final long thisTabId = nb.id;
+                    final boolean isActive = (thisTabId == notebookId);
+
+                    View tabView = inflater.inflate(R.layout.item_editor_tab, layoutDocumentTabs, false);
+                    View tabContainer = tabView.findViewById(R.id.tabContainer);
+                    TextView textTitle = tabView.findViewById(R.id.tabTitle);
+                    ImageView btnClose = tabView.findViewById(R.id.tabClose);
+
+                    setViewHeight(tabContainer, tabHeight);
+                    textTitle.setMaxWidth(maxTabWidth);
+                    textTitle.setText(nb.title);
+
+                    if (isActive) {
+                        tabContainer.setBackgroundResource(R.drawable.bg_tab_active);
+                        textTitle.setTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_primary));
+                        textTitle.setTypeface(null, android.graphics.Typeface.BOLD);
+                        textNotebookTitle = textTitle;
+                        activeTabView = tabView;
+                    } else {
+                        tabContainer.setBackgroundResource(R.drawable.bg_tab_inactive);
+                        textTitle.setTextColor(androidx.core.content.ContextCompat.getColor(this, R.color.text_secondary));
+                        textTitle.setTypeface(null, android.graphics.Typeface.NORMAL);
+                        tabContainer.setOnClickListener(v -> switchToNotebook(thisTabId));
+                    }
+
+                    setViewSize(btnClose, tabCloseSize, tabCloseSize);
+                    btnClose.setOnClickListener(v -> closeTab(thisTabId));
+
+                    layoutDocumentTabs.addView(tabView);
+                }
+
+                // Add '+' button at the end
+                ImageView btnAdd = new ImageView(NoteEditorActivity.this);
+                int actionSize = getResources().getDimensionPixelSize(R.dimen.editor_floating_action_size);
+                LinearLayout.LayoutParams addParams = new LinearLayout.LayoutParams(actionSize, actionSize);
+                addParams.setMarginStart(dp(6));
+                btnAdd.setLayoutParams(addParams);
+                btnAdd.setImageResource(R.drawable.ic_add);
+                btnAdd.setPadding(dp(6), dp(6), dp(6), dp(6));
+                btnAdd.setColorFilter(0xFF94A3B8);
+                android.util.TypedValue outValue = new android.util.TypedValue();
+                getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, outValue, true);
+                btnAdd.setBackgroundResource(outValue.resourceId);
+                btnAdd.setContentDescription("New note tab");
+                btnAdd.setOnClickListener(v -> createNewTabNote());
+                layoutDocumentTabs.addView(btnAdd);
+
+                if (textTabCountBadge != null) {
+                    textTabCountBadge.setText(loadedNotebooks.size() + " ▾");
+                    textTabCountBadge.setOnClickListener(v -> showTabsDropdown(loadedNotebooks));
+                }
+
+                if (activeTabView != null && tabScrollView != null) {
+                    final View target = activeTabView;
+                    tabScrollView.post(() -> tabScrollView.smoothScrollTo(target.getLeft(), 0));
+                }
+            });
+        });
+    }
+
+    private void switchToNotebook(long targetNotebookId) {
+        if (targetNotebookId == notebookId) return;
+        saveCurrentPage();
+        notebookId = targetNotebookId;
+        hasRestoredEditorState = false;
+        currentPageIndex = 0;
+        loadNotebookData();
+    }
+
+    private void closeTab(long targetNotebookId) {
+        synchronized (openNotebookIds) {
+            if (openNotebookIds.size() <= 1) {
+                saveCurrentPage();
+                openNotebookIds.remove(targetNotebookId);
+                finish();
+                return;
+            }
+            if (targetNotebookId == notebookId) {
+                int curIndex = openNotebookIds.indexOf(targetNotebookId);
+                int nextIndex = (curIndex + 1 < openNotebookIds.size()) ? curIndex + 1 : curIndex - 1;
+                long nextNotebookId = openNotebookIds.get(nextIndex);
+                openNotebookIds.remove(targetNotebookId);
+                switchToNotebook(nextNotebookId);
+            } else {
+                openNotebookIds.remove(targetNotebookId);
+                renderDocumentTabs();
+            }
+        }
+    }
+
+    private void createNewTabNote() {
+        saveCurrentPage();
+        saveExecutor.execute(() -> {
+            Notebook newNb = new Notebook("Unnamed note", 0xFF1E293B, PaperTemplate.BLANK);
+            if (appSettings != null) {
+                newNb.defaultBgColor = appSettings.getDefaultPageBgColor();
+            }
+            long newId = dbHelper.insertNotebook(newNb);
+            Page firstPage = new Page(newId, 0, newNb.defaultTemplate, newNb.defaultBgColor, newNb.defaultIsInfinite);
+            dbHelper.insertPage(firstPage);
+            runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                synchronized (openNotebookIds) {
+                    if (!openNotebookIds.contains(newId)) {
+                        openNotebookIds.add(newId);
+                    }
+                }
+                switchToNotebook(newId);
+            });
+        });
+    }
+
+    private void showTabsDropdown(List<Notebook> openNotes) {
+        if (textTabCountBadge == null) return;
+        androidx.appcompat.widget.PopupMenu popup = new androidx.appcompat.widget.PopupMenu(this, textTabCountBadge);
+        for (int i = 0; i < openNotes.size(); i++) {
+            Notebook nb = openNotes.get(i);
+            String title = (nb.id == notebookId ? "✓ " : "   ") + nb.title;
+            popup.getMenu().add(0, (int) nb.id, i, title);
+        }
+        int newTabMenuId = 999999;
+        int closeOthersMenuId = 999998;
+        popup.getMenu().add(1, newTabMenuId, 100, "+ New Note");
+        if (openNotes.size() > 1) {
+            popup.getMenu().add(1, closeOthersMenuId, 101, "Close Other Tabs");
+        }
+
+        popup.setOnMenuItemClickListener(item -> {
+            int itemId = item.getItemId();
+            if (itemId == newTabMenuId) {
+                createNewTabNote();
+                return true;
+            } else if (itemId == closeOthersMenuId) {
+                synchronized (openNotebookIds) {
+                    openNotebookIds.clear();
+                    openNotebookIds.add(notebookId);
+                }
+                renderDocumentTabs();
+                return true;
+            } else {
+                switchToNotebook((long) itemId);
+                return true;
+            }
+        });
+        popup.show();
     }
 
     private void loadCurrentPage() {
@@ -733,16 +933,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnBack.setOnClickListener(v -> {
             saveCurrentPage();
             finish();
-        });
-
-        btnCloseDocTab.setOnClickListener(v -> {
-            saveCurrentPage();
-            finish();
-        });
-
-        btnNewTab.setOnClickListener(v -> {
-            saveCurrentPage();
-            Toast.makeText(this, "Quick Note: return to shelf to open multiple notebooks", Toast.LENGTH_SHORT).show();
         });
 
         btnUndo.setOnClickListener(v -> canvasView.undo());
@@ -4103,6 +4293,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     @Override
     protected void onDestroy() {
         super.onDestroy();
+        if (isFinishing()) {
+            synchronized (openNotebookIds) {
+                openNotebookIds.clear();
+            }
+        }
         stopAudioRecording();
         if (voicePlayer != null) {
             try { voicePlayer.release(); voicePlayer = null; } catch (Exception ignored) {}

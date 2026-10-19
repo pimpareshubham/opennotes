@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/notebookCard"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:layout_margin="8dp"
@@ -28,6 +29,18 @@
                 android:layout_width="16dp"
                 android:layout_height="match_parent"
                 android:background="#22000000" />
+
+            <!-- Multi-select check indicator -->
+            <ImageView
+                android:id="@+id/checkSelect"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="top|start"
+                android:layout_margin="10dp"
+                android:padding="2dp"
+                android:src="@drawable/ic_check_circle_outline"
+                android:visibility="gone"
+                android:contentDescription="Select notebook" />
 
             <!-- Page count badge -->
             <TextView
