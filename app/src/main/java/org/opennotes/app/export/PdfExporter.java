@@ -83,18 +83,31 @@ public class PdfExporter {
             // Draw template background in canvas coordinates so lines register exactly with notes
             drawTemplateInCanvasSpace(canvas, page.template, bounds, isDark, extraX, extraY, uniformScale);
 
-            // 1. Draw Images
+            // 1. Draw Images (background PDF layers first, then foreground stickers)
             if (page.images != null) {
                 for (ImageItem img : page.images) {
-                    if (img == null || img.imagePath == null) continue;
-                    File imgFile = new File(img.imagePath);
-                    if (!imgFile.exists()) continue;
-                    try {
-                        Bitmap bmp = BitmapFactory.decodeFile(img.imagePath);
-                        if (bmp != null) {
-                            canvas.drawBitmap(bmp, null, img.getBounds(), null);
-                        }
-                    } catch (Throwable ignored) {}
+                    if (img != null && img.isBackground && img.imagePath != null) {
+                        File imgFile = new File(img.imagePath);
+                        if (!imgFile.exists()) continue;
+                        try {
+                            Bitmap bmp = BitmapFactory.decodeFile(img.imagePath);
+                            if (bmp != null) {
+                                canvas.drawBitmap(bmp, null, img.getBounds(), null);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
+                }
+                for (ImageItem img : page.images) {
+                    if (img != null && !img.isBackground && img.imagePath != null) {
+                        File imgFile = new File(img.imagePath);
+                        if (!imgFile.exists()) continue;
+                        try {
+                            Bitmap bmp = BitmapFactory.decodeFile(img.imagePath);
+                            if (bmp != null) {
+                                canvas.drawBitmap(bmp, null, img.getBounds(), null);
+                            }
+                        } catch (Throwable ignored) {}
+                    }
                 }
             }
 
@@ -397,6 +410,19 @@ public class PdfExporter {
 
     public static RectF calculatePageContentBounds(Page page) {
         if (page == null) return new RectF(0f, 0f, 1f, 1f);
+        // If the page has a background PDF image, anchor to that exact page rectangle
+        if (page.images != null) {
+            for (ImageItem img : page.images) {
+                if (img != null && img.isBackground) {
+                    RectF bounds = new RectF(img.getBounds());
+                    PageWritingContext context = PageWritingContext.from(page);
+                    if (!context.contentBounds.isEmpty()) {
+                        bounds.union(context.contentBounds);
+                    }
+                    return bounds;
+                }
+            }
+        }
         PageWritingContext context = PageWritingContext.from(page);
         RectF bounds = new RectF(context.contentBounds);
         if (bounds.isEmpty()) {

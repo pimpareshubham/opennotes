@@ -235,6 +235,19 @@
                 </HorizontalScrollView>
             </FrameLayout>
 
+            <!-- Or Import PDF Pill Button -->
+            <TextView
+                android:id="@+id/btnImportPdfInDialog"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="16dp"
+                android:gravity="center"
+                android:background="@drawable/bg_pill_accent"
+                android:text="📄 Or Import PDF as Notebook"
+                android:textColor="@color/accent"
+                android:textSize="13sp"
+                android:textStyle="bold" />
+
         </LinearLayout>
     </LinearLayout>
 

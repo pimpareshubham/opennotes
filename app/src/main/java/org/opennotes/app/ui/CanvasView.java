@@ -273,8 +273,8 @@ public class CanvasView extends View {
     private float clipboardCenterX;
     private float clipboardCenterY;
 
-    // Bitmap cache for fast rendering of on-page images
-    private final Map<String, Bitmap> imageCache = new HashMap<>();
+    // Bitmap LRU cache for fast, memory-safe rendering of on-page images and PDF pages
+    private final android.util.LruCache<String, Bitmap> imageCache = new android.util.LruCache<>(25);
 
     // Scrollbar indicator
     private final Paint scrollbarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -2240,16 +2240,25 @@ public class CanvasView extends View {
         canvas.translate(panOffsetX, panOffsetY - viewportOffsetY * scaleFactor);
         canvas.scale(scaleFactor, scaleFactor);
 
+        // 1.5. Draw Fixed Background Images (e.g. PDF document pages)
+        if (currentPage != null && currentPage.images != null) {
+            for (ImageItem img : currentPage.images) {
+                if (img != null && img.isBackground && RectF.intersects(img.getBounds(), visibleViewport)) {
+                    drawImage(canvas, img);
+                }
+            }
+        }
+
         // 2. Draw Paper Template lines (culled to visible viewport)
         drawPaperTemplate(canvas, viewWidth, effectiveHeight, isDarkBackground, scaleFactor);
 
         if (currentPage != null) {
             prepareVisibleStrokeIndices(visibleViewport);
 
-            // 2.5. Draw Committed Images (culled to visible screen)
+            // 2.5. Draw Committed Foreground Images (culled to visible screen)
             if (currentPage.images != null) {
                 for (ImageItem img : currentPage.images) {
-                    if (img != null && RectF.intersects(img.getBounds(), visibleViewport)) {
+                    if (img != null && !img.isBackground && RectF.intersects(img.getBounds(), visibleViewport)) {
                         if (isTransformingSelection() && selectedImages.contains(img)) continue;
                         drawImage(canvas, img);
                     }
@@ -3192,7 +3201,7 @@ public class CanvasView extends View {
             for (TextItem item : currentPage.texts) if (item != null) selectedTexts.add(item);
         }
         if (currentPage.images != null) {
-            for (ImageItem item : currentPage.images) if (item != null) selectedImages.add(item);
+            for (ImageItem item : currentPage.images) if (item != null && !item.isBackground) selectedImages.add(item);
         }
         lassoPath.reset();
         lassoPoints.clear();
@@ -5294,7 +5303,7 @@ public class CanvasView extends View {
         selectedImages.clear();
         if (currentPage.images != null) {
             for (ImageItem item : currentPage.images) {
-                if (item != null && RectF.intersects(item.getBounds(), lassoBounds)
+                if (item != null && !item.isBackground && RectF.intersects(item.getBounds(), lassoBounds)
                         && boundsIntersectLasso(item.getBounds(), lassoBounds)) selectedImages.add(item);
             }
         }

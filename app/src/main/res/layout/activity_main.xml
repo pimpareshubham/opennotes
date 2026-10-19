@@ -57,6 +57,20 @@
                         android:textStyle="bold" />
                 </LinearLayout>
 
+                <!-- Import PDF pill button -->
+                <TextView
+                    android:id="@+id/btnImportPdf"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:layout_marginEnd="8dp"
+                    android:paddingHorizontal="14dp"
+                    android:gravity="center"
+                    android:background="@drawable/bg_floating_pill"
+                    android:text="📄 Import PDF"
+                    android:textColor="@color/accent"
+                    android:textSize="12sp"
+                    android:textStyle="bold" />
+
                 <!-- Grid / List toggle -->
                 <ImageView
                     android:id="@+id/btnToggleViewMode"

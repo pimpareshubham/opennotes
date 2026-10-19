@@ -37,9 +37,17 @@ import org.opennotes.app.R;
 import org.opennotes.app.db.AppSettings;
 import org.opennotes.app.db.NotesDbHelper;
 import org.opennotes.app.export.PdfExporter;
+import org.opennotes.app.importer.PdfImporter;
 import org.opennotes.app.model.Notebook;
 import org.opennotes.app.util.ErrorDialog;
 import org.opennotes.app.model.PaperTemplate;
+import org.opennotes.app.util.ThemeUtils;
+
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -88,6 +96,17 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     private final ExecutorService notebookIoExecutor = Executors.newSingleThreadExecutor();
     private final Handler searchDebounceHandler = new Handler(Looper.getMainLooper());
     private int notebookLoadGeneration = 0;
+
+    private final ActivityResultLauncher<String[]> openPdfLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri != null) {
+                    try {
+                        getContentResolver().takePersistableUriPermission(uri,
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    } catch (Throwable ignored) {}
+                    importPdfWithProgress(uri, null);
+                }
+            });
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -144,8 +163,20 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             btnToggleViewMode.setImageResource(isGridView ? R.drawable.ic_view_grid : R.drawable.ic_view_list);
         });
 
-        recyclerView.post(this::offerHandwritingModelSetup);
+        View btnImportPdf = findViewById(R.id.btnImportPdf);
+        if (btnImportPdf != null) {
+            btnImportPdf.setOnClickListener(v -> openPdfPicker());
+        }
 
+        recyclerView.post(this::offerHandwritingModelSetup);
+        handlePdfIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handlePdfIntent(intent);
     }
 
     private void offerHandwritingModelSetup() {
@@ -502,6 +533,14 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 .create();
         org.opennotes.app.util.ThemeUtils.styleDialog(dialog, this);
 
+        View btnImportPdfInDialog = dialogView.findViewById(R.id.btnImportPdfInDialog);
+        if (btnImportPdfInDialog != null) {
+            btnImportPdfInDialog.setOnClickListener(v -> {
+                dialog.dismiss();
+                openPdfPicker();
+            });
+        }
+
         btnCancel.setOnClickListener(v -> dialog.dismiss());
 
         btnConfirm.setOnClickListener(v -> {
@@ -534,6 +573,79 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         Intent intent = new Intent(this, NoteEditorActivity.class);
         intent.putExtra("notebook_id", notebookId);
         startActivity(intent);
+    }
+
+    private void openPdfPicker() {
+        try {
+            openPdfLauncher.launch(new String[]{"application/pdf"});
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not open file picker: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void handlePdfIntent(Intent intent) {
+        if (intent == null) return;
+        Uri pdfUri = null;
+        String action = intent.getAction();
+        if (Intent.ACTION_VIEW.equals(action)) {
+            pdfUri = intent.getData();
+        } else if (Intent.ACTION_SEND.equals(action)) {
+            pdfUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+        }
+        if (pdfUri != null) {
+            importPdfWithProgress(pdfUri, null);
+        }
+    }
+
+    private void importPdfWithProgress(@NonNull Uri pdfUri, @Nullable String customTitle) {
+        View progressView = LayoutInflater.from(this).inflate(R.layout.dialog_pdf_import_progress, null);
+        TextView textTitle = progressView.findViewById(R.id.textImportTitle);
+        TextView textStatus = progressView.findViewById(R.id.textImportStatus);
+        LinearProgressIndicator progressIndicator = progressView.findViewById(R.id.progressPdfImport);
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(progressView)
+                .setCancelable(false)
+                .create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
+
+        notebookIoExecutor.execute(() -> {
+            try {
+                long notebookId = PdfImporter.importPdf(this, pdfUri, customTitle, (current, total) -> {
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        if (progressIndicator != null) {
+                            progressIndicator.setIndeterminate(false);
+                            progressIndicator.setMax(total);
+                            progressIndicator.setProgress(current);
+                        }
+                        if (textStatus != null) {
+                            textStatus.setText("Rendering page " + current + " of " + total + "…");
+                        }
+                    });
+                });
+
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (dialog.isShowing()) dialog.dismiss();
+                    loadNotebooks();
+                    openNotebook(notebookId);
+                    Toast.makeText(this, "✨ PDF imported as notebook!", Toast.LENGTH_SHORT).show();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (dialog.isShowing()) dialog.dismiss();
+                    if (e instanceof SecurityException) {
+                        ErrorDialog.show(this, "Password Protected PDF",
+                                new Exception("This PDF is password protected. Please remove the password before importing into OpenNotes."));
+                    } else {
+                        ErrorDialog.show(this, "Failed to import PDF", e);
+                    }
+                });
+            }
+        });
     }
 
     @Override

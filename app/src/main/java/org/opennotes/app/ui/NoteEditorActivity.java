@@ -41,6 +41,8 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import org.opennotes.app.util.ZoomFavoritesManager;
+import org.opennotes.app.importer.PdfImporter;
+import com.google.android.material.progressindicator.LinearProgressIndicator;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -210,6 +212,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private MediaPlayer audioMemoPlayer;
     private ActivityResultLauncher<String> exportNativeNotebookLauncher;
     private ActivityResultLauncher<String[]> importNativeNotebookLauncher;
+    private ActivityResultLauncher<String[]> openPdfForTabLauncher;
+    private ActivityResultLauncher<String[]> openPdfForAppendLauncher;
     private MediaRecorder voiceRecorder;
     private MediaPlayer voicePlayer;
     private File currentAudioFile;
@@ -313,6 +317,26 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             runOnUiThread(() -> ErrorDialog.show(this, "Original notebook import failed", error));
                         }
                     });
+                });
+
+        openPdfForTabLauncher = registerForActivityResult(
+                new ActivityResultContracts.OpenDocument(), uri -> {
+                    if (uri != null) {
+                        try {
+                            getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        } catch (Throwable ignored) {}
+                        importPdfAsTab(uri);
+                    }
+                });
+
+        openPdfForAppendLauncher = registerForActivityResult(
+                new ActivityResultContracts.OpenDocument(), uri -> {
+                    if (uri != null) {
+                        try {
+                            getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        } catch (Throwable ignored) {}
+                        appendPdfPages(uri);
+                    }
                 });
 
         dbHelper = NotesDbHelper.getInstance(this);
@@ -1104,6 +1128,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         builder.addOption(999999, "➕", "New Note", "Create and open a new notebook in a tab", false, this::showCreateNotebookDialog);
+        builder.addOption(999997, "📄", "Open PDF as Tab", "Import and open a PDF document in a tab", false, () -> {
+            try {
+                openPdfForTabLauncher.launch(new String[]{"application/pdf"});
+            } catch (Exception e) {
+                Toast.makeText(this, "Could not open file picker: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        });
 
         if (openNotes.size() > 1) {
             builder.addDestructiveOption(999998, "✕", "Close Other Tabs", "Keep only the current notebook open", () -> {
@@ -3333,6 +3364,17 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         builder.addOption(5, "📑", "Cornell Note", "Structured cue column and summary section", false,
                 () -> addNewPageWithTemplate(PaperTemplate.CORNELL, overviewDialog, overviewAdapter));
 
+        builder.addOption(6, "📄", "Import Pages from PDF", "Append pages from an external PDF document", false, () -> {
+            if (overviewDialog != null && overviewDialog.isShowing()) {
+                overviewDialog.dismiss();
+            }
+            try {
+                openPdfForAppendLauncher.launch(new String[]{"application/pdf"});
+            } catch (Exception e) {
+                Toast.makeText(this, "Could not open file picker: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+            }
+        });
+
         builder.show();
     }
 
@@ -4866,6 +4908,110 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 })
                 .setNegativeButton("Cancel", null);
         ThemeUtils.showStyledDialog(builder, this);
+    }
+
+    private void importPdfAsTab(Uri uri) {
+        View progressView = LayoutInflater.from(this).inflate(R.layout.dialog_pdf_import_progress, null);
+        TextView textTitle = progressView.findViewById(R.id.textImportTitle);
+        TextView textStatus = progressView.findViewById(R.id.textImportStatus);
+        LinearProgressIndicator progressIndicator = progressView.findViewById(R.id.progressPdfImport);
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(progressView)
+                .setCancelable(false)
+                .create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
+
+        saveExecutor.execute(() -> {
+            try {
+                long newNotebookId = PdfImporter.importPdf(this, uri, null, (current, total) -> {
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        if (progressIndicator != null) {
+                            progressIndicator.setIndeterminate(false);
+                            progressIndicator.setMax(total);
+                            progressIndicator.setProgress(current);
+                        }
+                        if (textStatus != null) {
+                            textStatus.setText("Rendering page " + current + " of " + total + "…");
+                        }
+                    });
+                });
+
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (dialog.isShowing()) dialog.dismiss();
+                    synchronized (openNotebookIds) {
+                        openNotebookIds.add(newNotebookId);
+                    }
+                    switchToNotebook(newNotebookId);
+                    Toast.makeText(this, "✨ PDF opened in a new tab!", Toast.LENGTH_SHORT).show();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (dialog.isShowing()) dialog.dismiss();
+                    if (e instanceof SecurityException) {
+                        ErrorDialog.show(this, "Password Protected PDF",
+                                new Exception("This PDF is password protected. Please remove the password before importing."));
+                    } else {
+                        ErrorDialog.show(this, "Failed to import PDF", e);
+                    }
+                });
+            }
+        });
+    }
+
+    private void appendPdfPages(Uri uri) {
+        View progressView = LayoutInflater.from(this).inflate(R.layout.dialog_pdf_import_progress, null);
+        TextView textTitle = progressView.findViewById(R.id.textImportTitle);
+        if (textTitle != null) textTitle.setText("Appending PDF Pages");
+        TextView textStatus = progressView.findViewById(R.id.textImportStatus);
+        LinearProgressIndicator progressIndicator = progressView.findViewById(R.id.progressPdfImport);
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(progressView)
+                .setCancelable(false)
+                .create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
+
+        saveExecutor.execute(() -> {
+            try {
+                int addedCount = PdfImporter.appendPdfToNotebook(this, notebookId, uri, (current, total) -> {
+                    runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        if (progressIndicator != null) {
+                            progressIndicator.setIndeterminate(false);
+                            progressIndicator.setMax(total);
+                            progressIndicator.setProgress(current);
+                        }
+                        if (textStatus != null) {
+                            textStatus.setText("Appending page " + current + " of " + total + "…");
+                        }
+                    });
+                });
+
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (dialog.isShowing()) dialog.dismiss();
+                    loadNotebookData();
+                    Toast.makeText(this, "✨ Added " + addedCount + " PDF pages to notebook!", Toast.LENGTH_SHORT).show();
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (dialog.isShowing()) dialog.dismiss();
+                    if (e instanceof SecurityException) {
+                        ErrorDialog.show(this, "Password Protected PDF",
+                                new Exception("This PDF is password protected. Please remove the password before importing."));
+                    } else {
+                        ErrorDialog.show(this, "Failed to append PDF pages", e);
+                    }
+                });
+            }
+        });
     }
 
     @Override
