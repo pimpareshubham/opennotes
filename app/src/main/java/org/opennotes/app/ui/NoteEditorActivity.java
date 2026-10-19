@@ -55,6 +55,9 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.google.android.material.checkbox.MaterialCheckBox;
 import com.google.android.material.dialog.MaterialAlertDialogBuilder;
+import com.google.android.material.tabs.TabLayout;
+import android.text.Editable;
+import android.text.TextWatcher;
 
 import org.opennotes.app.R;
 import org.opennotes.app.db.AppSettings;
@@ -806,7 +809,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, outValue, true);
                 btnAdd.setBackgroundResource(outValue.resourceId);
                 btnAdd.setContentDescription("New note tab");
-                btnAdd.setOnClickListener(v -> createNewTabNote());
+                btnAdd.setOnClickListener(v -> showCreateNotebookDialog());
                 layoutDocumentTabs.addView(btnAdd);
 
                 if (textTabCountBadge != null) {
@@ -855,26 +858,233 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
-    private void createNewTabNote() {
-        saveCurrentPage();
-        saveExecutor.execute(() -> {
-            Notebook newNb = new Notebook("Unnamed note", 0xFF1E293B, PaperTemplate.BLANK);
-            if (appSettings != null) {
-                newNb.defaultBgColor = appSettings.getDefaultPageBgColor();
+    private final int[] PRESET_COVER_COLORS = {
+            0xFF1E1E24, // Dark Obsidian (Default StarNote style)
+            0xFF1E3A8A, // Deep Navy
+            0xFF065F46, // Emerald
+            0xFF334155, // Slate
+            0xFF581C87, // Plum
+            0xFF9F1239, // Crimson
+            0xFF92400E, // Amber
+            0xFF18181B  // Pitch Charcoal
+    };
+
+    private void showCreateNotebookDialog() {
+        View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_notebook, null);
+
+        TextView btnCancel = dialogView.findViewById(R.id.btnCancelCreate);
+        TextView btnConfirm = dialogView.findViewById(R.id.btnConfirmCreate);
+        FrameLayout previewCoverBox = dialogView.findViewById(R.id.previewCoverBox);
+        TextView textPreviewTitle = dialogView.findViewById(R.id.textPreviewTitle);
+        EditText editTitle = dialogView.findViewById(R.id.editNotebookTitle);
+        TextView btnFormatInfinite = dialogView.findViewById(R.id.btnFormatInfinite);
+        TextView btnFormatStandard = dialogView.findViewById(R.id.btnFormatStandard);
+        TabLayout tabLayout = dialogView.findViewById(R.id.tabLayoutCreate);
+        View containerTemplate = dialogView.findViewById(R.id.containerTemplateChoices);
+        View containerPageBg = dialogView.findViewById(R.id.containerPageBgChoices);
+        View containerColor = dialogView.findViewById(R.id.containerColorChoices);
+        LinearLayout layoutTemplateButtons = dialogView.findViewById(R.id.layoutTemplateButtons);
+        LinearLayout layoutPageBgButtons = dialogView.findViewById(R.id.layoutPageBgButtons);
+        LinearLayout layoutColorButtons = dialogView.findViewById(R.id.layoutColorButtons);
+
+        final int[] selectedCoverColor = {PRESET_COVER_COLORS[0]};
+        final int[] selectedPageBgColor = {appSettings != null ? appSettings.getDefaultPageBgColor() : 0xFF000000};
+        final PaperTemplate[] selectedTemplate = {PaperTemplate.RULED};
+        final boolean[] isInfinite = {true};
+
+        Runnable updatePreview = () -> {
+            GradientDrawable gd = new GradientDrawable();
+            gd.setCornerRadius(16f);
+            gd.setColor(selectedCoverColor[0]);
+            gd.setStroke(2, 0xFF38BDF8);
+            previewCoverBox.setBackground(gd);
+        };
+        updatePreview.run();
+
+        editTitle.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+                textPreviewTitle.setText(s.toString().trim().isEmpty() ? "Unnamed note" : s.toString().trim());
             }
-            long newId = dbHelper.insertNotebook(newNb);
-            Page firstPage = new Page(newId, 0, newNb.defaultTemplate, newNb.defaultBgColor, newNb.defaultIsInfinite);
-            dbHelper.insertPage(firstPage);
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                synchronized (openNotebookIds) {
-                    if (!openNotebookIds.contains(newId)) {
-                        openNotebookIds.add(newId);
-                    }
+            @Override public void afterTextChanged(Editable s) {}
+        });
+
+        // Format switch
+        btnFormatInfinite.setOnClickListener(v -> {
+            isInfinite[0] = true;
+            btnFormatInfinite.setBackgroundResource(R.drawable.bg_tool_button_active);
+            btnFormatInfinite.setTextColor(0xFFFFFFFF);
+            btnFormatStandard.setBackgroundResource(R.drawable.bg_floating_pill);
+            btnFormatStandard.setTextColor(0xFF94A3B8);
+        });
+
+        btnFormatStandard.setOnClickListener(v -> {
+            isInfinite[0] = false;
+            btnFormatStandard.setBackgroundResource(R.drawable.bg_tool_button_active);
+            btnFormatStandard.setTextColor(0xFFFFFFFF);
+            btnFormatInfinite.setBackgroundResource(R.drawable.bg_floating_pill);
+            btnFormatInfinite.setTextColor(0xFF94A3B8);
+        });
+
+        // Tab switch (Template | Page Bg | Cover)
+        tabLayout.addOnTabSelectedListener(new TabLayout.OnTabSelectedListener() {
+            @Override
+            public void onTabSelected(TabLayout.Tab tab) {
+                int pos = tab.getPosition();
+                containerTemplate.setVisibility(pos == 0 ? View.VISIBLE : View.GONE);
+                containerPageBg.setVisibility(pos == 1 ? View.VISIBLE : View.GONE);
+                containerColor.setVisibility(pos == 2 ? View.VISIBLE : View.GONE);
+            }
+            @Override public void onTabUnselected(TabLayout.Tab tab) {}
+            @Override public void onTabReselected(TabLayout.Tab tab) {}
+        });
+
+        // Template choices
+        String[] templateNames = {"Blank", "Ruled line", "Grid paper", "Dot grid", "Cornell notes"};
+        PaperTemplate[] tpls = {PaperTemplate.BLANK, PaperTemplate.RULED, PaperTemplate.GRID, PaperTemplate.DOTS, PaperTemplate.CORNELL};
+        java.util.List<TextView> templateViews = new java.util.ArrayList<>();
+
+        for (int i = 0; i < templateNames.length; i++) {
+            final int idx = i;
+            TextView btn = new TextView(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.MATCH_PARENT);
+            lp.setMargins(4, 0, 4, 0);
+            btn.setLayoutParams(lp);
+            btn.setPadding(24, 0, 24, 0);
+            btn.setGravity(android.view.Gravity.CENTER);
+            btn.setText(templateNames[i]);
+            btn.setTextSize(12f);
+            btn.setTextColor(i == 1 ? 0xFFFFFFFF : 0xFF94A3B8);
+            btn.setBackgroundResource(i == 1 ? R.drawable.bg_tool_button_active : R.drawable.bg_floating_pill);
+
+            btn.setOnClickListener(v -> {
+                selectedTemplate[0] = tpls[idx];
+                for (TextView tv : templateViews) {
+                    tv.setBackgroundResource(R.drawable.bg_floating_pill);
+                    tv.setTextColor(0xFF94A3B8);
                 }
-                switchToNotebook(newId);
+                btn.setBackgroundResource(R.drawable.bg_tool_button_active);
+                btn.setTextColor(0xFFFFFFFF);
+            });
+
+            templateViews.add(btn);
+            layoutTemplateButtons.addView(btn);
+        }
+
+        // Page Background Presets
+        final int[] PRESET_PAGE_BG = {
+                0xFF000000, // Super Dark Black (True AMOLED Black)
+                0xFF121214, // Dark Obsidian
+                0xFF1E293B, // Slate Gray
+                0xFF18181B, // Charcoal
+                0xFFFFFFFF, // Pure White
+                0xFFFFFBEB, // Warm Ivory
+                0xFFF0FDF4, // Eye-Care Mint
+                0xFFFEF9C3, // Legal Pad Yellow
+                0xFFF5EBE1, // Vintage Kraft
+                0xFF0F172A  // Deep Navy
+        };
+        final String[] PRESET_PAGE_BG_NAMES = {
+                "Super Dark Black (AMOLED)", "Dark Obsidian", "Slate Gray", "Charcoal",
+                "Pure White", "Warm Ivory", "Eye-Care Mint", "Legal Pad", "Kraft", "Deep Navy"
+        };
+        java.util.List<View> pageBgDots = new java.util.ArrayList<>();
+        Runnable updatePageBgUi = () -> {
+            for (int pIdx = 0; pIdx < PRESET_PAGE_BG.length; pIdx++) {
+                if (pIdx < pageBgDots.size()) {
+                    View dot = pageBgDots.get(pIdx);
+                    GradientDrawable swGd = new GradientDrawable();
+                    swGd.setShape(GradientDrawable.OVAL);
+                    swGd.setColor(PRESET_PAGE_BG[pIdx]);
+                    if (PRESET_PAGE_BG[pIdx] == selectedPageBgColor[0]) {
+                        swGd.setStroke(4, 0xFF38BDF8);
+                    } else {
+                        swGd.setStroke(2, 0xFF475569);
+                    }
+                    dot.setBackground(swGd);
+                }
+            }
+        };
+
+        for (int pIdx = 0; pIdx < PRESET_PAGE_BG.length; pIdx++) {
+            final int bgCol = PRESET_PAGE_BG[pIdx];
+            final String bgName = PRESET_PAGE_BG_NAMES[pIdx];
+
+            View dot = new View(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(60, 60);
+            lp.setMargins(6, 0, 6, 0);
+            dot.setLayoutParams(lp);
+            dot.setContentDescription(bgName);
+
+            dot.setOnClickListener(v -> {
+                selectedPageBgColor[0] = bgCol;
+                updatePageBgUi.run();
+            });
+            pageBgDots.add(dot);
+            layoutPageBgButtons.addView(dot);
+        }
+        updatePageBgUi.run();
+
+        // Color choices
+        for (int col : PRESET_COVER_COLORS) {
+            View dot = new View(this);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(60, 60);
+            lp.setMargins(6, 0, 6, 0);
+            dot.setLayoutParams(lp);
+
+            GradientDrawable gd = new GradientDrawable();
+            gd.setShape(GradientDrawable.OVAL);
+            gd.setColor(col);
+            gd.setStroke(2, 0xFF475569);
+            dot.setBackground(gd);
+
+            dot.setOnClickListener(v -> {
+                selectedCoverColor[0] = col;
+                updatePreview.run();
+            });
+            layoutColorButtons.addView(dot);
+        }
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(dialogView)
+                .create();
+        org.opennotes.app.util.ThemeUtils.styleDialog(dialog, this);
+
+        btnCancel.setOnClickListener(v -> dialog.dismiss());
+
+        btnConfirm.setOnClickListener(v -> {
+            String title = editTitle.getText() != null ? editTitle.getText().toString().trim() : "";
+            if (title.isEmpty()) title = "Unnamed note";
+
+            Notebook newNb = new Notebook(title, selectedCoverColor[0], selectedTemplate[0]);
+            newNb.defaultIsInfinite = isInfinite[0];
+            newNb.defaultBgColor = selectedPageBgColor[0];
+            if (appSettings != null) {
+                appSettings.setDefaultPageBgColor(selectedPageBgColor[0]);
+            }
+            if (currentNotebook != null && currentNotebook.folder != null && !"All".equalsIgnoreCase(currentNotebook.folder)) {
+                newNb.folder = currentNotebook.folder;
+            }
+            dialog.dismiss();
+            saveCurrentPage();
+            saveExecutor.execute(() -> {
+                long newId = dbHelper.insertNotebook(newNb);
+                Page firstPage = new Page(newId, 0, newNb.defaultTemplate, newNb.defaultBgColor, newNb.defaultIsInfinite);
+                dbHelper.insertPage(firstPage);
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    synchronized (openNotebookIds) {
+                        if (!openNotebookIds.contains(newId)) {
+                            openNotebookIds.add(newId);
+                        }
+                    }
+                    switchToNotebook(newId);
+                });
             });
         });
+
+        dialog.show();
     }
 
     private void showTabsDropdown(List<Notebook> openNotes) {
@@ -895,7 +1105,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         popup.setOnMenuItemClickListener(item -> {
             int itemId = item.getItemId();
             if (itemId == newTabMenuId) {
-                createNewTabNote();
+                showCreateNotebookDialog();
                 return true;
             } else if (itemId == closeOthersMenuId) {
                 synchronized (openNotebookIds) {
@@ -1025,23 +1235,17 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         toolPencil.setOnClickListener(v -> selectOrToggleTool(DrawingTool.PENCIL, "Pencil Settings"));
         toolEraser.setOnClickListener(v -> {
             closeToolPropertiesCard();
-            if (canvasView.getTool() == DrawingTool.ERASER_STROKE) {
-                // Tapping eraser while already active toggles Erase Highlighter Only filter
-                boolean nextOnlyHighlighter = !canvasView.isEraseOnlyHighlighter();
-                canvasView.setEraseOnlyHighlighter(nextOnlyHighlighter);
-                toolEraser.setColorFilter(nextOnlyHighlighter ? 0xFFF59E0B : 0xFF38BDF8);
-                if (nextOnlyHighlighter) {
-                    Toast.makeText(this, "🧹 Eraser: Highlighter Only Mode (Pen & text preserved)", Toast.LENGTH_SHORT).show();
-                } else {
-                    Toast.makeText(this, "🧹 Eraser: Erase All Strokes & Text", Toast.LENGTH_SHORT).show();
-                }
+            long now = SystemClock.uptimeMillis();
+            boolean isDoubleClick = (now - lastEraserClickTime) < 450L;
+            lastEraserClickTime = now;
+            if (isDoubleClick) {
+                showEraserOptionsDialog();
             } else {
                 canvasView.setTool(DrawingTool.ERASER_STROKE);
                 updateToolUi(DrawingTool.ERASER_STROKE);
                 if (appSettings != null) appSettings.setLastTool(DrawingTool.ERASER_STROKE);
                 boolean onlyH = canvasView.isEraseOnlyHighlighter();
                 toolEraser.setColorFilter(onlyH ? 0xFFF59E0B : 0xFF38BDF8);
-                Toast.makeText(this, onlyH ? "Eraser: Highlighter Only (tap again to erase all)" : "Eraser active (tap again for highlighter only)", Toast.LENGTH_SHORT).show();
             }
         });
         toolEraser.setOnLongClickListener(v -> {
@@ -1051,24 +1255,17 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         toolLasso.setOnClickListener(v -> {
             closeToolPropertiesCard();
-            if (canvasView.getTool() == DrawingTool.LASSO) {
-                // Tapping lasso while already active toggles between Freehand and Rectangular selection
-                boolean isRect = canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE;
-                CanvasView.LassoMode newMode = isRect ? CanvasView.LassoMode.FREEHAND : CanvasView.LassoMode.RECTANGLE;
-                canvasView.setLassoMode(newMode);
-                toolLasso.setColorFilter(newMode == CanvasView.LassoMode.RECTANGLE ? 0xFF10B981 : 0xFF38BDF8);
-                if (newMode == CanvasView.LassoMode.RECTANGLE) {
-                    Toast.makeText(this, "📐 Lasso: Rectangular Marquee Mode (drag box to select)", Toast.LENGTH_SHORT).show();
-                } else {
-                    Toast.makeText(this, "➰ Lasso: Freehand Mode (circle items to select)", Toast.LENGTH_SHORT).show();
-                }
+            long now = SystemClock.uptimeMillis();
+            boolean isDoubleClick = (now - lastLassoClickTime) < 450L;
+            lastLassoClickTime = now;
+            if (isDoubleClick) {
+                showLassoOptionsDialog();
             } else {
                 canvasView.setTool(DrawingTool.LASSO);
                 updateToolUi(DrawingTool.LASSO);
                 if (appSettings != null) appSettings.setLastTool(DrawingTool.LASSO);
                 boolean isRect = canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE;
                 toolLasso.setColorFilter(isRect ? 0xFF10B981 : 0xFF38BDF8);
-                Toast.makeText(this, isRect ? "Lasso: Rectangular (tap again for freehand)" : "Lasso active (tap again for rectangle marquee)", Toast.LENGTH_SHORT).show();
             }
         });
         toolLasso.setOnLongClickListener(v -> {
@@ -1285,29 +1482,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             }
         });
 
-        btnAddPage.setOnClickListener(v -> {
-            if (pages == null || currentNotebook == null) return;
-            saveCurrentPage();
-            PaperTemplate tpl = (currentPage != null) ? currentPage.template : currentNotebook.defaultTemplate;
-            int bgCol = (currentPage != null && currentPage.backgroundColor != 0)
-                    ? currentPage.backgroundColor
-                    : ((currentNotebook != null && currentNotebook.defaultBgColor != -1)
-                        ? currentNotebook.defaultBgColor
-                        : (appSettings != null ? appSettings.getDefaultPageBgColor() : 0xFF121214));
-            boolean inf = (currentPage != null) ? currentPage.isInfinite : currentNotebook.defaultIsInfinite;
-
-            Page newPage = new Page(notebookId, pages.size(), tpl, bgCol, inf);
-            currentNotebook.pageCount = pages.size() + 1;
-            pages.add(newPage);
-            Notebook notebookSnapshot = currentNotebook;
-            saveExecutor.execute(() -> {
-                dbHelper.insertPage(newPage);
-                dbHelper.updateNotebook(notebookSnapshot);
-            });
-            currentPageIndex = pages.size() - 1;
-            loadCurrentPage();
-            Toast.makeText(this, "Page " + (currentPageIndex + 1) + " added", Toast.LENGTH_SHORT).show();
-        });
+        btnAddPage.setOnClickListener(v -> showAddPageMenu(v, null, null));
 
         textPageCounter.setOnClickListener(v -> showPageOverviewDialog());
 
@@ -1357,6 +1532,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private long lastToolClickTime = 0L;
     private DrawingTool lastClickedTool = null;
+    private long lastEraserClickTime = 0L;
+    private long lastLassoClickTime = 0L;
 
     public void closeToolPropertiesCard() {
         if (cardToolProperties != null && cardToolProperties.getVisibility() == View.VISIBLE) {
@@ -2000,8 +2177,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void showEraserOptionsDialog() {
         boolean onlyHighlighter = canvasView.isEraseOnlyHighlighter();
         String[] options = {
-                "🧹 Erase All (Handwriting, Text & Highlighter)" + (!onlyHighlighter ? "  ✓" : ""),
-                "🖍️ Erase Highlighter Only (Preserve Pen & Text)" + (onlyHighlighter ? "  ✓" : ""),
+                "🧹 Normal Eraser (Erase all strokes & text)" + (!onlyHighlighter ? "  ✓" : ""),
+                "🖍️ Highlighter Eraser (Highlighter only, preserve pen & text)" + (onlyHighlighter ? "  ✓" : ""),
                 "🗑️ Clear Entire Page"
         };
         MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
@@ -2010,11 +2187,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if (which == 0) {
                         canvasView.setEraseOnlyHighlighter(false);
                         toolEraser.setColorFilter(0xFF38BDF8);
-                        Toast.makeText(this, "Eraser: Erasing all strokes & text", Toast.LENGTH_SHORT).show();
                     } else if (which == 1) {
                         canvasView.setEraseOnlyHighlighter(true);
                         toolEraser.setColorFilter(0xFFF59E0B);
-                        Toast.makeText(this, "Eraser: Highlighter only (Handwriting preserved)", Toast.LENGTH_SHORT).show();
                     } else if (which == 2) {
                         showClearCanvasDialog();
                     }
@@ -2026,8 +2201,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void showLassoOptionsDialog() {
         boolean isRect = canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE;
         String[] options = {
-                "➰ Freehand Lasso Selection (Draw boundary around items)" + (!isRect ? "  ✓" : ""),
-                "📐 Rectangular Marquee Selection (Drag box to select items)" + (isRect ? "  ✓" : "")
+                "➰ Freehand Lasso (Draw boundary around items)" + (!isRect ? "  ✓" : ""),
+                "📐 Rectangular Marquee (Drag box to select items)" + (isRect ? "  ✓" : "")
         };
         MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                 .setTitle("Lasso Selection Mode")
@@ -2035,11 +2210,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if (which == 0) {
                         canvasView.setLassoMode(CanvasView.LassoMode.FREEHAND);
                         toolLasso.setColorFilter(0xFF38BDF8);
-                        Toast.makeText(this, "Lasso: Freehand outline mode", Toast.LENGTH_SHORT).show();
                     } else {
                         canvasView.setLassoMode(CanvasView.LassoMode.RECTANGLE);
                         toolLasso.setColorFilter(0xFF10B981);
-                        Toast.makeText(this, "Lasso: Rectangular marquee mode", Toast.LENGTH_SHORT).show();
                     }
                 })
                 .setNegativeButton("Cancel", null);
@@ -2903,6 +3076,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_page_overview, null);
         RecyclerView rv = dialogView.findViewById(R.id.recyclerViewPages);
+        com.google.android.material.button.MaterialButton btnOverviewAddPage = dialogView.findViewById(R.id.btnOverviewAddPage);
         rv.setLayoutManager(new GridLayoutManager(this, 3));
 
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
@@ -2912,7 +3086,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .create();
         ThemeUtils.styleDialog(dialog, this);
 
-        rv.setAdapter(new RecyclerView.Adapter<PageViewHolder>() {
+        RecyclerView.Adapter<PageViewHolder> adapter = new RecyclerView.Adapter<PageViewHolder>() {
             @Override
             public PageViewHolder onCreateViewHolder(android.view.ViewGroup parent, int viewType) {
                 View v = LayoutInflater.from(parent.getContext()).inflate(R.layout.item_page_overview, parent, false);
@@ -2921,29 +3095,200 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
             @Override
             public void onBindViewHolder(PageViewHolder holder, int position) {
-                holder.textPageNumber.setText("Page " + (position + 1));
-                holder.itemView.setSelected(position == currentPageIndex);
+                final int pos = position;
+                final Page page = pages.get(pos);
+                holder.textPageNumber.setText("Page " + (pos + 1));
+                String tplName = (page != null && page.template != null) ? page.template.getDisplayName() : "Ruled Lines";
+                if (holder.textPageTemplateLabel != null) {
+                    holder.textPageTemplateLabel.setText(tplName);
+                }
+                holder.itemView.setSelected(pos == currentPageIndex);
+
+                if (holder.itemView instanceof com.google.android.material.card.MaterialCardView) {
+                    com.google.android.material.card.MaterialCardView card = (com.google.android.material.card.MaterialCardView) holder.itemView;
+                    if (pos == currentPageIndex) {
+                        card.setStrokeColor(0xFF38BDF8);
+                        card.setStrokeWidth(dp(2));
+                    } else {
+                        card.setStrokeColor(0xFF334155);
+                        card.setStrokeWidth(dp(1));
+                    }
+                }
+
                 holder.itemView.setOnClickListener(v -> {
-                    currentPageIndex = position;
-                    loadCurrentPage();
+                    if (pos != currentPageIndex) {
+                        saveCurrentPage();
+                        currentPageIndex = pos;
+                        loadCurrentPage();
+                    }
                     dialog.dismiss();
                 });
+
+                if (holder.btnDeletePage != null) {
+                    holder.btnDeletePage.setOnClickListener(v -> {
+                        if (pages.size() <= 1) {
+                            Toast.makeText(NoteEditorActivity.this, "Cannot delete the only page in the notebook", Toast.LENGTH_SHORT).show();
+                            return;
+                        }
+                        new MaterialAlertDialogBuilder(NoteEditorActivity.this)
+                                .setTitle("Delete Page " + (pos + 1) + "?")
+                                .setMessage("Are you sure you want to delete Page " + (pos + 1) + "? This action cannot be undone.")
+                                .setPositiveButton("Delete", (d, w) -> {
+                                    deletePageAt(pos, dialog, this);
+                                })
+                                .setNegativeButton("Cancel", null)
+                                .show();
+                    });
+                }
             }
 
             @Override
             public int getItemCount() {
                 return pages.size();
             }
-        });
+        };
+        rv.setAdapter(adapter);
+
+        if (btnOverviewAddPage != null) {
+            btnOverviewAddPage.setOnClickListener(v -> showAddPageMenu(v, dialog, adapter));
+        }
 
         dialog.show();
     }
 
+    private void deletePageAt(int index, AlertDialog dialog, RecyclerView.Adapter adapter) {
+        if (pages == null || pages.size() <= 1 || index < 0 || index >= pages.size()) return;
+        saveCurrentPage();
+
+        pages.remove(index);
+        for (int i = 0; i < pages.size(); i++) {
+            pages.get(i).pageIndex = i;
+        }
+        if (currentNotebook != null) {
+            currentNotebook.pageCount = pages.size();
+        }
+
+        if (currentPageIndex >= pages.size()) {
+            currentPageIndex = pages.size() - 1;
+            loadCurrentPage();
+        } else if (currentPageIndex == index) {
+            loadCurrentPage();
+        } else if (currentPageIndex > index) {
+            currentPageIndex--;
+            updatePageNavUi();
+        } else {
+            updatePageNavUi();
+        }
+
+        final int targetIdx = index;
+        final Notebook nbSnapshot = currentNotebook;
+        saveExecutor.execute(() -> {
+            dbHelper.deletePage(notebookId, targetIdx);
+            if (nbSnapshot != null) {
+                dbHelper.updateNotebook(nbSnapshot);
+            }
+        });
+
+        if (dialog != null && dialog.isShowing()) {
+            dialog.setTitle("Pages (" + pages.size() + ")");
+            if (adapter != null) {
+                adapter.notifyDataSetChanged();
+            }
+        }
+        Toast.makeText(this, "Page deleted", Toast.LENGTH_SHORT).show();
+    }
+
+    private void showAddPageMenu(View anchor, AlertDialog overviewDialog, RecyclerView.Adapter overviewAdapter) {
+        if (pages == null || currentNotebook == null) return;
+        saveCurrentPage();
+
+        PaperTemplate currentTpl = (currentPage != null && currentPage.template != null)
+                ? currentPage.template
+                : ((currentNotebook != null && currentNotebook.defaultTemplate != null)
+                    ? currentNotebook.defaultTemplate
+                    : PaperTemplate.RULED);
+        String currentTplName = currentTpl.getDisplayName();
+
+        PopupMenu popup = new PopupMenu(this, anchor);
+        popup.getMenu().add(0, 100, 0, "➕ Same as Current (" + currentTplName + ")");
+        popup.getMenu().add(0, 1, 1, "Ruled Lines");
+        popup.getMenu().add(0, 2, 2, "Math Grid");
+        popup.getMenu().add(0, 3, 3, "Dot Grid");
+        popup.getMenu().add(0, 4, 4, "Blank Page");
+        popup.getMenu().add(0, 5, 5, "Cornell Note");
+
+        final PaperTemplate sameTpl = currentTpl;
+        popup.setOnMenuItemClickListener(item -> {
+            PaperTemplate chosen;
+            switch (item.getItemId()) {
+                case 100:
+                    chosen = sameTpl;
+                    break;
+                case 1:
+                    chosen = PaperTemplate.RULED;
+                    break;
+                case 2:
+                    chosen = PaperTemplate.GRID;
+                    break;
+                case 3:
+                    chosen = PaperTemplate.DOTS;
+                    break;
+                case 4:
+                    chosen = PaperTemplate.BLANK;
+                    break;
+                case 5:
+                    chosen = PaperTemplate.CORNELL;
+                    break;
+                default:
+                    chosen = sameTpl;
+                    break;
+            }
+            addNewPageWithTemplate(chosen, overviewDialog, overviewAdapter);
+            return true;
+        });
+        popup.show();
+    }
+
+    private void addNewPageWithTemplate(PaperTemplate template, AlertDialog overviewDialog, RecyclerView.Adapter overviewAdapter) {
+        if (pages == null || currentNotebook == null) return;
+        saveCurrentPage();
+
+        int bgCol = (currentPage != null && currentPage.backgroundColor != 0)
+                ? currentPage.backgroundColor
+                : ((currentNotebook != null && currentNotebook.defaultBgColor != -1)
+                    ? currentNotebook.defaultBgColor
+                    : (appSettings != null ? appSettings.getDefaultPageBgColor() : 0xFF121214));
+        boolean inf = (currentPage != null) ? currentPage.isInfinite : currentNotebook.defaultIsInfinite;
+
+        Page newPage = new Page(notebookId, pages.size(), template, bgCol, inf);
+        currentNotebook.pageCount = pages.size() + 1;
+        pages.add(newPage);
+        Notebook notebookSnapshot = currentNotebook;
+        saveExecutor.execute(() -> {
+            dbHelper.insertPage(newPage);
+            dbHelper.updateNotebook(notebookSnapshot);
+        });
+        currentPageIndex = pages.size() - 1;
+        loadCurrentPage();
+
+        if (overviewDialog != null && overviewDialog.isShowing()) {
+            overviewDialog.setTitle("Pages (" + pages.size() + ")");
+            if (overviewAdapter != null) {
+                overviewAdapter.notifyDataSetChanged();
+            }
+        }
+        Toast.makeText(this, "Page " + (currentPageIndex + 1) + " added (" + template.getDisplayName() + ")", Toast.LENGTH_SHORT).show();
+    }
+
     private static class PageViewHolder extends RecyclerView.ViewHolder {
         TextView textPageNumber;
+        TextView textPageTemplateLabel;
+        ImageView btnDeletePage;
         PageViewHolder(View itemView) {
             super(itemView);
             textPageNumber = itemView.findViewById(R.id.textPageNumber);
+            textPageTemplateLabel = itemView.findViewById(R.id.textPageTemplateLabel);
+            btnDeletePage = itemView.findViewById(R.id.btnDeletePage);
         }
     }
 

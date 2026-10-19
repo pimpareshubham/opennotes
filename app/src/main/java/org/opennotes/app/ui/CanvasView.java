@@ -4291,12 +4291,13 @@ public class CanvasView extends View {
                     getParent().requestDisallowInterceptTouchEvent(true);
                 }
             }
-            if (isViewportLocked) return true;
 
             // Two-finger pinch-zoom and pan support while in Finger Move mode
             if (pointerCount >= 2) {
                 handPanDragging = false;
-                scaleDetector.onTouchEvent(event);
+                if (!isViewportLocked) {
+                    scaleDetector.onTouchEvent(event);
+                }
                 handleTwoFingerPanZoom(event, action);
                 return true;
             }
@@ -4393,7 +4394,7 @@ public class CanvasView extends View {
         // Stylus-only mode rejects all finger drawing, but allows a real
         // two-finger navigation gesture when the stylus is not in contact and outside cooldown.
         if (isStylusOnly && !hasStylusPointer) {
-            if (pointerCount >= 2 && !isViewportLocked && !isWithinStylusCooldown && !isPalm) {
+            if (pointerCount >= 2 && !isWithinStylusCooldown && !isPalm) {
                 if (activeStroke != null) {
                     cancelInProgressGesture();
                 }
@@ -4403,7 +4404,7 @@ public class CanvasView extends View {
         }
 
         // Fingers navigate when no stylus is touching and not during cooldown/palm.
-        if (!hasStylusPointer && !isWithinStylusCooldown && !isPalm && pointerCount >= 2 && !isViewportLocked) {
+        if (!hasStylusPointer && !isWithinStylusCooldown && !isPalm && pointerCount >= 2) {
             if (activeStroke != null) {
                 cancelInProgressGesture();
             }
