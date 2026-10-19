@@ -33,12 +33,14 @@ import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.HorizontalScrollView;
+import android.widget.ImageButton;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.PopupWindow;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
+import org.opennotes.app.util.ZoomFavoritesManager;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -503,7 +505,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             }
         });
         canvasView.setOnZoomChangeListener(zoomPercent -> {
-            textZoomPercent.setText(Math.round(zoomPercent) + "% ▾");
+            int rounded = Math.round(zoomPercent);
+            textZoomPercent.setText(rounded + "% ▾");
+            updateFavoriteZoomIcon(rounded);
         });
         canvasView.setOnLassoSelectionListener((hasSelection, screenBounds) -> {
             if (hasSelection && screenBounds != null) {
@@ -624,13 +628,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (keyCode == KeyEvent.KEYCODE_C && canvasView.hasSelection()) {
             canvasView.copySelection();
             updateLassoActionAvailability();
-            Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Copied to clipboard. Press & hold canvas to paste.", Toast.LENGTH_SHORT).show();
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_X && canvasView.hasSelection()) {
             canvasView.cutSelection();
             updateLassoActionAvailability();
-            Toast.makeText(this, "Cut to clipboard", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Cut to clipboard. Press & hold canvas to paste.", Toast.LENGTH_SHORT).show();
             return true;
         }
         if (keyCode == KeyEvent.KEYCODE_V && canvasView.hasClipboardContents()) {
@@ -959,16 +963,41 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnRedo.setAlpha(canvasView.canRedo() ? 1.0f : 0.35f);
     }
 
-    private void updateFavoriteIcon() {
+    private void toggleFavoriteCurrentZoom() {
+        if (canvasView == null || btnFavorite == null) return;
+        int currentZoom = Math.round(canvasView.getZoomPercent());
+        boolean isFav = ZoomFavoritesManager.isFavorite(this, currentZoom);
+        if (isFav) {
+            ZoomFavoritesManager.removeFavorite(this, currentZoom);
+            updateFavoriteZoomIcon(currentZoom);
+            Toast.makeText(this, "Zoom " + currentZoom + "% removed from favorites", Toast.LENGTH_SHORT).show();
+        } else {
+            ZoomFavoritesManager.addFavorite(this, currentZoom);
+            updateFavoriteZoomIcon(currentZoom);
+            btnFavorite.animate().scaleX(1.35f).scaleY(1.35f).setDuration(120)
+                    .withEndAction(() -> btnFavorite.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start())
+                    .start();
+            Toast.makeText(this, "Zoom " + currentZoom + "% added to favorites ★", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void updateFavoriteZoomIcon(int zoom) {
         if (btnFavorite == null) return;
-        if (currentNotebook != null && currentNotebook.isFavorite) {
+        boolean isFav = ZoomFavoritesManager.isFavorite(this, zoom);
+        if (isFav) {
             btnFavorite.setImageResource(R.drawable.ic_star_filled);
             btnFavorite.setColorFilter(0xFFF59E0B);
-            btnFavorite.setContentDescription("Bookmarked in Favorites");
+            btnFavorite.setContentDescription("Zoom " + zoom + "% favorited ★");
         } else {
             btnFavorite.setImageResource(R.drawable.ic_star_outline);
             btnFavorite.setColorFilter(0xFF94A3B8);
-            btnFavorite.setContentDescription("Bookmark note");
+            btnFavorite.setContentDescription("Favorite zoom " + zoom + "%");
+        }
+    }
+
+    private void updateFavoriteIcon() {
+        if (canvasView != null) {
+            updateFavoriteZoomIcon(Math.round(canvasView.getZoomPercent()));
         }
     }
 
@@ -1223,19 +1252,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         // Viewport Pill
-        btnFavorite.setOnClickListener(v -> {
-            if (currentNotebook != null) {
-                saveCurrentPage();
-                currentNotebook.isFavorite = !currentNotebook.isFavorite;
-                final boolean fav = currentNotebook.isFavorite;
-                saveExecutor.execute(() -> dbHelper.setFavorite(notebookId, fav));
-                updateFavoriteIcon();
-                btnFavorite.animate().scaleX(1.35f).scaleY(1.35f).setDuration(120)
-                        .withEndAction(() -> btnFavorite.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start())
-                        .start();
-                Toast.makeText(this, fav ? "Bookmarked ★ (Saved to Favorites)" : "Removed from Favorites", Toast.LENGTH_SHORT).show();
-            }
-        });
+        btnFavorite.setOnClickListener(v -> toggleFavoriteCurrentZoom());
 
         textZoomPercent.setOnClickListener(v -> showZoomPickerDialog());
 
@@ -1299,13 +1316,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnLassoCut.setOnClickListener(v -> {
             if (!canvasView.hasSelection()) return;
             canvasView.cutSelection();
-            Toast.makeText(this, "Cut to clipboard. Use Paste to place it.", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Cut to clipboard. Press & hold canvas to paste.", Toast.LENGTH_SHORT).show();
             updatePasteButtonVisibility();
         });
         btnLassoCopy.setOnClickListener(v -> {
             if (!canvasView.hasSelection()) return;
             canvasView.copySelection();
-            Toast.makeText(this, "Copied to clipboard", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Copied to clipboard. Press & hold canvas to paste.", Toast.LENGTH_SHORT).show();
             updatePasteButtonVisibility();
         });
         btnLassoPaste.setOnClickListener(v -> {
@@ -2136,16 +2153,138 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void showZoomPickerDialog() {
-        final String[] zoomOptions = {"10%", "20%", "25%", "50%", "75%", "100% (Fit)", "150%", "200%", "400%", "800%", "1600%"};
-        final float[] zoomValues = {10f, 20f, 25f, 50f, 75f, 100f, 150f, 200f, 400f, 800f, 1600f};
+        if (canvasView == null) return;
+        final int currentZoom = Math.round(canvasView.getZoomPercent());
 
-        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
-                .setTitle("Select Zoom Level")
-                .setItems(zoomOptions, (dialog, which) -> {
-                    canvasView.setZoom(zoomValues[which]);
-                })
-                .setNegativeButton("Cancel", null);
-        ThemeUtils.showStyledDialog(builder, this);
+        View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_select_zoom_level, null);
+        TextView textDialogCurrentZoom = dialogView.findViewById(R.id.textDialogCurrentZoom);
+        com.google.android.material.button.MaterialButton btnAddCurrentToFavorites = dialogView.findViewById(R.id.btnAddCurrentToFavorites);
+        LinearLayout layoutFavoritesList = dialogView.findViewById(R.id.layoutFavoritesList);
+        TextView textNoFavoritesHint = dialogView.findViewById(R.id.textNoFavoritesHint);
+        LinearLayout layoutPresetsList = dialogView.findViewById(R.id.layoutPresetsList);
+        View btnResetZoomDialog = dialogView.findViewById(R.id.btnResetZoomDialog);
+        View btnCloseZoomDialog = dialogView.findViewById(R.id.btnCloseZoomDialog);
+
+        if (textDialogCurrentZoom != null) {
+            textDialogCurrentZoom.setText(currentZoom + "%");
+        }
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(dialogView)
+                .create();
+
+        // Runnable to populate favorites dynamically
+        Runnable populateFavorites = new Runnable() {
+            @Override
+            public void run() {
+                if (layoutFavoritesList == null) return;
+                layoutFavoritesList.removeAllViews();
+                List<Integer> favorites = ZoomFavoritesManager.getFavoriteZoomLevels(NoteEditorActivity.this);
+                if (favorites.isEmpty()) {
+                    if (textNoFavoritesHint != null) textNoFavoritesHint.setVisibility(View.VISIBLE);
+                } else {
+                    if (textNoFavoritesHint != null) textNoFavoritesHint.setVisibility(View.GONE);
+                    for (int favZoom : favorites) {
+                        View itemView = LayoutInflater.from(NoteEditorActivity.this)
+                                .inflate(R.layout.item_favorite_zoom_level, layoutFavoritesList, false);
+
+                        TextView textZoomPercent = itemView.findViewById(R.id.textZoomPercent);
+                        TextView badgeCurrentZoom = itemView.findViewById(R.id.badgeCurrentZoom);
+                        ImageButton btnDeleteFavoriteZoom = itemView.findViewById(R.id.btnDeleteFavoriteZoom);
+
+                        textZoomPercent.setText(favZoom + "%");
+                        if (favZoom == currentZoom) {
+                            badgeCurrentZoom.setVisibility(View.VISIBLE);
+                        } else {
+                            badgeCurrentZoom.setVisibility(View.GONE);
+                        }
+
+                        // Clicking favorite item sets the zoom
+                        itemView.setOnClickListener(v -> {
+                            canvasView.setZoom(favZoom);
+                            dialog.dismiss();
+                        });
+
+                        // Delete option to remove level from favorites
+                        btnDeleteFavoriteZoom.setOnClickListener(v -> {
+                            ZoomFavoritesManager.removeFavorite(NoteEditorActivity.this, favZoom);
+                            Toast.makeText(NoteEditorActivity.this, "Zoom " + favZoom + "% removed from favorites", Toast.LENGTH_SHORT).show();
+                            updateFavoriteZoomIcon(Math.round(canvasView.getZoomPercent()));
+                            run(); // Re-populate favorites list
+
+                            // Update add button state if current zoom was deleted
+                            if (btnAddCurrentToFavorites != null) {
+                                boolean isNowFav = ZoomFavoritesManager.isFavorite(NoteEditorActivity.this, currentZoom);
+                                btnAddCurrentToFavorites.setText(isNowFav ? "★ Current Zoom Favorited" : "★ Add Current (" + currentZoom + "%) to Favorites");
+                                btnAddCurrentToFavorites.setEnabled(!isNowFav);
+                                btnAddCurrentToFavorites.setAlpha(isNowFav ? 0.6f : 1.0f);
+                            }
+                        });
+
+                        layoutFavoritesList.addView(itemView);
+                    }
+                }
+            }
+        };
+
+        // Wire Add Current Zoom to Favorites
+        if (btnAddCurrentToFavorites != null) {
+            boolean isCurFav = ZoomFavoritesManager.isFavorite(this, currentZoom);
+            btnAddCurrentToFavorites.setText(isCurFav ? "★ Current Zoom Favorited" : "★ Add Current (" + currentZoom + "%) to Favorites");
+            btnAddCurrentToFavorites.setEnabled(!isCurFav);
+            btnAddCurrentToFavorites.setAlpha(isCurFav ? 0.6f : 1.0f);
+
+            btnAddCurrentToFavorites.setOnClickListener(v -> {
+                ZoomFavoritesManager.addFavorite(this, currentZoom);
+                Toast.makeText(this, "Zoom " + currentZoom + "% added to favorites ★", Toast.LENGTH_SHORT).show();
+                updateFavoriteZoomIcon(currentZoom);
+                btnAddCurrentToFavorites.setText("★ Current Zoom Favorited");
+                btnAddCurrentToFavorites.setEnabled(false);
+                btnAddCurrentToFavorites.setAlpha(0.6f);
+                populateFavorites.run();
+            });
+        }
+
+        populateFavorites.run();
+
+        // Populate Standard Presets
+        if (layoutPresetsList != null) {
+            layoutPresetsList.removeAllViews();
+            for (int preset : ZoomFavoritesManager.PRESET_ZOOM_LEVELS) {
+                View presetItem = LayoutInflater.from(this).inflate(R.layout.item_preset_zoom_level, layoutPresetsList, false);
+                TextView textPresetZoomPercent = presetItem.findViewById(R.id.textPresetZoomPercent);
+                TextView badgePresetCurrent = presetItem.findViewById(R.id.badgePresetCurrent);
+
+                String label = preset == 100 ? "100% (Fit)" : (preset + "%");
+                textPresetZoomPercent.setText(label);
+                if (preset == currentZoom) {
+                    badgePresetCurrent.setVisibility(View.VISIBLE);
+                } else {
+                    badgePresetCurrent.setVisibility(View.GONE);
+                }
+
+                presetItem.setOnClickListener(v -> {
+                    canvasView.setZoom(preset);
+                    dialog.dismiss();
+                });
+
+                layoutPresetsList.addView(presetItem);
+            }
+        }
+
+        if (btnResetZoomDialog != null) {
+            btnResetZoomDialog.setOnClickListener(v -> {
+                canvasView.resetZoom();
+                dialog.dismiss();
+            });
+        }
+
+        if (btnCloseZoomDialog != null) {
+            btnCloseZoomDialog.setOnClickListener(v -> dialog.dismiss());
+        }
+
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
     }
 
     private void showLassoStyleDialog() {
@@ -2821,6 +2960,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         popup.getMenu().add(0, 12, 11, "📤 Export Handwriting Profile (.onhw)");
         popup.getMenu().add(0, 13, 12, "📥 Import Handwriting Profile (.onhw)");
         popup.getMenu().add(0, 14, 13, "↔ Adjust selected text spacing");
+        boolean isFavNotebook = currentNotebook != null && currentNotebook.isFavorite;
+        popup.getMenu().add(0, 15, 14, isFavNotebook ? "★ Remove Note from Favorites" : "☆ Bookmark Note to Favorites");
         popup.getMenu().findItem(9).setEnabled(canvasView.hasClipboardContents());
         popup.getMenu().findItem(14).setEnabled(canvasView.hasSelectedText());
 
@@ -2887,6 +3028,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     return true;
                 case 14:
                     showTextSpacingDialog();
+                    return true;
+                case 15:
+                    if (currentNotebook != null) {
+                        saveCurrentPage();
+                        currentNotebook.isFavorite = !currentNotebook.isFavorite;
+                        final boolean fav = currentNotebook.isFavorite;
+                        saveExecutor.execute(() -> dbHelper.setFavorite(notebookId, fav));
+                        Toast.makeText(this, fav ? "Bookmarked ★ (Saved to Favorites)" : "Removed from Favorites", Toast.LENGTH_SHORT).show();
+                    }
                     return true;
             }
             return false;

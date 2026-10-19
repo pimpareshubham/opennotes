@@ -451,10 +451,8 @@ public class CanvasView extends View {
             if (hasClipboardContents()) {
                 longPressTriggered = true;
                 performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-                if (activeStroke != null && activeStroke.points != null && activeStroke.points.size() <= 6) {
-                    activeStroke = null;
-                    invalidate();
-                }
+                activeStroke = null;
+                invalidate();
                 if (longPressListener != null) {
                     longPressListener.onCanvasLongPress(touchDownRawX, touchDownRawY, touchDownCanvasX, touchDownCanvasY);
                 }
@@ -3339,6 +3337,8 @@ public class CanvasView extends View {
             if (currentPage != targetPage) return;
             if (payload != null && payload.hasContents()) {
                 pasteClipboardPayloadAt(payload, targetX, targetY);
+            } else if (!clipboardStrokes.isEmpty() || !clipboardShapes.isEmpty() || !clipboardTexts.isEmpty() || !clipboardImages.isEmpty()) {
+                pasteClipboardPayloadAt(new SelectionClipboard.Payload(clipboardStrokes, clipboardShapes, clipboardTexts, clipboardImages, clipboardCenterX, clipboardCenterY), targetX, targetY);
             } else if (hasSystemClipboardText()) {
                 pasteSystemClipboardTextAt(targetX, targetY);
             }
@@ -4458,17 +4458,24 @@ public class CanvasView extends View {
             touchDownCanvasY = canvasY;
             longPressTriggered = false;
             removeCallbacks(longPressPasteRunnable);
-            if (hasClipboardContents() && currentTool != DrawingTool.LASSO) {
-                postDelayed(longPressPasteRunnable, 420);
+            if (hasClipboardContents()) {
+                if (currentTool != DrawingTool.LASSO || !hasLassoSelection || selectionBounds == null || !selectionBounds.contains(canvasX, canvasY)) {
+                    postDelayed(longPressPasteRunnable, 420);
+                }
             }
         } else if (action == MotionEvent.ACTION_MOVE) {
-            if (!longPressTriggered && Math.hypot(rawX - touchDownRawX, rawY - touchDownRawY) > touchSlop) {
+            if (longPressTriggered) {
+                return true;
+            }
+            if (Math.hypot(rawX - touchDownRawX, rawY - touchDownRawY) > touchSlop) {
                 removeCallbacks(longPressPasteRunnable);
             }
         } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             removeCallbacks(longPressPasteRunnable);
             if (longPressTriggered) {
                 longPressTriggered = false;
+                activeStroke = null;
+                invalidate();
                 return true;
             }
         }
