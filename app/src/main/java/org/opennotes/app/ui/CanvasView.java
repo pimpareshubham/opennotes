@@ -273,8 +273,18 @@ public class CanvasView extends View {
     private float clipboardCenterX;
     private float clipboardCenterY;
 
+    // Bitmap rendering paint with bilinear filtering, antialiasing and dithering for ultra-sharp quality
+    private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
+    private boolean needsInitialFit = false;
+
     // Bitmap LRU cache for fast, memory-safe rendering of on-page images and PDF pages
-    private final android.util.LruCache<String, Bitmap> imageCache = new android.util.LruCache<>(25);
+    private final android.util.LruCache<String, Bitmap> imageCache = new android.util.LruCache<String, Bitmap>(
+            Math.max(16 * 1024 * 1024, (int) (Runtime.getRuntime().maxMemory() / 4))) {
+        @Override
+        protected int sizeOf(String key, Bitmap bitmap) {
+            return bitmap != null ? bitmap.getByteCount() : 1;
+        }
+    };
 
     // Scrollbar indicator
     private final Paint scrollbarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -728,20 +738,36 @@ public class CanvasView extends View {
             }
         }
         viewportOffsetY = 0f;
-        scaleFactor = 1.0f;
-        panOffsetX = 0f;
-        panOffsetY = 0f;
         clearSelection();
         cancelPendingAutoConversion();
         undoStack.clear();
         redoStack.clear();
         syncAccessibilityActions();
-        invalidate();
-        notifyZoomChange();
+
+        if (getBackgroundImage() != null) {
+            if (getWidth() > 0 && getHeight() > 0) {
+                fitPageToAvailableSpace(false);
+            } else {
+                needsInitialFit = true;
+                scaleFactor = 1.0f;
+                panOffsetX = 0f;
+                panOffsetY = 0f;
+                invalidate();
+                notifyZoomChange();
+            }
+        } else {
+            needsInitialFit = false;
+            scaleFactor = 1.0f;
+            panOffsetX = 0f;
+            panOffsetY = 0f;
+            invalidate();
+            notifyZoomChange();
+        }
     }
 
     /** Restores the user's viewing position after the editor is recreated. */
     public void restoreViewport(float zoomPercent, float panX, float panY, float scrollY) {
+        needsInitialFit = false;
         scaleFactor = Math.max(0.10f, Math.min(16.0f, zoomPercent / 100f));
         panOffsetX = panX;
         panOffsetY = panY;
@@ -749,6 +775,95 @@ public class CanvasView extends View {
         invalidate();
         notifyZoomChange();
         notifyLassoSelection();
+    }
+
+    @Nullable
+    public ImageItem getBackgroundImage() {
+        if (currentPage != null && currentPage.images != null) {
+            for (ImageItem img : currentPage.images) {
+                if (img != null && img.isBackground) {
+                    return img;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Fits the current page (e.g. an imported PDF or document page) to the available screen space.
+     * In portrait/vertical orientation: fits page width to available view width edge-to-edge
+     * and centers vertically (or aligns to top if taller than view).
+     * In landscape/wide orientation: fits the entire page cleanly within the view and centers it.
+     */
+    public void fitPageToAvailableSpace(boolean animated) {
+        int viewW = getWidth();
+        int viewH = getHeight();
+        if (viewW <= 0 || viewH <= 0) {
+            needsInitialFit = true;
+            return;
+        }
+
+        ImageItem bgImg = getBackgroundImage();
+        float pageW = (bgImg != null) ? bgImg.width : viewW;
+        float pageH = (bgImg != null) ? bgImg.height : (contentHeight > 0 ? contentHeight : viewH);
+
+        if (pageW <= 0f) pageW = viewW;
+        if (pageH <= 0f) pageH = viewH;
+
+        float targetScale;
+        if (viewH >= viewW) {
+            // Portrait / tall orientation: fit to width for seamless edge-to-edge reading
+            targetScale = (float) viewW / pageW;
+        } else {
+            // Landscape / wide orientation: fit page comfortably within view
+            float scaleW = (float) viewW / pageW;
+            float scaleH = (float) viewH / pageH;
+            targetScale = Math.min(scaleW, scaleH);
+        }
+
+        // Clamp scale to supported canvas zoom range
+        targetScale = Math.max(0.10f, Math.min(16.0f, targetScale));
+
+        // Center horizontally
+        float targetPanX = (viewW - pageW * targetScale) * 0.5f;
+
+        // Position vertically: center if shorter than view, or align to top
+        float targetPanY;
+        if (pageH * targetScale <= viewH) {
+            targetPanY = (viewH - pageH * targetScale) * 0.5f;
+        } else {
+            targetPanY = 0f;
+        }
+
+        viewportOffsetY = 0f;
+
+        if (animated) {
+            float startScale = scaleFactor;
+            float startPanX = panOffsetX;
+            float startPanY = panOffsetY;
+
+            android.animation.ValueAnimator anim = android.animation.ValueAnimator.ofFloat(0f, 1f);
+            anim.setDuration(280);
+            anim.setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f));
+            float finalTargetScale = targetScale;
+            anim.addUpdateListener(animation -> {
+                float fraction = animation.getAnimatedFraction();
+                scaleFactor = startScale + (finalTargetScale - startScale) * fraction;
+                panOffsetX = startPanX + (targetPanX - startPanX) * fraction;
+                panOffsetY = startPanY + (targetPanY - startPanY) * fraction;
+                invalidate();
+                notifyZoomChange();
+                notifyLassoSelection();
+            });
+            anim.start();
+        } else {
+            scaleFactor = targetScale;
+            panOffsetX = targetPanX;
+            panOffsetY = targetPanY;
+            invalidate();
+            notifyZoomChange();
+            notifyLassoSelection();
+        }
     }
 
     public float getPanOffsetX() { return panOffsetX; }
@@ -836,7 +951,11 @@ public class CanvasView extends View {
     }
 
     public void resetZoom() {
-        resetZoom(100f);
+        if (getBackgroundImage() != null) {
+            fitPageToAvailableSpace(true);
+        } else {
+            resetZoom(100f);
+        }
     }
 
     public void resetZoom(float targetZoomPercent) {
@@ -2041,10 +2160,12 @@ public class CanvasView extends View {
                     BitmapFactory.decodeFile(img.imagePath, opts);
                     opts.inSampleSize = 1;
                     int maxDim = Math.max(opts.outWidth, opts.outHeight);
-                    while (maxDim / opts.inSampleSize > 2048) {
+                    // Safe texture limit for modern OpenGL ES devices (supports full 4K / 300 DPI A4)
+                    while (maxDim / opts.inSampleSize > 4096) {
                         opts.inSampleSize *= 2;
                     }
                     opts.inJustDecodeBounds = false;
+                    opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
                     bmp = BitmapFactory.decodeFile(img.imagePath, opts);
                     if (bmp != null) {
                         imageCache.put(img.imagePath, bmp);
@@ -2053,7 +2174,7 @@ public class CanvasView extends View {
             } catch (Throwable ignored) {}
         }
         if (bmp != null && !bmp.isRecycled()) {
-            canvas.drawBitmap(bmp, null, img.getBounds(), null);
+            canvas.drawBitmap(bmp, null, img.getBounds(), bitmapPaint);
         } else {
             Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
             border.setStyle(Paint.Style.STROKE);
@@ -2204,6 +2325,16 @@ public class CanvasView extends View {
             contentHeight = isInfinite ? h * 2.5f : h;
             if (currentPage != null && isInfinite) {
                 currentPage.canvasHeight = contentHeight;
+            }
+        }
+        if (w > 0 && h > 0) {
+            if (needsInitialFit || oldw == 0 || oldh == 0) {
+                needsInitialFit = false;
+                if (getBackgroundImage() != null) {
+                    fitPageToAvailableSpace(false);
+                }
+            } else if (getBackgroundImage() != null && (w != oldw || h != oldh)) {
+                fitPageToAvailableSpace(false);
             }
         }
     }

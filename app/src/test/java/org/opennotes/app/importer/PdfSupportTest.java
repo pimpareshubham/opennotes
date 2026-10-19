@@ -29,4 +29,13 @@ public class PdfSupportTest {
         assertEquals(1080f, pdfBg.width, 0.001f);
         assertEquals(1528f, pdfBg.height, 0.001f);
     }
+
+    @Test
+    public void testUltraHdPngBackgroundSupport() {
+        ImageItem ultraHdBg = new ImageItem("/path/to/page_0.png", 0f, 0f, 1440f, 2038f, null, true);
+        assertTrue(ultraHdBg.isBackground);
+        assertEquals("/path/to/page_0.png", ultraHdBg.imagePath);
+        assertEquals(1440f, ultraHdBg.width, 0.001f);
+        assertEquals(2038f, ultraHdBg.height, 0.001f);
+    }
 }

@@ -99,7 +99,7 @@ public final class PdfImporter {
             }
 
             List<Page> notebookPages = new ArrayList<>(pageCount);
-            float standardCanvasWidth = 1080f;
+            float standardCanvasWidth = 1440f;
 
             for (int i = 0; i < pageCount; i++) {
                 if (listener != null) {
@@ -116,21 +116,22 @@ public final class PdfImporter {
                 // Scale canvas height proportionally to original page aspect ratio
                 float canvasHeight = standardCanvasWidth * ((float) origH / (float) origW);
 
-                // High-resolution bitmap render scale (up to 2.5x point size, capped for memory safety)
-                float renderScale = Math.min(2.5f, 2048f / Math.max(origW, origH));
+                // Ultra-HD Print-Grade Rendering: true 300 DPI (300 / 72 = 4.1667x) up to 3840px
+                float dpiScale = 300f / 72f;
+                float renderScale = Math.min(dpiScale, 3840f / Math.max(origW, origH));
                 int bmpW = Math.max(1, Math.round(origW * renderScale));
                 int bmpH = Math.max(1, Math.round(origH * renderScale));
 
                 Bitmap bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
                 bitmap.eraseColor(Color.WHITE); // Base white page background
 
-                pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
                 pdfPage.close();
 
-                // Compress rendered page to JPEG for crisp text and fast I/O
-                File pageImgFile = new File(docDir, "page_" + i + ".jpg");
+                // Compress rendered page to lossless PNG for original maximum possible quality
+                File pageImgFile = new File(docDir, "page_" + i + ".png");
                 try (FileOutputStream imgOut = new FileOutputStream(pageImgFile)) {
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 92, imgOut);
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, imgOut);
                     imgOut.flush();
                 }
                 bitmap.recycle();
@@ -211,7 +212,7 @@ public final class PdfImporter {
                 throw new IOException("Failed to create storage directory: " + docDir.getAbsolutePath());
             }
 
-            float standardCanvasWidth = 1080f;
+            float standardCanvasWidth = 1440f;
 
             for (int i = 0; i < pageCount; i++) {
                 if (listener != null) {
@@ -225,18 +226,19 @@ public final class PdfImporter {
                 if (origH <= 0) origH = 842;
 
                 float canvasHeight = standardCanvasWidth * ((float) origH / (float) origW);
-                float renderScale = Math.min(2.5f, 2048f / Math.max(origW, origH));
+                float dpiScale = 300f / 72f;
+                float renderScale = Math.min(dpiScale, 3840f / Math.max(origW, origH));
                 int bmpW = Math.max(1, Math.round(origW * renderScale));
                 int bmpH = Math.max(1, Math.round(origH * renderScale));
 
                 Bitmap bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
                 bitmap.eraseColor(Color.WHITE);
-                pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
                 pdfPage.close();
 
-                File pageImgFile = new File(docDir, "page_append_" + (startIndex + i) + ".jpg");
+                File pageImgFile = new File(docDir, "page_append_" + (startIndex + i) + ".png");
                 try (FileOutputStream imgOut = new FileOutputStream(pageImgFile)) {
-                    bitmap.compress(Bitmap.CompressFormat.JPEG, 92, imgOut);
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, imgOut);
                     imgOut.flush();
                 }
                 bitmap.recycle();

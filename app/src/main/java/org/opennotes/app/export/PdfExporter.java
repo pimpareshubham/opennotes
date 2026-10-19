@@ -85,6 +85,7 @@ public class PdfExporter {
 
             // 1. Draw Images (background PDF layers first, then foreground stickers)
             if (page.images != null) {
+                Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
                 for (ImageItem img : page.images) {
                     if (img != null && img.isBackground && img.imagePath != null) {
                         File imgFile = new File(img.imagePath);
@@ -92,7 +93,7 @@ public class PdfExporter {
                         try {
                             Bitmap bmp = BitmapFactory.decodeFile(img.imagePath);
                             if (bmp != null) {
-                                canvas.drawBitmap(bmp, null, img.getBounds(), null);
+                                canvas.drawBitmap(bmp, null, img.getBounds(), imagePaint);
                             }
                         } catch (Throwable ignored) {}
                     }
@@ -104,7 +105,7 @@ public class PdfExporter {
                         try {
                             Bitmap bmp = BitmapFactory.decodeFile(img.imagePath);
                             if (bmp != null) {
-                                canvas.drawBitmap(bmp, null, img.getBounds(), null);
+                                canvas.drawBitmap(bmp, null, img.getBounds(), imagePaint);
                             }
                         } catch (Throwable ignored) {}
                     }
