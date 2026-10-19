@@ -244,10 +244,11 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     private void setupLayoutManager() {
         int screenWidthDp = getResources().getConfiguration().screenWidthDp;
         int verticalPadding = Math.round(12f * getResources().getDisplayMetrics().density);
+        int bottomPadding = Math.round(92f * getResources().getDisplayMetrics().density);
         int horizontalPaddingDp = isGridView
                 ? 12 : Math.max(12, (screenWidthDp - 900) / 2 + 12);
         int horizontalPadding = Math.round(horizontalPaddingDp * getResources().getDisplayMetrics().density);
-        recyclerView.setPadding(horizontalPadding, verticalPadding, horizontalPadding, verticalPadding);
+        recyclerView.setPadding(horizontalPadding, verticalPadding, horizontalPadding, bottomPadding);
         if (isGridView) {
             int availableWidthDp = Math.max(1,
                     screenWidthDp - 24);
@@ -665,10 +666,30 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     @Override
     public void onSelectionModeChanged(boolean isSelectionMode, int selectedCount) {
         if (layoutNormalTopBar != null) {
-            layoutNormalTopBar.setVisibility(isSelectionMode ? View.GONE : View.VISIBLE);
+            layoutNormalTopBar.setVisibility(View.VISIBLE);
         }
         if (layoutSelectionBar != null) {
-            layoutSelectionBar.setVisibility(isSelectionMode ? View.VISIBLE : View.GONE);
+            if (isSelectionMode) {
+                if (layoutSelectionBar.getVisibility() != View.VISIBLE) {
+                    layoutSelectionBar.setVisibility(View.VISIBLE);
+                    layoutSelectionBar.setAlpha(0f);
+                    layoutSelectionBar.setTranslationY(40f);
+                    layoutSelectionBar.animate()
+                            .alpha(1f)
+                            .translationY(0f)
+                            .setDuration(180)
+                            .start();
+                }
+            } else {
+                if (layoutSelectionBar.getVisibility() == View.VISIBLE) {
+                    layoutSelectionBar.animate()
+                            .alpha(0f)
+                            .translationY(40f)
+                            .setDuration(150)
+                            .withEndAction(() -> layoutSelectionBar.setVisibility(View.GONE))
+                            .start();
+                }
+            }
         }
         if (fabNew != null) {
             if (isSelectionMode) fabNew.hide(); else fabNew.show();

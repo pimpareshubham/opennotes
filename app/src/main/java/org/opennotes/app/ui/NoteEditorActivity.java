@@ -84,6 +84,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import org.opennotes.app.ai.UserHandwritingModel;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
@@ -1462,8 +1463,26 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         updateViewportLockIcon();
 
         btnResetZoom.setOnClickListener(v -> {
-            canvasView.resetZoom();
-            Toast.makeText(this, "Zoom reset to 100%", Toast.LENGTH_SHORT).show();
+            long now = SystemClock.uptimeMillis();
+            if (now - lastResetZoomClickTime < 350L) {
+                lastResetZoomClickTime = 0L;
+                resetZoomHandler.removeCallbacksAndMessages(null);
+                showResetZoomFavoritesMenu();
+            } else {
+                lastResetZoomClickTime = now;
+                resetZoomHandler.removeCallbacksAndMessages(null);
+                resetZoomHandler.postDelayed(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    int targetResetZoom = ZoomFavoritesManager.getDefaultResetZoom(this);
+                    canvasView.resetZoom(targetResetZoom);
+                    Toast.makeText(this, "Zoom reset to " + targetResetZoom + "%", Toast.LENGTH_SHORT).show();
+                }, 300L);
+            }
+        });
+        btnResetZoom.setOnLongClickListener(v -> {
+            resetZoomHandler.removeCallbacksAndMessages(null);
+            showResetZoomFavoritesMenu();
+            return true;
         });
 
         btnPrevPage.setOnClickListener(v -> {
@@ -1534,6 +1553,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private DrawingTool lastClickedTool = null;
     private long lastEraserClickTime = 0L;
     private long lastLassoClickTime = 0L;
+    private long lastResetZoomClickTime = 0L;
+    private final Handler resetZoomHandler = new Handler(Looper.getMainLooper());
 
     public void closeToolPropertiesCard() {
         if (cardToolProperties != null && cardToolProperties.getVisibility() == View.VISIBLE) {
@@ -2328,6 +2349,59 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
     }
 
+    private void showResetZoomFavoritesMenu() {
+        if (canvasView == null) return;
+        List<Integer> favorites = ZoomFavoritesManager.getFavoriteZoomLevels(this);
+        List<Integer> sortedOptions = new ArrayList<>();
+        if (favorites != null && !favorites.isEmpty()) {
+            sortedOptions.addAll(favorites);
+        } else {
+            sortedOptions.add(50);
+            sortedOptions.add(100);
+            sortedOptions.add(150);
+            sortedOptions.add(200);
+        }
+        if (!sortedOptions.contains(100)) {
+            sortedOptions.add(100);
+        }
+        Collections.sort(sortedOptions);
+
+        int currentReset = ZoomFavoritesManager.getDefaultResetZoom(this);
+        List<String> displayItems = new ArrayList<>();
+        List<Integer> optionValues = new ArrayList<>();
+
+        for (int zoom : sortedOptions) {
+            String label = "★ " + zoom + "%";
+            if (zoom == currentReset) {
+                label += "  ✓ (Active Reset)";
+            }
+            displayItems.add(label);
+            optionValues.add(zoom);
+        }
+
+        displayItems.add("⚙️ All Zoom Levels / Manage Favorites…");
+        optionValues.add(-1);
+
+        String[] items = displayItems.toArray(new String[0]);
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                .setTitle("Select Reset Zoom (Favorites)")
+                .setItems(items, (dialog, which) -> {
+                    if (which >= 0 && which < optionValues.size()) {
+                        int chosenZoom = optionValues.get(which);
+                        if (chosenZoom == -1) {
+                            showZoomPickerDialog();
+                        } else {
+                            ZoomFavoritesManager.setDefaultResetZoom(this, chosenZoom);
+                            canvasView.resetZoom(chosenZoom);
+                            Toast.makeText(this, "Reset zoom set to " + chosenZoom + "% ★", Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                })
+                .setNegativeButton("Cancel", null);
+
+        ThemeUtils.showStyledDialog(builder, this);
+    }
+
     private void showZoomPickerDialog() {
         if (canvasView == null) return;
         final int currentZoom = Math.round(canvasView.getZoomPercent());
@@ -2450,7 +2524,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         if (btnResetZoomDialog != null) {
             btnResetZoomDialog.setOnClickListener(v -> {
-                canvasView.resetZoom();
+                int target = ZoomFavoritesManager.getDefaultResetZoom(this);
+                canvasView.resetZoom(target);
                 dialog.dismiss();
             });
         }
@@ -4859,6 +4934,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             try { audioMemoPlayer.release(); audioMemoPlayer = null; } catch (Exception ignored) {}
         }
         saveDebounceHandler.removeCallbacksAndMessages(null);
+        resetZoomHandler.removeCallbacksAndMessages(null);
         saveCurrentPage();
         try {
             saveExecutor.shutdown();

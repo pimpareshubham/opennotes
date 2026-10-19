@@ -836,7 +836,12 @@ public class CanvasView extends View {
     }
 
     public void resetZoom() {
+        resetZoom(100f);
+    }
+
+    public void resetZoom(float targetZoomPercent) {
         float startScale = scaleFactor;
+        float targetScale = Math.max(0.10f, Math.min(16.0f, targetZoomPercent / 100f));
         float focusX = getWidth() * 0.5f;
         float focusY = getHeight() * 0.5f;
         float anchoredCanvasX = (focusX - panOffsetX) / Math.max(0.01f, startScale);
@@ -847,7 +852,7 @@ public class CanvasView extends View {
         anim.setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f));
         anim.addUpdateListener(animation -> {
             float fraction = animation.getAnimatedFraction();
-            scaleFactor = startScale + (1.0f - startScale) * fraction;
+            scaleFactor = startScale + (targetScale - startScale) * fraction;
             panOffsetX = focusX - anchoredCanvasX * scaleFactor;
             panOffsetY = focusY - (anchoredCanvasY - viewportOffsetY) * scaleFactor;
             invalidate();

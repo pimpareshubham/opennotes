@@ -83,4 +83,23 @@ public class ZoomFavoritesManager {
         set.remove(String.valueOf(zoomPercent));
         prefs.edit().putStringSet(KEY_FAVORITES, set).apply();
     }
+
+    private static final String KEY_DEFAULT_RESET_ZOOM = "default_reset_zoom_level";
+
+    /**
+     * Gets the user's preferred zoom percentage to reset to (defaults to 100%).
+     */
+    public static synchronized int getDefaultResetZoom(Context context) {
+        SharedPreferences prefs = getPrefs(context);
+        return prefs.getInt(KEY_DEFAULT_RESET_ZOOM, 100);
+    }
+
+    /**
+     * Sets the user's preferred zoom percentage to reset to.
+     */
+    public static synchronized void setDefaultResetZoom(Context context, int zoomPercent) {
+        if (zoomPercent < 10 || zoomPercent > 2000) return;
+        SharedPreferences prefs = getPrefs(context);
+        prefs.edit().putInt(KEY_DEFAULT_RESET_ZOOM, zoomPercent).apply();
+    }
 }

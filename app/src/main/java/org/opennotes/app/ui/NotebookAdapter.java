@@ -145,9 +145,6 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
 
     @Override
     public int getItemViewType(int position) {
-        if (isSelectionMode) {
-            return VIEW_TYPE_NOTEBOOK;
-        }
         if (!isSearching && position == 0) {
             return VIEW_TYPE_NEW_NOTEBOOK;
         }
@@ -169,18 +166,27 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     public void onBindViewHolder(@NonNull RecyclerView.ViewHolder baseHolder, int position) {
         if (getItemViewType(position) == VIEW_TYPE_NEW_NOTEBOOK) {
             NewNotebookViewHolder holder = (NewNotebookViewHolder) baseHolder;
-            holder.itemView.setOnClickListener(v -> {
-                v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80)
-                        .withEndAction(() -> {
-                            v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start();
-                            if (listener != null) listener.onCreateNewNotebookClick();
-                        }).start();
-            });
+            if (isSelectionMode) {
+                holder.itemView.setAlpha(0.6f);
+                holder.itemView.setOnClickListener(v -> {
+                    exitSelectionMode();
+                    if (listener != null) listener.onCreateNewNotebookClick();
+                });
+            } else {
+                holder.itemView.setAlpha(1.0f);
+                holder.itemView.setOnClickListener(v -> {
+                    v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80)
+                            .withEndAction(() -> {
+                                v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start();
+                                if (listener != null) listener.onCreateNewNotebookClick();
+                            }).start();
+                });
+            }
             return;
         }
 
         NotebookViewHolder holder = (NotebookViewHolder) baseHolder;
-        int notebookIndex = (isSearching || isSelectionMode) ? position : position - 1;
+        int notebookIndex = isSearching ? position : position - 1;
         if (notebookIndex < 0 || notebooks == null || notebookIndex >= notebooks.size()) return;
 
         Notebook nb = notebooks.get(notebookIndex);
@@ -259,7 +265,7 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
     @Override
     public int getItemCount() {
         if (notebooks == null) return 0;
-        if (isSelectionMode || isSearching) {
+        if (isSearching) {
             return notebooks.size();
         }
         return notebooks.size() + 1;
