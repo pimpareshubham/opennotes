@@ -38,4 +38,26 @@ public class PdfSupportTest {
         assertEquals(1440f, ultraHdBg.width, 0.001f);
         assertEquals(2038f, ultraHdBg.height, 0.001f);
     }
+
+    @Test
+    public void testAmoledInversionCalculations() {
+        float contrast = -1.378f;
+        float offset = 324f;
+
+        // White paper (255) -> Pure Black (<= 0)
+        float whiteToBlack = contrast * 255f + offset;
+        assertTrue("White paper must map to <= 0 for Super AMOLED pure black", whiteToBlack <= 0f);
+
+        // Off-white paper (240) -> Pure Black (<= 0)
+        float offWhiteToBlack = contrast * 240f + offset;
+        assertTrue("Off-white paper must map to <= 0 for Super AMOLED pure black", offWhiteToBlack <= 0f);
+
+        // Black text (0) -> Crisp Pure White (>= 255)
+        float blackToWhite = contrast * 0f + offset;
+        assertTrue("Black text must map to >= 255 for razor-sharp legibility", blackToWhite >= 255f);
+
+        // Dark gray text (30) -> Crisp White (>= 255)
+        float darkGrayToWhite = contrast * 30f + offset;
+        assertTrue("Dark gray text must map to >= 255", darkGrayToWhite >= 255f);
+    }
 }

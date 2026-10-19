@@ -151,7 +151,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private LinearLayout floatingViewportPill, floatingPageNavPill;
     private ImageView btnFavorite;
     private TextView textZoomPercent;
-    private ImageView btnLockViewport, btnResetZoom;
+    private ImageView btnLockViewport, btnResetZoom, btnPdfAmoledToggle;
     private ImageView btnPrevPage, btnNextPage, btnAddPage;
     private TextView textPageCounter;
 
@@ -470,6 +470,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         textZoomPercent = findViewById(R.id.textZoomPercent);
         btnLockViewport = findViewById(R.id.btnLockViewport);
         btnResetZoom = findViewById(R.id.btnResetZoom);
+        btnPdfAmoledToggle = findViewById(R.id.btnPdfAmoledToggle);
         btnPrevPage = findViewById(R.id.btnPrevPage);
         textPageCounter = findViewById(R.id.textPageCounter);
         btnNextPage = findViewById(R.id.btnNextPage);
@@ -527,6 +528,18 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         canvasView.setOnCanvasChangeListener(this);
+        canvasView.setOnPageSwipeListener(new CanvasView.OnPageSwipeListener() {
+            @Override
+            public void onSwipeNextPage() {
+                goToNextPageWithAnimation();
+            }
+
+            @Override
+            public void onSwipePrevPage() {
+                goToPrevPageWithAnimation();
+            }
+        });
+        applySwipeGesturesConfig();
         canvasView.setOnCanvasLongPressListener((rawX, rawY, canvasX, canvasY) -> {
             if (canvasView.hasClipboardContents()) {
                 showLongPressPastePopup(rawX, rawY, canvasX, canvasY);
@@ -1192,6 +1205,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void loadCurrentPage() {
         if (currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
         currentPage = pages.get(currentPageIndex);
+        if (appSettings != null) {
+            canvasView.setPdfAmoledDarkMode(appSettings.isPdfAmoledDarkMode());
+        }
         canvasView.setPage(currentPage);
         updatePageNavUi();
         updateUndoRedoUi();
@@ -1203,6 +1219,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnPrevPage.setAlpha(currentPageIndex > 0 ? 1.0f : 0.35f);
         btnNextPage.setEnabled(currentPageIndex < pages.size() - 1);
         btnNextPage.setAlpha(currentPageIndex < pages.size() - 1 ? 1.0f : 0.35f);
+
+        if (btnPdfAmoledToggle != null) {
+            boolean hasBg = canvasView != null && canvasView.getBackgroundImage() != null;
+            btnPdfAmoledToggle.setVisibility(hasBg ? View.VISIBLE : View.GONE);
+            boolean amoledActive = appSettings != null && appSettings.isPdfAmoledDarkMode();
+            btnPdfAmoledToggle.setColorFilter(amoledActive ? 0xFF38BDF8 : 0xFF94A3B8);
+        }
     }
 
     private void updateUndoRedoUi() {
@@ -1528,25 +1551,33 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             return true;
         });
 
-        btnPrevPage.setOnClickListener(v -> {
-            if (pages != null && currentPageIndex > 0) {
-                saveCurrentPage();
-                currentPageIndex--;
-                loadCurrentPage();
-            }
+        if (btnPdfAmoledToggle != null) {
+            btnPdfAmoledToggle.setOnClickListener(v -> togglePdfAmoledDarkMode());
+            btnPdfAmoledToggle.setOnLongClickListener(v -> {
+                showSwipeGestureOptionsDialog();
+                return true;
+            });
+        }
+
+        btnPrevPage.setOnClickListener(v -> goToPrevPageWithAnimation());
+        btnPrevPage.setOnLongClickListener(v -> {
+            showSwipeGestureOptionsDialog();
+            return true;
         });
 
-        btnNextPage.setOnClickListener(v -> {
-            if (pages != null && currentPageIndex < pages.size() - 1) {
-                saveCurrentPage();
-                currentPageIndex++;
-                loadCurrentPage();
-            }
+        btnNextPage.setOnClickListener(v -> goToNextPageWithAnimation());
+        btnNextPage.setOnLongClickListener(v -> {
+            showSwipeGestureOptionsDialog();
+            return true;
         });
 
         btnAddPage.setOnClickListener(v -> showAddPageMenu(v, null, null));
 
         textPageCounter.setOnClickListener(v -> showPageOverviewDialog());
+        textPageCounter.setOnLongClickListener(v -> {
+            showSwipeGestureOptionsDialog();
+            return true;
+        });
 
         // Contextual Lasso Action Bar
         btnLassoDelete.setOnClickListener(v -> canvasView.deleteSelection());
@@ -3449,7 +3480,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     Toast.makeText(this, next ? "Palm Rejection ON (Stylus-only drawing)" : "Touch & Stylus drawing ON", Toast.LENGTH_SHORT).show();
                 })
                 .addOption(5, "✨", "Auto-Beautification Settings", "Configure automatic shape & stroke smoothing", false, this::showAutoBeautifySettingsDialog)
-                .addOption(7, "➰", "Select All Content", "Select all ink strokes and items on this page", false, () -> {
+                .addOption(6, "🌙", "Super AMOLED Dark Mode (PDF)",
+                        appSettings != null && appSettings.isPdfAmoledDarkMode() ? "Forced pure black AMOLED mode ON" : "Disabled (Original PDF white background)",
+                        appSettings != null && appSettings.isPdfAmoledDarkMode(), this::togglePdfAmoledDarkMode)
+                .addOption(7, "↔️", "Page Swipe Gestures", "Configure swipe left/right gestures for PDF & notebook pages", false, this::showSwipeGestureOptionsDialog)
+                .addOption(8, "➰", "Select All Content", "Select all ink strokes and items on this page", false, () -> {
                     if (!canvasView.selectAllContent()) {
                         Toast.makeText(this, "There is no content on this page to select", Toast.LENGTH_SHORT).show();
                     } else if (canvasView.getTool() != DrawingTool.LASSO) {
@@ -3842,7 +3877,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     Toast.makeText(this, next ? "Palm Rejection ON (Stylus-only drawing)" : "Touch & Stylus drawing ON", Toast.LENGTH_SHORT).show();
                 })
                 .addOption(4, "✨", "Auto-Beautification Settings", "Configure automatic shape & stroke smoothing", false, this::showAutoBeautifySettingsDialog)
-                .addDestructiveOption(5, "🗑️", "Clear Canvas", "Erase all strokes on this page", () -> {
+                .addOption(5, "🌙", "Super AMOLED Dark Mode (PDF)",
+                        appSettings != null && appSettings.isPdfAmoledDarkMode() ? "Forced pure black AMOLED mode ON" : "Disabled (Original PDF white background)",
+                        appSettings != null && appSettings.isPdfAmoledDarkMode(), this::togglePdfAmoledDarkMode)
+                .addOption(6, "↔️", "Page Swipe Gestures", "Configure swipe left/right gestures for PDF & notebook pages", false, this::showSwipeGestureOptionsDialog)
+                .addDestructiveOption(7, "🗑️", "Clear Canvas", "Erase all strokes on this page", () -> {
                     MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
                             .setTitle("Clear Canvas")
                             .setMessage("Are you sure you want to clear all strokes on this page?")
@@ -3850,6 +3889,167 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             .setNegativeButton("Cancel", null);
                     ThemeUtils.showStyledDialog(builder, this);
                 })
+                .show();
+    }
+
+    private void togglePdfAmoledDarkMode() {
+        if (appSettings == null || canvasView == null) return;
+        boolean next = !appSettings.isPdfAmoledDarkMode();
+        appSettings.setPdfAmoledDarkMode(next);
+        canvasView.setPdfAmoledDarkMode(next);
+        updatePageNavUi();
+        if (btnPdfAmoledToggle != null) {
+            btnPdfAmoledToggle.animate().scaleX(1.35f).scaleY(1.35f).setDuration(120)
+                    .withEndAction(() -> btnPdfAmoledToggle.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start())
+                    .start();
+        }
+        Toast.makeText(this, next ? "Super AMOLED Dark Mode ON (Pure Black)" : "Super AMOLED Dark Mode OFF", Toast.LENGTH_SHORT).show();
+    }
+
+    private void applySwipeGesturesConfig() {
+        if (canvasView == null || appSettings == null) return;
+        canvasView.setSwipeGesturesConfig(
+                appSettings.isSwipePageEnabled(),
+                appSettings.isSwipeTwoFingerEnabled(),
+                appSettings.isSwipeSingleFingerEnabled(),
+                appSettings.isSwipeEdgeEnabled(),
+                appSettings.getSwipeSensitivity()
+        );
+    }
+
+    private void goToNextPageWithAnimation() {
+        if (pages == null || pages.isEmpty()) return;
+        if (currentPageIndex < pages.size() - 1) {
+            saveCurrentPage();
+            currentPageIndex++;
+            int viewWidth = canvasView.getWidth() > 0 ? canvasView.getWidth() : 1080;
+            canvasView.animate()
+                    .translationX(-viewWidth * 0.18f)
+                    .alpha(0.6f)
+                    .setDuration(110)
+                    .withEndAction(() -> {
+                        loadCurrentPage();
+                        canvasView.setTranslationX(viewWidth * 0.18f);
+                        canvasView.animate()
+                                .translationX(0f)
+                                .alpha(1.0f)
+                                .setDuration(140)
+                                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f))
+                                .start();
+                    })
+                    .start();
+        } else {
+            canvasView.animate()
+                    .translationX(-dp(30f))
+                    .setDuration(90)
+                    .withEndAction(() -> canvasView.animate().translationX(0f).setDuration(120).start())
+                    .start();
+            Toast.makeText(this, "Last page (" + pages.size() + " / " + pages.size() + ")", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void goToPrevPageWithAnimation() {
+        if (pages == null || pages.isEmpty()) return;
+        if (currentPageIndex > 0) {
+            saveCurrentPage();
+            currentPageIndex--;
+            int viewWidth = canvasView.getWidth() > 0 ? canvasView.getWidth() : 1080;
+            canvasView.animate()
+                    .translationX(viewWidth * 0.18f)
+                    .alpha(0.6f)
+                    .setDuration(110)
+                    .withEndAction(() -> {
+                        loadCurrentPage();
+                        canvasView.setTranslationX(-viewWidth * 0.18f);
+                        canvasView.animate()
+                                .translationX(0f)
+                                .alpha(1.0f)
+                                .setDuration(140)
+                                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f))
+                                .start();
+                    })
+                    .start();
+        } else {
+            canvasView.animate()
+                    .translationX(dp(30f))
+                    .setDuration(90)
+                    .withEndAction(() -> canvasView.animate().translationX(0f).setDuration(120).start())
+                    .start();
+            Toast.makeText(this, "First page (1 / " + pages.size() + ")", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void showSwipeGestureOptionsDialog() {
+        if (appSettings == null) return;
+        boolean isEnabled = appSettings.isSwipePageEnabled();
+        boolean isTwoFinger = appSettings.isSwipeTwoFingerEnabled();
+        boolean isSingleFinger = appSettings.isSwipeSingleFingerEnabled();
+        boolean isEdge = appSettings.isSwipeEdgeEnabled();
+        String sensitivity = appSettings.getSwipeSensitivity();
+        boolean isAmoled = appSettings.isPdfAmoledDarkMode();
+
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Page Swipe Gestures & PDF View")
+                .setSubtitle("Customize page turn gestures and AMOLED dark mode")
+                .setHeaderSymbol("↔️")
+                .addOption(1, "↔️", "Enable Page Swipe Gestures",
+                        isEnabled ? "Swipe gestures active (turning pages enabled)" : "Swipe gestures disabled",
+                        isEnabled, () -> {
+                            boolean next = !appSettings.isSwipePageEnabled();
+                            appSettings.setSwipePageEnabled(next);
+                            applySwipeGesturesConfig();
+                            Toast.makeText(this, next ? "Page Swipe Gestures ON" : "Page Swipe Gestures OFF", Toast.LENGTH_SHORT).show();
+                            showSwipeGestureOptionsDialog();
+                        })
+                .addOption(2, "✌️", "Two-Finger Swipe",
+                        isTwoFinger ? "Swipe 2 fingers horizontally anywhere on canvas (safe while drawing)" : "Disabled",
+                        isTwoFinger, () -> {
+                            boolean next = !appSettings.isSwipeTwoFingerEnabled();
+                            appSettings.setSwipeTwoFingerEnabled(next);
+                            applySwipeGesturesConfig();
+                            Toast.makeText(this, next ? "Two-Finger Swipe ON" : "Two-Finger Swipe OFF", Toast.LENGTH_SHORT).show();
+                            showSwipeGestureOptionsDialog();
+                        })
+                .addOption(3, "👆", "Single-Finger Swipe",
+                        isSingleFinger ? "Active in Palm Rejection (Stylus-Only) or Hand Tool mode" : "Disabled",
+                        isSingleFinger, () -> {
+                            boolean next = !appSettings.isSwipeSingleFingerEnabled();
+                            appSettings.setSwipeSingleFingerEnabled(next);
+                            applySwipeGesturesConfig();
+                            Toast.makeText(this, next ? "Single-Finger Swipe ON" : "Single-Finger Swipe OFF", Toast.LENGTH_SHORT).show();
+                            showSwipeGestureOptionsDialog();
+                        })
+                .addOption(4, "📐", "Screen-Edge Swipe",
+                        isEdge ? "Swipe inward from left/right screen margin to turn pages" : "Disabled",
+                        isEdge, () -> {
+                            boolean next = !appSettings.isSwipeEdgeEnabled();
+                            appSettings.setSwipeEdgeEnabled(next);
+                            applySwipeGesturesConfig();
+                            Toast.makeText(this, next ? "Screen-Edge Swipe ON" : "Screen-Edge Swipe OFF", Toast.LENGTH_SHORT).show();
+                            showSwipeGestureOptionsDialog();
+                        })
+                .addOption(5, "⚡", "Swipe Sensitivity",
+                        "Current: " + sensitivity + " (Tap to cycle: Normal → High → Low)",
+                        false, () -> {
+                            String next;
+                            if ("NORMAL".equalsIgnoreCase(sensitivity)) {
+                                next = "HIGH";
+                            } else if ("HIGH".equalsIgnoreCase(sensitivity)) {
+                                next = "LOW";
+                            } else {
+                                next = "NORMAL";
+                            }
+                            appSettings.setSwipeSensitivity(next);
+                            applySwipeGesturesConfig();
+                            Toast.makeText(this, "Swipe sensitivity: " + next, Toast.LENGTH_SHORT).show();
+                            showSwipeGestureOptionsDialog();
+                        })
+                .addOption(6, "🌙", "Super AMOLED Dark Mode (PDF)",
+                        isAmoled ? "Pure AMOLED black paper with crisp high-contrast text" : "Disabled (Original PDF white background)",
+                        isAmoled, () -> {
+                            togglePdfAmoledDarkMode();
+                            showSwipeGestureOptionsDialog();
+                        })
                 .show();
     }
 

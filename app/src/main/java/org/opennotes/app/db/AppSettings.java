@@ -276,4 +276,62 @@ public class AppSettings {
     public void clearDismissedHandwritingModelSetup() {
         prefs.edit().remove("pref_handwriting_model_dismissed_time").apply();
     }
+
+    // Page Swipe Gesture Preferences (for imported PDFs and multi-page notebooks)
+    private static final String KEY_SWIPE_PAGE_ENABLED = "pref_swipe_page_enabled";
+    private static final String KEY_SWIPE_TWO_FINGER = "pref_swipe_two_finger";
+    private static final String KEY_SWIPE_SINGLE_FINGER = "pref_swipe_single_finger";
+    private static final String KEY_SWIPE_EDGE_ENABLED = "pref_swipe_edge_enabled";
+    private static final String KEY_SWIPE_SENSITIVITY = "pref_swipe_sensitivity";
+
+    public boolean isSwipePageEnabled() {
+        return prefs.getBoolean(KEY_SWIPE_PAGE_ENABLED, true);
+    }
+
+    public void setSwipePageEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_SWIPE_PAGE_ENABLED, enabled).apply();
+    }
+
+    public boolean isSwipeTwoFingerEnabled() {
+        return prefs.getBoolean(KEY_SWIPE_TWO_FINGER, true);
+    }
+
+    public void setSwipeTwoFingerEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_SWIPE_TWO_FINGER, enabled).apply();
+    }
+
+    public boolean isSwipeSingleFingerEnabled() {
+        return prefs.getBoolean(KEY_SWIPE_SINGLE_FINGER, true);
+    }
+
+    public void setSwipeSingleFingerEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_SWIPE_SINGLE_FINGER, enabled).apply();
+    }
+
+    public boolean isSwipeEdgeEnabled() {
+        return prefs.getBoolean(KEY_SWIPE_EDGE_ENABLED, true);
+    }
+
+    public void setSwipeEdgeEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_SWIPE_EDGE_ENABLED, enabled).apply();
+    }
+
+    public String getSwipeSensitivity() {
+        return prefs.getString(KEY_SWIPE_SENSITIVITY, "NORMAL");
+    }
+
+    public void setSwipeSensitivity(String sensitivity) {
+        prefs.edit().putString(KEY_SWIPE_SENSITIVITY, sensitivity != null ? sensitivity : "NORMAL").apply();
+    }
+
+    // Forced Super AMOLED Dark Mode for imported PDFs
+    private static final String KEY_PDF_AMOLED_DARK_MODE = "pref_pdf_amoled_dark_mode";
+
+    public boolean isPdfAmoledDarkMode() {
+        return prefs.getBoolean(KEY_PDF_AMOLED_DARK_MODE, false);
+    }
+
+    public void setPdfAmoledDarkMode(boolean enabled) {
+        prefs.edit().putBoolean(KEY_PDF_AMOLED_DARK_MODE, enabled).apply();
+    }
 }

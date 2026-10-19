@@ -4,6 +4,8 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.ColorMatrix;
+import android.graphics.ColorMatrixColorFilter;
 import android.graphics.DashPathEffect;
 import android.graphics.Paint;
 import android.graphics.Path;
@@ -82,6 +84,26 @@ public class CanvasView extends View {
     public interface OnLassoSelectionListener {
         void onSelectionChanged(boolean hasSelection, RectF screenBounds);
     }
+
+    public interface OnPageSwipeListener {
+        void onSwipeNextPage();
+        void onSwipePrevPage();
+    }
+
+    private OnPageSwipeListener pageSwipeListener;
+    private boolean isSwipePageEnabled = true;
+    private boolean isSwipeTwoFingerEnabled = true;
+    private boolean isSwipeSingleFingerEnabled = true;
+    private boolean isSwipeEdgeEnabled = true;
+    private float swipeThresholdDp = 80f;
+    private long lastPageSwipeTime = 0L;
+    private static final long PAGE_SWIPE_COOLDOWN_MS = 400L;
+
+    private float singleTouchDownX = 0f;
+    private float singleTouchDownY = 0f;
+    private boolean isSingleTouchEdgeCandidate = false;
+    private int singleTouchEdgeSide = 0; // -1: left edge, 1: right edge
+    private boolean singleTouchSwipeConsumed = false;
 
     private Page currentPage;
     private PaperTemplate paperTemplate = PaperTemplate.RULED;
@@ -276,6 +298,23 @@ public class CanvasView extends View {
     // Bitmap rendering paint with bilinear filtering, antialiasing and dithering for ultra-sharp quality
     private final Paint bitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
     private boolean needsInitialFit = false;
+
+    // Super AMOLED Dark Mode ColorFilter: Maps white/light paper [235..255] to pure #000000 black,
+    // and dark ink [0..50] to pure crisp white #FFFFFF while maintaining anti-aliased font edges.
+    private static final ColorMatrixColorFilter AMOLED_DARK_FILTER;
+    static {
+        float contrast = -1.378f;
+        float offset = 324f;
+        ColorMatrix cm = new ColorMatrix(new float[]{
+                contrast, 0, 0, 0, offset,
+                0, contrast, 0, 0, offset,
+                0, 0, contrast, 0, offset,
+                0, 0, 0, 1, 0
+        });
+        AMOLED_DARK_FILTER = new ColorMatrixColorFilter(cm);
+    }
+    private boolean isPdfAmoledDarkMode = false;
+    private final Paint amoledBitmapPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
 
     // Bitmap LRU cache for fast, memory-safe rendering of on-page images and PDF pages
     private final android.util.LruCache<String, Bitmap> imageCache = new android.util.LruCache<String, Bitmap>(
@@ -513,6 +552,7 @@ public class CanvasView extends View {
         for (int i = 0; i < laserFadePaths.length; i++) {
             laserFadePaths[i] = new Path();
         }
+        amoledBitmapPaint.setColorFilter(AMOLED_DARK_FILTER);
 
         scaleDetector = new ScaleGestureDetector(getContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
@@ -721,12 +761,75 @@ public class CanvasView extends View {
         this.lassoSelectionListener = listener;
     }
 
+    public void setOnPageSwipeListener(OnPageSwipeListener listener) {
+        this.pageSwipeListener = listener;
+    }
+
+    public void setPdfAmoledDarkMode(boolean enabled) {
+        this.isPdfAmoledDarkMode = enabled;
+        if (enabled && getBackgroundImage() != null) {
+            this.pageBackgroundColor = 0xFF000000;
+            if (isColorDark(currentColor)) {
+                currentColor = 0xFFFFFFFF;
+            }
+        } else if (!enabled && currentPage != null) {
+            this.pageBackgroundColor = currentPage.backgroundColor != 0 ? currentPage.backgroundColor : 0xFFFFFFFF;
+        }
+        invalidate();
+    }
+
+    public boolean isPdfAmoledDarkMode() {
+        return isPdfAmoledDarkMode;
+    }
+
+    public void setSwipeGesturesConfig(boolean enabled, boolean twoFinger, boolean singleFinger, boolean edge, String sensitivity) {
+        this.isSwipePageEnabled = enabled;
+        this.isSwipeTwoFingerEnabled = twoFinger;
+        this.isSwipeSingleFingerEnabled = singleFinger;
+        this.isSwipeEdgeEnabled = edge;
+        if ("HIGH".equalsIgnoreCase(sensitivity)) {
+            this.swipeThresholdDp = 50f;
+        } else if ("LOW".equalsIgnoreCase(sensitivity)) {
+            this.swipeThresholdDp = 120f;
+        } else {
+            this.swipeThresholdDp = 80f;
+        }
+    }
+
+    private boolean triggerSwipeNextPage() {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastPageSwipeTime < PAGE_SWIPE_COOLDOWN_MS) return false;
+        lastPageSwipeTime = now;
+        if (pageSwipeListener != null) {
+            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+            pageSwipeListener.onSwipeNextPage();
+            return true;
+        }
+        return false;
+    }
+
+    private boolean triggerSwipePrevPage() {
+        long now = SystemClock.uptimeMillis();
+        if (now - lastPageSwipeTime < PAGE_SWIPE_COOLDOWN_MS) return false;
+        lastPageSwipeTime = now;
+        if (pageSwipeListener != null) {
+            performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP);
+            pageSwipeListener.onSwipePrevPage();
+            return true;
+        }
+        return false;
+    }
+
     public void setPage(Page page) {
         this.currentPage = page;
         strokeSpatialIndexDirty = true;
         if (page != null) {
             this.paperTemplate = page.template;
-            this.pageBackgroundColor = page.backgroundColor != 0 ? page.backgroundColor : 0xFF121214;
+            int bg = page.backgroundColor != 0 ? page.backgroundColor : 0xFF121214;
+            if (isPdfAmoledDarkMode && getBackgroundImage() != null) {
+                bg = 0xFF000000;
+            }
+            this.pageBackgroundColor = bg;
             this.isInfinite = page.isInfinite;
             this.contentHeight = page.canvasHeight > 0 ? page.canvasHeight : 0f;
 
@@ -1844,7 +1947,7 @@ public class CanvasView extends View {
         int bmpH = Math.max(1, Math.min(3200, Math.round(screenCropRect.height())));
         Bitmap bmp = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
         Canvas c = new Canvas(bmp);
-        c.drawColor(pageBackgroundColor);
+        c.drawColor((isPdfAmoledDarkMode && getBackgroundImage() != null) ? 0xFF000000 : pageBackgroundColor);
         c.translate(-screenCropRect.left, -screenCropRect.top);
         if (currentPage != null) {
             if (currentPage.images != null) {
@@ -2174,7 +2277,8 @@ public class CanvasView extends View {
             } catch (Throwable ignored) {}
         }
         if (bmp != null && !bmp.isRecycled()) {
-            canvas.drawBitmap(bmp, null, img.getBounds(), bitmapPaint);
+            Paint paintToUse = (img.isBackground && isPdfAmoledDarkMode) ? amoledBitmapPaint : bitmapPaint;
+            canvas.drawBitmap(bmp, null, img.getBounds(), paintToUse);
         } else {
             Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
             border.setStyle(Paint.Style.STROKE);
@@ -2350,7 +2454,9 @@ public class CanvasView extends View {
         boolean isDarkBackground = isColorDark(pageBackgroundColor);
 
         // 1. Draw Page Background
-        canvas.drawColor(pageBackgroundColor);
+        int currentBgColor = (isPdfAmoledDarkMode && getBackgroundImage() != null)
+                ? 0xFF000000 : pageBackgroundColor;
+        canvas.drawColor(currentBgColor);
 
         // Zero-lag visible viewport computation for infinite document culling
         if (!canvas.getClipBounds(visibleClip)) {
@@ -4483,6 +4589,20 @@ public class CanvasView extends View {
                     handPanDragging = false;
                     return true;
                 case MotionEvent.ACTION_UP:
+                    if (handPanDragging && isSwipePageEnabled && isSwipeSingleFingerEnabled) {
+                        float dx = touchX - handPanStartX;
+                        float dy = touchY - handPanStartY;
+                        float threshold = dp(swipeThresholdDp);
+                        if (Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                            if (dx < -threshold) {
+                                triggerSwipeNextPage();
+                            } else if (dx > threshold) {
+                                triggerSwipePrevPage();
+                            }
+                        }
+                    }
+                    handPanDragging = false;
+                    return true;
                 case MotionEvent.ACTION_CANCEL:
                     handPanDragging = false;
                     return true;
@@ -4550,6 +4670,34 @@ public class CanvasView extends View {
                     cancelInProgressGesture();
                 }
                 handleTwoFingerPanZoom(event, action);
+            } else if (pointerCount == 1 && isSwipePageEnabled && isSwipeSingleFingerEnabled && !isPalm) {
+                float touchX = event.getX(0);
+                float touchY = event.getY(0);
+                switch (action) {
+                    case MotionEvent.ACTION_DOWN:
+                        singleTouchDownX = touchX;
+                        singleTouchDownY = touchY;
+                        singleTouchSwipeConsumed = false;
+                        break;
+                    case MotionEvent.ACTION_UP:
+                        if (!singleTouchSwipeConsumed) {
+                            float dx = touchX - singleTouchDownX;
+                            float dy = touchY - singleTouchDownY;
+                            float threshold = dp(swipeThresholdDp);
+                            if (Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                                if (dx < -threshold) {
+                                    triggerSwipeNextPage();
+                                } else if (dx > threshold) {
+                                    triggerSwipePrevPage();
+                                }
+                            }
+                        }
+                        singleTouchSwipeConsumed = false;
+                        break;
+                    case MotionEvent.ACTION_CANCEL:
+                        singleTouchSwipeConsumed = false;
+                        break;
+                }
             }
             return true;
         }
@@ -4599,6 +4747,58 @@ public class CanvasView extends View {
                         }
                     }
                 }
+            }
+        }
+
+        // Screen Edge Swipe gesture detection
+        if (!hasStylusPointer && isSwipePageEnabled && isSwipeEdgeEnabled && pointerCount == 1) {
+            float edgeX = event.getX(0);
+            float edgeY = event.getY(0);
+            if (action == MotionEvent.ACTION_DOWN) {
+                float edgeMargin = dp(36f);
+                if (edgeX <= edgeMargin) {
+                    isSingleTouchEdgeCandidate = true;
+                    singleTouchEdgeSide = -1; // Left edge
+                    singleTouchDownX = edgeX;
+                    singleTouchDownY = edgeY;
+                    singleTouchSwipeConsumed = false;
+                } else if (edgeX >= getWidth() - edgeMargin) {
+                    isSingleTouchEdgeCandidate = true;
+                    singleTouchEdgeSide = 1; // Right edge
+                    singleTouchDownX = edgeX;
+                    singleTouchDownY = edgeY;
+                    singleTouchSwipeConsumed = false;
+                } else {
+                    isSingleTouchEdgeCandidate = false;
+                    singleTouchEdgeSide = 0;
+                }
+            } else if (action == MotionEvent.ACTION_MOVE && isSingleTouchEdgeCandidate) {
+                float dx = edgeX - singleTouchDownX;
+                float dy = edgeY - singleTouchDownY;
+                if ((singleTouchEdgeSide == 1 && dx < -dp(24f) && Math.abs(dx) > Math.abs(dy) * 1.2f)
+                        || (singleTouchEdgeSide == -1 && dx > dp(24f) && Math.abs(dx) > Math.abs(dy) * 1.2f)) {
+                    if (activeStroke != null) {
+                        cancelInProgressGesture();
+                    }
+                    singleTouchSwipeConsumed = true;
+                }
+            } else if (action == MotionEvent.ACTION_UP && isSingleTouchEdgeCandidate) {
+                if (singleTouchSwipeConsumed) {
+                    float dx = edgeX - singleTouchDownX;
+                    float threshold = dp(swipeThresholdDp);
+                    if (singleTouchEdgeSide == 1 && dx < -threshold) {
+                        triggerSwipeNextPage();
+                    } else if (singleTouchEdgeSide == -1 && dx > threshold) {
+                        triggerSwipePrevPage();
+                    }
+                }
+                isSingleTouchEdgeCandidate = false;
+                singleTouchEdgeSide = 0;
+                singleTouchSwipeConsumed = false;
+            } else if (action == MotionEvent.ACTION_CANCEL) {
+                isSingleTouchEdgeCandidate = false;
+                singleTouchEdgeSide = 0;
+                singleTouchSwipeConsumed = false;
             }
         }
 
@@ -5361,6 +5561,21 @@ public class CanvasView extends View {
                 }
                 break;
             case MotionEvent.ACTION_POINTER_UP:
+            case MotionEvent.ACTION_UP:
+                if (isSwipePageEnabled && isSwipeTwoFingerEnabled && !scaleGestureConfirmed && event.getPointerCount() >= 2) {
+                    float currentCenterX = (event.getX(0) + event.getX(1)) / 2f;
+                    float currentCenterY = (event.getY(0) + event.getY(1)) / 2f;
+                    float dx = currentCenterX - twoFingerStartX;
+                    float dy = currentCenterY - twoFingerStartY;
+                    float threshold = dp(swipeThresholdDp);
+                    if (Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                        if (dx < -threshold) {
+                            triggerSwipeNextPage();
+                        } else if (dx > threshold) {
+                            triggerSwipePrevPage();
+                        }
+                    }
+                }
                 manualTwoFingerPanConfirmed = false;
                 break;
         }

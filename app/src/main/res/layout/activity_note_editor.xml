@@ -624,6 +624,18 @@
             android:src="@drawable/ic_reset_zoom"
             app:tint="@color/text_secondary"
             android:background="?selectableItemBackgroundBorderless" />
+
+        <!-- Forced Super AMOLED Dark Mode Toggle (🌙) -->
+        <ImageView
+            android:id="@+id/btnPdfAmoledToggle"
+            android:layout_width="@dimen/editor_floating_action_size"
+            android:layout_height="@dimen/editor_floating_action_size"
+            android:padding="5dp"
+            android:src="@drawable/ic_amoled_dark"
+            app:tint="@color/text_secondary"
+            android:visibility="gone"
+            android:contentDescription="Super AMOLED Dark Mode"
+            android:background="?selectableItemBackgroundBorderless" />
     </LinearLayout>
 
     <!-- Floating Page Navigation Pill on Top-Right (Frame 25/35: [ ← ⊙ → ]) -->
