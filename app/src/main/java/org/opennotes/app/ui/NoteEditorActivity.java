@@ -676,61 +676,75 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void loadNotebookData() {
         canvasView.setEnabled(false);
         saveExecutor.execute(() -> {
-            Notebook loadedNotebook = dbHelper.getNotebook(notebookId);
-            if (loadedNotebook == null) {
-                runOnUiThread(this::finish);
-                return;
-            }
-            List<Page> loadedPages = dbHelper.getPagesForNotebook(notebookId);
-            if (loadedPages.isEmpty()) {
-                Page firstPage = new Page(notebookId, 0, loadedNotebook.defaultTemplate,
-                        loadedNotebook.defaultBgColor, loadedNotebook.defaultIsInfinite);
-                dbHelper.insertPage(firstPage);
-                loadedPages = dbHelper.getPagesForNotebook(notebookId);
-            }
-            List<Page> resultPages = loadedPages;
-            runOnUiThread(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                currentNotebook = loadedNotebook;
-                pages = resultPages;
-                textNotebookTitle.setText(currentNotebook.title);
-                updateFavoriteIcon();
-                currentPageIndex = hasRestoredEditorState
-                        ? Math.max(0, Math.min(restoredPageIndex, resultPages.size() - 1)) : 0;
-                loadCurrentPage();
-                if (hasRestoredEditorState) {
-                    // Wait for the canvas to be measured so infinite-page scroll bounds are valid.
-                    canvasView.post(() -> canvasView.restoreViewport(
-                            restoredZoom, restoredPanX, restoredPanY, restoredScrollY));
-                    hasRestoredEditorState = false;
+            try {
+                Notebook loadedNotebook = dbHelper.getNotebook(notebookId);
+                if (loadedNotebook == null) {
+                    runOnUiThread(this::finish);
+                    return;
                 }
-                renderDocumentTabs();
-                canvasView.setEnabled(true);
-            });
+                List<Page> loadedPages = dbHelper.getPagesForNotebook(notebookId);
+                if (loadedPages.isEmpty()) {
+                    Page firstPage = new Page(notebookId, 0, loadedNotebook.defaultTemplate,
+                            loadedNotebook.defaultBgColor, loadedNotebook.defaultIsInfinite);
+                    dbHelper.insertPage(firstPage);
+                    loadedPages = dbHelper.getPagesForNotebook(notebookId);
+                }
+                List<Page> resultPages = loadedPages;
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    currentNotebook = loadedNotebook;
+                    pages = resultPages;
+                    textNotebookTitle.setText(currentNotebook.title);
+                    updateFavoriteIcon();
+                    currentPageIndex = hasRestoredEditorState
+                            ? Math.max(0, Math.min(restoredPageIndex, resultPages.size() - 1)) : 0;
+                    loadCurrentPage();
+                    if (hasRestoredEditorState) {
+                        // Wait for the canvas to be measured so infinite-page scroll bounds are valid.
+                        canvasView.post(() -> canvasView.restoreViewport(
+                                restoredZoom, restoredPanX, restoredPanY, restoredScrollY));
+                        hasRestoredEditorState = false;
+                    }
+                    renderDocumentTabs();
+                    canvasView.setEnabled(true);
+                });
+            } catch (Throwable t) {
+                android.util.Log.e("NoteEditorActivity", "Failed to load notebook data", t);
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    new androidx.appcompat.app.AlertDialog.Builder(this)
+                            .setTitle("Error Opening Notebook")
+                            .setMessage("Failed to load notebook:\n" + t.getClass().getSimpleName() + ": " + t.getMessage())
+                            .setPositiveButton("OK", (dialog, which) -> finish())
+                            .setCancelable(false)
+                            .show();
+                });
+            }
         });
     }
 
     private void renderDocumentTabs() {
         if (layoutDocumentTabs == null) return;
         saveExecutor.execute(() -> {
-            List<Notebook> loadedNotebooks = new ArrayList<>();
-            List<Long> toRemove = new ArrayList<>();
-            synchronized (openNotebookIds) {
-                if (!openNotebookIds.contains(notebookId)) {
-                    openNotebookIds.add(notebookId);
-                }
-                for (Long id : openNotebookIds) {
-                    Notebook nb = dbHelper.getNotebook(id);
-                    if (nb != null) {
-                        loadedNotebooks.add(nb);
-                    } else {
-                        toRemove.add(id);
+            try {
+                List<Notebook> loadedNotebooks = new ArrayList<>();
+                List<Long> toRemove = new ArrayList<>();
+                synchronized (openNotebookIds) {
+                    if (!openNotebookIds.contains(notebookId)) {
+                        openNotebookIds.add(notebookId);
                     }
+                    for (Long id : openNotebookIds) {
+                        Notebook nb = dbHelper.getNotebook(id);
+                        if (nb != null) {
+                            loadedNotebooks.add(nb);
+                        } else {
+                            toRemove.add(id);
+                        }
+                    }
+                    openNotebookIds.removeAll(toRemove);
                 }
-                openNotebookIds.removeAll(toRemove);
-            }
 
-            runOnUiThread(() -> {
+                runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
                 layoutDocumentTabs.removeAllViews();
                 LayoutInflater inflater = LayoutInflater.from(NoteEditorActivity.this);
@@ -798,8 +812,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     tabScrollView.post(() -> tabScrollView.smoothScrollTo(target.getLeft(), 0));
                 }
             });
-        });
-    }
+        } catch (Throwable t) {
+            android.util.Log.e("NoteEditorActivity", "Failed to render document tabs", t);
+        }
+    });
+}
 
     private void switchToNotebook(long targetNotebookId) {
         if (targetNotebookId == notebookId) return;

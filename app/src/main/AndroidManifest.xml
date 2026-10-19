@@ -9,6 +9,7 @@
     <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
+        android:name=".OpenNotesApplication"
         android:allowBackup="true"
         android:hardwareAccelerated="true"
         android:largeHeap="true"
@@ -35,6 +36,12 @@
             android:launchMode="singleTop"
             android:windowSoftInputMode="adjustPan"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" />
+
+        <activity
+            android:name=".ui.CrashReportActivity"
+            android:exported="false"
+            android:process=":crash"
+            android:theme="@style/Theme.OpenNotes" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
