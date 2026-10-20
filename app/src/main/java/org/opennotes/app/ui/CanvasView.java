@@ -90,6 +90,24 @@ public class CanvasView extends View {
         void onSwipePrevPage();
     }
 
+    public interface OnCircleToSearchGestureListener {
+        void onCircleToSearchTriggered();
+    }
+
+    private OnCircleToSearchGestureListener circleToSearchGestureListener;
+    private final Runnable twoFingerSearchRunnable = this::triggerCircleToSearchGesture;
+
+    public void setOnCircleToSearchGestureListener(OnCircleToSearchGestureListener listener) {
+        this.circleToSearchGestureListener = listener;
+    }
+
+    public void triggerCircleToSearchGesture() {
+        if (circleToSearchGestureListener != null) {
+            performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+            circleToSearchGestureListener.onCircleToSearchTriggered();
+        }
+    }
+
     private OnPageSwipeListener pageSwipeListener;
     private boolean isSwipePageEnabled = true;
     private boolean isSwipeTwoFingerEnabled = true;
@@ -1949,6 +1967,63 @@ public class CanvasView extends View {
         Canvas c = new Canvas(bmp);
         c.drawColor((isPdfAmoledDarkMode && getBackgroundImage() != null) ? 0xFF000000 : pageBackgroundColor);
         c.translate(-screenCropRect.left, -screenCropRect.top);
+        if (currentPage != null) {
+            if (currentPage.images != null) {
+                for (ImageItem img : currentPage.images) {
+                    if (img != null) drawImage(c, img);
+                }
+            }
+            if (currentPage.shapes != null) {
+                for (ShapeItem shp : currentPage.shapes) {
+                    if (shp != null) drawShape(c, shp.type, shp.startX, shp.startY, shp.endX, shp.endY, shp.color, shp.strokeWidth, shp.lineStyle, shp.fillColor);
+                }
+            }
+            if (currentPage.texts != null) {
+                for (TextItem txt : currentPage.texts) {
+                    if (txt != null) {
+                        textPaint.setColor(txt.color);
+                        textPaint.setTextSize(txt.fontSize);
+                        textPaint.setTypeface(getCachedTypeface(txt.fontKey));
+                        if (Math.abs(txt.rotationAngle) > 0.5f) {
+                            c.save();
+                            c.rotate(txt.rotationAngle, txt.x, txt.y);
+                            TextSpacingCompat.drawText(c, txt.text, txt.x, txt.y, textPaint,
+                                    txt.wordSpacingEm * txt.fontSize);
+                            c.restore();
+                        } else {
+                            TextSpacingCompat.drawText(c, txt.text, txt.x, txt.y, textPaint,
+                                    txt.wordSpacingEm * txt.fontSize);
+                        }
+                    }
+                }
+            }
+            if (currentPage.strokes != null) {
+                for (Stroke s : currentPage.strokes) {
+                    if (s != null) drawStroke(c, s);
+                }
+            }
+        }
+        return bmp;
+    }
+
+    public Bitmap captureSelectionBitmap() {
+        if (!hasSelection() || selectionBounds == null || selectionBounds.isEmpty()) return null;
+        RectF bounds = new RectF(selectionBounds);
+        bounds.inset(-24f, -24f);
+        if (bounds.left < 0) bounds.left = 0;
+        if (bounds.top < 0) bounds.top = 0;
+        int maxW = getWidth() > 0 ? getWidth() : 2400;
+        int maxH = Math.max(getHeight(), Math.round(contentHeight)) > 0 ? Math.max(getHeight(), Math.round(contentHeight)) : 3200;
+        if (bounds.right > maxW) bounds.right = maxW;
+        if (bounds.bottom > maxH) bounds.bottom = maxH;
+
+        int bmpW = Math.max(1, Math.min(2400, Math.round(bounds.width())));
+        int bmpH = Math.max(1, Math.min(3200, Math.round(bounds.height())));
+        Bitmap bmp = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        c.drawColor((isPdfAmoledDarkMode && getBackgroundImage() != null) ? 0xFF000000 : pageBackgroundColor);
+        c.translate(-bounds.left, -bounds.top);
+
         if (currentPage != null) {
             if (currentPage.images != null) {
                 for (ImageItem img : currentPage.images) {
@@ -5517,6 +5592,8 @@ public class CanvasView extends View {
                     twoFingerStartSpan = (float) Math.hypot(
                             twoFingerStartX1 - twoFingerStartX0,
                             twoFingerStartY1 - twoFingerStartY0);
+                    removeCallbacks(twoFingerSearchRunnable);
+                    postDelayed(twoFingerSearchRunnable, 600L);
                     if (twoFingerStartSpan < dp(45f)) {
                         manualTwoFingerPanConfirmed = false;
                         break;
@@ -5538,13 +5615,16 @@ public class CanvasView extends View {
                     float moveY1 = currentY1 - twoFingerStartY1;
                     float moveLength0 = (float) Math.hypot(moveX0, moveY0);
                     float moveLength1 = (float) Math.hypot(moveX1, moveY1);
+                    if (moveLength0 > dp(10f) || moveLength1 > dp(10f)) {
+                        removeCallbacks(twoFingerSearchRunnable);
+                    }
                     float currentSpan = (float) Math.hypot(currentX1 - currentX0,
                             currentY1 - currentY0);
                     float gestureSlop = dp(8f);
                     if (!manualTwoFingerPanConfirmed) {
                         float directionAgreement = moveLength0 < 0.001f || moveLength1 < 0.001f
-                                ? -1f : (moveX0 * moveX1 + moveY0 * moveY1)
-                                / (moveLength0 * moveLength1);
+                                 ? -1f : (moveX0 * moveX1 + moveY0 * moveY1)
+                                 / (moveLength0 * moveLength1);
                         boolean stableSpan = Math.abs(currentSpan - twoFingerStartSpan)
                                 <= gestureSlop;
                         manualTwoFingerPanConfirmed = stableSpan
@@ -5562,6 +5642,7 @@ public class CanvasView extends View {
                 break;
             case MotionEvent.ACTION_POINTER_UP:
             case MotionEvent.ACTION_UP:
+                removeCallbacks(twoFingerSearchRunnable);
                 if (isSwipePageEnabled && isSwipeTwoFingerEnabled && !scaleGestureConfirmed && event.getPointerCount() >= 2) {
                     float currentCenterX = (event.getX(0) + event.getX(1)) / 2f;
                     float currentCenterY = (event.getY(0) + event.getY(1)) / 2f;

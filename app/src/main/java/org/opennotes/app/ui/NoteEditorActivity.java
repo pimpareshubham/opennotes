@@ -3,7 +3,9 @@ package org.opennotes.app.ui;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.util.Log;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
@@ -192,7 +194,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     // Floating Contextual Lasso Action Bar
     private HorizontalScrollView lassoFloatingActionBar;
+    private View layoutLassoPill;
+    private ImageView btnLassoDragHandle;
+    private TextView btnLassoSearch;
     private TextView btnLassoDelete, btnLassoCut, btnLassoCopy, btnLassoPaste, btnLassoStyle, btnLassoDuplicate, btnLassoColor, btnLassoSpacing, btnLassoConvertText, btnLassoTeach;
+    private boolean userHasManuallyMovedLassoBar = false;
+    private float userLassoBarX = 0f;
+    private float userLassoBarY = 0f;
 
     // Fullscreen Zen mode
     private ImageView btnExitFullscreen;
@@ -503,6 +511,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         renderPenBoxDock();
 
         lassoFloatingActionBar = findViewById(R.id.lassoFloatingActionBar);
+        layoutLassoPill = findViewById(R.id.layoutLassoPill);
+        btnLassoDragHandle = findViewById(R.id.btnLassoDragHandle);
+        btnLassoSearch = findViewById(R.id.btnLassoSearch);
         btnLassoDelete = findViewById(R.id.btnLassoDelete);
         btnLassoCut = findViewById(R.id.btnLassoCut);
         btnLassoCopy = findViewById(R.id.btnLassoCopy);
@@ -550,6 +561,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             textZoomPercent.setText(rounded + "% ▾");
             updateFavoriteZoomIcon(rounded);
         });
+        canvasView.setOnCircleToSearchGestureListener(this::triggerCircleToSearch);
         canvasView.setOnLassoSelectionListener((hasSelection, screenBounds) -> {
             if (hasSelection && screenBounds != null) {
                 lassoFloatingActionBar.animate().cancel();
@@ -562,11 +574,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             .setInterpolator(new android.view.animation.OvershootInterpolator(1.2f)).start();
                 }
                 updateLassoActionAvailability();
-                lassoFloatingActionBar.post(() -> {
-                    lassoFloatingActionBar.setX(0f);
-                    float posY = Math.max(120f, screenBounds.top - 60f);
-                    lassoFloatingActionBar.setY(posY);
-                });
+                repositionLassoBar(screenBounds);
             } else {
                 if (lassoFloatingActionBar.getVisibility() == View.VISIBLE) {
                     lassoFloatingActionBar.animate().cancel();
@@ -1590,6 +1598,80 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
 
         // Contextual Lasso Action Bar
+        if (btnLassoSearch != null) {
+            btnLassoSearch.setOnClickListener(v -> triggerCircleToSearch());
+        }
+
+        View.OnTouchListener lassoDragListener = new View.OnTouchListener() {
+            private float dX, dY;
+            private float downRawX, downRawY;
+            private boolean isDragging = false;
+
+            @Override
+            public boolean onTouch(View v, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        dX = lassoFloatingActionBar.getX() - event.getRawX();
+                        dY = lassoFloatingActionBar.getY() - event.getRawY();
+                        downRawX = event.getRawX();
+                        downRawY = event.getRawY();
+                        isDragging = false;
+                        lassoFloatingActionBar.animate().scaleX(1.03f).scaleY(1.03f).setDuration(100).start();
+                        v.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK);
+                        return true;
+
+                    case MotionEvent.ACTION_MOVE:
+                        float distX = Math.abs(event.getRawX() - downRawX);
+                        float distY = Math.abs(event.getRawY() - downRawY);
+                        if (distX > 8 || distY > 8) {
+                            isDragging = true;
+                        }
+                        if (isDragging) {
+                            float newX = event.getRawX() + dX;
+                            float newY = event.getRawY() + dY;
+
+                            View parent = (View) lassoFloatingActionBar.getParent();
+                            int parentW = parent != null ? parent.getWidth() : getResources().getDisplayMetrics().widthPixels;
+                            int parentH = parent != null ? parent.getHeight() : getResources().getDisplayMetrics().heightPixels;
+
+                            int barW = lassoFloatingActionBar.getWidth();
+                            int barH = lassoFloatingActionBar.getHeight();
+
+                            float clampedX = Math.max(12f, Math.min(newX, parentW - barW - 12f));
+                            float clampedY = Math.max(dpToPx(65), Math.min(newY, parentH - barH - dpToPx(75)));
+
+                            lassoFloatingActionBar.setX(clampedX);
+                            lassoFloatingActionBar.setY(clampedY);
+
+                            userHasManuallyMovedLassoBar = true;
+                            userLassoBarX = clampedX;
+                            userLassoBarY = clampedY;
+                        }
+                        return true;
+
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        lassoFloatingActionBar.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start();
+                        if (isDragging) {
+                            v.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK);
+                        } else if (v == btnLassoDragHandle) {
+                            userHasManuallyMovedLassoBar = false;
+                            repositionLassoBar(canvasView.getSelectionScreenBounds());
+                            Toast.makeText(NoteEditorActivity.this, "Position reset above selection", Toast.LENGTH_SHORT).show();
+                        }
+                        return true;
+                }
+                return false;
+            }
+        };
+
+        if (btnLassoDragHandle != null) {
+            btnLassoDragHandle.setOnTouchListener(lassoDragListener);
+        }
+        if (layoutLassoPill != null) {
+            layoutLassoPill.setOnTouchListener(lassoDragListener);
+        }
+
         btnLassoDelete.setOnClickListener(v -> canvasView.deleteSelection());
         btnLassoCut.setOnClickListener(v -> {
             if (!canvasView.hasSelection()) return;
@@ -2931,6 +3013,171 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
+    private void repositionLassoBar(RectF screenBounds) {
+        if (lassoFloatingActionBar == null) return;
+
+        lassoFloatingActionBar.post(() -> {
+            View parent = (View) lassoFloatingActionBar.getParent();
+            int parentW = parent != null ? parent.getWidth() : getResources().getDisplayMetrics().widthPixels;
+            int parentH = parent != null ? parent.getHeight() : getResources().getDisplayMetrics().heightPixels;
+
+            lassoFloatingActionBar.measure(
+                    View.MeasureSpec.makeMeasureSpec(parentW, View.MeasureSpec.AT_MOST),
+                    View.MeasureSpec.makeMeasureSpec(parentH, View.MeasureSpec.AT_MOST));
+            int barW = lassoFloatingActionBar.getMeasuredWidth();
+            int barH = lassoFloatingActionBar.getMeasuredHeight();
+            if (barW <= 0) barW = dpToPx(320);
+            if (barH <= 0) barH = dpToPx(48);
+
+            if (userHasManuallyMovedLassoBar) {
+                float clampedX = Math.max(12f, Math.min(userLassoBarX, parentW - barW - 12f));
+                float clampedY = Math.max(dpToPx(65), Math.min(userLassoBarY, parentH - barH - dpToPx(75)));
+                lassoFloatingActionBar.setX(clampedX);
+                lassoFloatingActionBar.setY(clampedY);
+                return;
+            }
+
+            if (screenBounds == null) return;
+
+            // Center horizontally over the selection
+            float targetX = screenBounds.centerX() - (barW * 0.5f);
+            float clampedX = Math.max(12f, Math.min(targetX, parentW - barW - 12f));
+
+            // Position comfortably above selection, or below if near top
+            float margin = dpToPx(14);
+            float topBound = dpToPx(65); // Clear top app bar
+            float bottomBound = parentH - barH - dpToPx(75); // Clear bottom toolbar
+
+            float targetY;
+            if (screenBounds.top - barH - margin >= topBound) {
+                targetY = screenBounds.top - barH - margin;
+            } else if (screenBounds.bottom + margin <= bottomBound) {
+                targetY = screenBounds.bottom + margin;
+            } else {
+                targetY = Math.max(topBound, Math.min(screenBounds.top, bottomBound));
+            }
+
+            lassoFloatingActionBar.setX(clampedX);
+            lassoFloatingActionBar.setY(targetY);
+        });
+    }
+
+    public void triggerCircleToSearch() {
+        try {
+            if (canvasView != null) {
+                canvasView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+            }
+
+            // Temporarily hide the lasso bar so it doesn't obstruct the screen capture overlay
+            if (lassoFloatingActionBar != null && lassoFloatingActionBar.getVisibility() == View.VISIBLE) {
+                lassoFloatingActionBar.setVisibility(View.INVISIBLE);
+                lassoFloatingActionBar.postDelayed(() -> {
+                    if (canvasView != null && canvasView.hasSelection()) {
+                        lassoFloatingActionBar.setVisibility(View.VISIBLE);
+                    }
+                }, 1200L);
+            }
+
+            // 1. Native OS hook: showAssist() directly asks Android to show the system assistant.
+            // On Samsung Galaxy (One UI 6.1+) and Google Pixel devices with Circle to Search,
+            // this directly launches the native Circle to Search overlay!
+            boolean assistShown = showAssist(new Bundle());
+            if (assistShown) {
+                return;
+            }
+
+            // 2. Alternative system assist intent
+            Intent assistIntent = new Intent(Intent.ACTION_ASSIST);
+            assistIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (assistIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(assistIntent);
+                return;
+            }
+        } catch (Exception e) {
+            Log.w("NoteEditorActivity", "Native assist invocation failed, falling back to Lens", e);
+        }
+
+        // 3. Fallback: Crop high-res selection bitmap and launch Google Lens
+        fallbackToGoogleLensSearch();
+    }
+
+    private void fallbackToGoogleLensSearch() {
+        try {
+            Bitmap bmp = null;
+            if (canvasView != null && canvasView.hasSelection()) {
+                bmp = canvasView.captureSelectionBitmap();
+            }
+            if (bmp == null && canvasView != null) {
+                int w = canvasView.getWidth();
+                int h = canvasView.getHeight();
+                if (w > 0 && h > 0) {
+                    bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+                    Canvas c = new Canvas(bmp);
+                    canvasView.draw(c);
+                }
+            }
+            if (bmp == null) {
+                Toast.makeText(this, "Circle or select handwriting/content to search", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            shareBitmapToGoogleLens(bmp);
+        } catch (Exception e) {
+            Log.e("NoteEditorActivity", "Fallback Google Lens search failed", e);
+            Toast.makeText(this, "Unable to launch Circle to Search on this device", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void shareBitmapToGoogleLens(Bitmap bmp) {
+        try {
+            File cacheDir = new File(getCacheDir(), "search_cache");
+            if (!cacheDir.exists()) cacheDir.mkdirs();
+            File searchFile = new File(cacheDir, "circle_search.png");
+            FileOutputStream fos = new FileOutputStream(searchFile);
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, fos);
+            fos.flush();
+            fos.close();
+
+            Uri contentUri = FileProvider.getUriForFile(
+                    this,
+                    getPackageName() + ".fileprovider",
+                    searchFile);
+
+            // 1. Google Lens in Google App
+            Intent lensIntent = new Intent(Intent.ACTION_VIEW);
+            lensIntent.setData(Uri.parse("googleapp://lens"));
+            lensIntent.setPackage("com.google.android.googlequicksearchbox");
+            lensIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+            lensIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+
+            if (lensIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(lensIntent);
+                return;
+            }
+
+            // 2. Standalone Google Lens app
+            Intent lensAppIntent = new Intent(Intent.ACTION_SEND);
+            lensAppIntent.setType("image/png");
+            lensAppIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+            lensAppIntent.setPackage("com.google.ar.lens");
+            lensAppIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+
+            if (lensAppIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(lensAppIntent);
+                return;
+            }
+
+            // 3. Generic visual search chooser
+            Intent shareIntent = new Intent(Intent.ACTION_SEND);
+            shareIntent.setType("image/png");
+            shareIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+            shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            startActivity(Intent.createChooser(shareIntent, "Circle to Search"));
+        } catch (Exception e) {
+            Log.e("NoteEditorActivity", "Failed to share bitmap to search", e);
+            Toast.makeText(this, "Could not open visual search", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     public void updatePasteButtonVisibility() {
         if (canvasView == null) return;
         boolean hasClipboard = canvasView.hasClipboardContents();
@@ -3493,8 +3740,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .addOption(6, "🌙", "Super AMOLED Dark Mode (PDF)",
                         appSettings != null && appSettings.isPdfAmoledDarkMode() ? "Forced pure black AMOLED mode ON" : "Disabled (Original PDF white background)",
                         appSettings != null && appSettings.isPdfAmoledDarkMode(), this::togglePdfAmoledDarkMode)
-                .addOption(7, "↔️", "Page Swipe Gestures", "Configure swipe left/right gestures for PDF & notebook pages", false, this::showSwipeGestureOptionsDialog)
-                .addOption(8, "➰", "Select All Content", "Select all ink strokes and items on this page", false, () -> {
+                .addOption(7, "🔍", "Circle to Search", "Invoke device Circle to Search or visual search", false, this::triggerCircleToSearch)
+                .addOption(8, "↔️", "Page Swipe Gestures", "Configure swipe left/right gestures for PDF & notebook pages", false, this::showSwipeGestureOptionsDialog)
+                .addOption(9, "➰", "Select All Content", "Select all ink strokes and items on this page", false, () -> {
                     if (!canvasView.selectAllContent()) {
                         Toast.makeText(this, "There is no content on this page to select", Toast.LENGTH_SHORT).show();
                     } else if (canvasView.getTool() != DrawingTool.LASSO) {

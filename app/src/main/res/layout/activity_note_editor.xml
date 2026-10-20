@@ -946,21 +946,66 @@
     <!-- Contextual Floating Lasso Action Bar (Frame 110) -->
     <HorizontalScrollView
         android:id="@+id/lassoFloatingActionBar"
-        android:layout_width="match_parent"
-        android:layout_height="52dp"
-        android:layout_marginHorizontal="8dp"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
         android:elevation="14dp"
-        android:fillViewport="true"
         android:scrollbars="none"
+        android:overScrollMode="never"
+        android:clipToPadding="false"
         android:visibility="gone">
 
         <LinearLayout
+            android:id="@+id/layoutLassoPill"
             android:layout_width="wrap_content"
             android:layout_height="48dp"
             android:background="@drawable/bg_floating_pill"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:paddingHorizontal="6dp">
+            android:paddingStart="4dp"
+            android:paddingEnd="8dp">
+
+            <!-- Drag Handle (⠿ Drag to move anywhere) -->
+            <ImageView
+                android:id="@+id/btnLassoDragHandle"
+                android:layout_width="34dp"
+                android:layout_height="match_parent"
+                android:padding="8dp"
+                android:src="@drawable/ic_drag_indicator"
+                app:tint="@color/text_secondary"
+                android:background="?selectableItemBackgroundBorderless"
+                android:contentDescription="Drag to move action bar"
+                android:tooltipText="Drag to move bar anywhere (Tap to reset position)"
+                android:clickable="true"
+                android:focusable="false" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="18dp"
+                android:background="@color/divider" />
+
+            <!-- Circle to Search (🔍 Search) -->
+            <TextView
+                android:id="@+id/btnLassoSearch"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent"
+                android:minWidth="48dp"
+                android:minHeight="48dp"
+                android:gravity="center"
+                android:paddingHorizontal="10dp"
+                android:text="🔍 Search"
+                android:textColor="#38BDF8"
+                android:textSize="12sp"
+                android:textStyle="bold"
+                android:background="?selectableItemBackgroundBorderless"
+                android:clickable="true"
+                android:focusable="true"
+                android:contentDescription="Circle to Search with device assistant or Google Lens"
+                android:tooltipText="Circle to Search (Device Assistant / Google Lens)" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="18dp"
+                android:background="@color/divider" />
 
         <!-- Delete (Red Danger Button) -->
         <TextView
