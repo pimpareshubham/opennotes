@@ -436,7 +436,8 @@
             android:src="@drawable/ic_hand"
             app:tint="@color/text_primary"
             android:background="?selectableItemBackgroundBorderless"
-            android:contentDescription="Touch Pan Move Canvas" />
+            android:contentDescription="Hand Tool and Palm Rejection"
+            android:tooltipText="Hand Tool: Tap to move canvas with finger, Long-press for Palm Rejection" />
 
         <!-- Auto-Beautify Handwriting Tool (English, Hindi, Marathi) -->
         <ImageView

@@ -1354,6 +1354,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     Toast.makeText(this, "✏️ Move Canvas with Finger: OFF", Toast.LENGTH_SHORT).show();
                 }
             });
+            toolHand.setOnLongClickListener(v -> {
+                v.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                boolean nextStylusOnly = !canvasView.isStylusOnly();
+                canvasView.setStylusOnly(nextStylusOnly);
+                if (appSettings != null) appSettings.setStylusOnly(nextStylusOnly);
+                Toast.makeText(this, nextStylusOnly
+                        ? "🖐️ Palm Rejection ON (Stylus-only drawing active)"
+                        : "Touch & Stylus drawing enabled", Toast.LENGTH_SHORT).show();
+                return true;
+            });
         }
 
         if (btnAutoBeautify != null) {
