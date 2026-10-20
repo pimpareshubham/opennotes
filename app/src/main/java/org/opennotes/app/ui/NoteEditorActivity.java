@@ -2,6 +2,7 @@ package org.opennotes.app.ui;
 
 import android.content.ComponentName;
 import android.content.Intent;
+import android.content.pm.ResolveInfo;
 import android.provider.Settings;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -3099,7 +3100,17 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void launchCircleToSearch() {
-        // 1. Try launching OmnientActivity directly (Google's internal Circle to Search host activity)
+        // 1. First: Try native showAssist() which triggers device Circle to Search when default assistant is Google
+        try {
+            boolean shown = showAssist(new Bundle());
+            if (shown) {
+                return;
+            }
+        } catch (Exception e) {
+            Log.d("NoteEditorActivity", "showAssist invocation failed", e);
+        }
+
+        // 2. Try launching OmnientActivity directly (Google's internal Circle to Search host activity)
         try {
             Intent omniIntent = new Intent();
             omniIntent.setComponent(new ComponentName(
@@ -3111,23 +3122,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 startActivity(omniIntent);
                 return;
             }
-        } catch (Exception e) {
-            Log.d("NoteEditorActivity", "OmnientActivity direct launch not permitted", e);
-        }
-
-        // 2. Try launching Assist specifically targeted to Google App (com.google.android.googlequicksearchbox)
-        // This directs assist to Google App (Circle to Search / Screen Search) rather than Gemini!
-        try {
-            Intent googleAssistIntent = new Intent(Intent.ACTION_ASSIST);
-            googleAssistIntent.setPackage("com.google.android.googlequicksearchbox");
-            googleAssistIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            if (googleAssistIntent.resolveActivity(getPackageManager()) != null) {
-                startActivity(googleAssistIntent);
-                return;
-            }
-        } catch (Exception e) {
-            Log.d("NoteEditorActivity", "Google assist intent failed", e);
-        }
+        } catch (Exception ignored) {}
 
         // 3. Try Google Screen Search action
         try {
@@ -3138,25 +3133,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 startActivity(screenSearchIntent);
                 return;
             }
-        } catch (Exception e) {
-            Log.d("NoteEditorActivity", "Google screen search intent failed", e);
-        }
+        } catch (Exception ignored) {}
 
-        // 4. Try Google Lens Screen Search with captured screen bitmap
-        try {
-            Bitmap bmp = captureSearchBitmap();
-            if (bmp != null) {
-                shareBitmapToGoogleLens(bmp);
-                return;
-            }
-        } catch (Exception e) {
-            Log.d("NoteEditorActivity", "Lens search fallback failed", e);
-        }
-
-        // 5. Fallback to system showAssist
-        try {
-            showAssist(new Bundle());
-        } catch (Exception e) {
+        // 4. Direct Google Image Search on screen capture (opens "Search image" in Google App with NO share sheet)
+        boolean directSearchLaunched = launchDirectGoogleImageSearch(captureSearchBitmap());
+        if (!directSearchLaunched) {
             Toast.makeText(this, "Could not open Circle to Search on this device", Toast.LENGTH_SHORT).show();
         }
     }
@@ -3173,7 +3154,17 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             }
         } catch (Exception ignored) {}
 
-        // 2. Call native showAssist() (which invokes Gemini when set as assistant)
+        // 2. Try launching Gemini main activity / launcher
+        try {
+            Intent geminiLaunch = getPackageManager().getLaunchIntentForPackage("com.google.android.apps.bard");
+            if (geminiLaunch != null) {
+                geminiLaunch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(geminiLaunch);
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        // 3. Call native showAssist() (which invokes Gemini when set as assistant)
         try {
             boolean shown = showAssist(new Bundle());
             if (!shown) {
@@ -3189,10 +3180,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void launchGoogleLensSearch() {
         Bitmap bmp = captureSearchBitmap();
-        if (bmp != null) {
-            shareBitmapToGoogleLens(bmp);
-        } else {
-            Toast.makeText(this, "Could not capture content for Google Lens", Toast.LENGTH_SHORT).show();
+        boolean launched = launchDirectGoogleImageSearch(bmp);
+        if (!launched) {
+            Toast.makeText(this, "Google Lens / Search image not found on this device", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -3204,55 +3194,77 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         return canvasView.captureCurrentScreenBitmap();
     }
 
-    private void shareBitmapToGoogleLens(Bitmap bmp) {
+    private boolean launchDirectGoogleImageSearch(Bitmap bmp) {
+        if (bmp == null) return false;
         try {
             File cacheDir = new File(getCacheDir(), "search_cache");
             if (!cacheDir.exists()) cacheDir.mkdirs();
-            File searchFile = new File(cacheDir, "circle_search.png");
-            FileOutputStream fos = new FileOutputStream(searchFile);
-            bmp.compress(Bitmap.CompressFormat.PNG, 100, fos);
-            fos.flush();
-            fos.close();
+            File searchFile = new File(cacheDir, "search_image.png");
+            try (FileOutputStream fos = new FileOutputStream(searchFile)) {
+                bmp.compress(Bitmap.CompressFormat.PNG, 100, fos);
+                fos.flush();
+            }
 
             Uri contentUri = FileProvider.getUriForFile(
                     this,
                     getPackageName() + ".fileprovider",
                     searchFile);
 
-            // 1. Google Lens in Google App
-            Intent lensIntent = new Intent(Intent.ACTION_VIEW);
-            lensIntent.setData(Uri.parse("googleapp://lens"));
-            lensIntent.setPackage("com.google.android.googlequicksearchbox");
-            lensIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
-            lensIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            Intent sendIntent = new Intent(Intent.ACTION_SEND);
+            sendIntent.setType("image/png");
+            sendIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+            sendIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
 
-            if (lensIntent.resolveActivity(getPackageManager()) != null) {
-                startActivity(lensIntent);
-                return;
+            List<ResolveInfo> matches = getPackageManager().queryIntentActivities(sendIntent, 0);
+            if (matches != null && !matches.isEmpty()) {
+                // 1. Target Google App ("Search image" from com.google.android.googlequicksearchbox)
+                for (ResolveInfo info : matches) {
+                    if (info.activityInfo != null && "com.google.android.googlequicksearchbox".equals(info.activityInfo.packageName)) {
+                        Intent directIntent = new Intent(sendIntent);
+                        directIntent.setComponent(new ComponentName(info.activityInfo.packageName, info.activityInfo.name));
+                        grantUriPermission(info.activityInfo.packageName, contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        startActivity(directIntent);
+                        return true;
+                    }
+                }
+
+                // 2. Standalone Google Lens app (com.google.ar.lens)
+                for (ResolveInfo info : matches) {
+                    if (info.activityInfo != null && "com.google.ar.lens".equals(info.activityInfo.packageName)) {
+                        Intent directIntent = new Intent(sendIntent);
+                        directIntent.setComponent(new ComponentName(info.activityInfo.packageName, info.activityInfo.name));
+                        grantUriPermission(info.activityInfo.packageName, contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        startActivity(directIntent);
+                        return true;
+                    }
+                }
+
+                // 3. Any activity containing "lens"
+                for (ResolveInfo info : matches) {
+                    if (info.activityInfo != null && (info.activityInfo.packageName.contains("lens") || (info.activityInfo.name != null && info.activityInfo.name.toLowerCase().contains("lens")))) {
+                        Intent directIntent = new Intent(sendIntent);
+                        directIntent.setComponent(new ComponentName(info.activityInfo.packageName, info.activityInfo.name));
+                        grantUriPermission(info.activityInfo.packageName, contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                        startActivity(directIntent);
+                        return true;
+                    }
+                }
             }
 
-            // 2. Standalone Google Lens app
-            Intent lensAppIntent = new Intent(Intent.ACTION_SEND);
-            lensAppIntent.setType("image/png");
-            lensAppIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
-            lensAppIntent.setPackage("com.google.ar.lens");
-            lensAppIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-
-            if (lensAppIntent.resolveActivity(getPackageManager()) != null) {
-                startActivity(lensAppIntent);
-                return;
+            // Fallback: direct ACTION_VIEW to googleapp://lens
+            Intent lensUriIntent = new Intent(Intent.ACTION_VIEW, Uri.parse("googleapp://lens"));
+            lensUriIntent.setPackage("com.google.android.googlequicksearchbox");
+            lensUriIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
+            lensUriIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (lensUriIntent.resolveActivity(getPackageManager()) != null) {
+                grantUriPermission("com.google.android.googlequicksearchbox", contentUri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                startActivity(lensUriIntent);
+                return true;
             }
-
-            // 3. Generic visual search chooser
-            Intent shareIntent = new Intent(Intent.ACTION_SEND);
-            shareIntent.setType("image/png");
-            shareIntent.putExtra(Intent.EXTRA_STREAM, contentUri);
-            shareIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(Intent.createChooser(shareIntent, "Circle to Search"));
         } catch (Exception e) {
-            Log.e("NoteEditorActivity", "Failed to share bitmap to search", e);
-            Toast.makeText(this, "Could not open visual search", Toast.LENGTH_SHORT).show();
+            Log.e("NoteEditorActivity", "Direct Google image search failed", e);
         }
+        return false;
     }
 
     private void showSearchAssistConfigDialog() {
@@ -3266,8 +3278,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .setTitle("Search & AI Assistant Gesture")
                 .setSubtitle("Choose what opens when using the two-finger hold gesture or search button")
                 .setHeaderSymbol("🔍")
-                .addOption(1, "🔍", "Google Circle to Search",
-                        "Open Google Screen Search with 'Ask about screen' & translation overlay",
+                .addOption(1, "🔍", "Google Circle to Search (Device Assist)",
+                        "Open native Circle to Search overlay (requires Google as phone's Digital Assistant)",
                         isCircle, () -> {
                             appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH);
                             Toast.makeText(this, "Set to Google Circle to Search", Toast.LENGTH_SHORT).show();
@@ -3280,15 +3292,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             Toast.makeText(this, "Set to Gemini Assistant", Toast.LENGTH_SHORT).show();
                             showSearchAssistConfigDialog();
                         })
-                .addOption(3, "📷", "Google Lens",
-                        "Capture circled/screen content directly in Google Lens (OCR & visual search)",
+                .addOption(3, "📷", "Google Lens (Instant Image Search)",
+                        "Directly search circled/screen content in Google Lens (No share sheet)",
                         isLens, () -> {
                             appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_LENS);
                             Toast.makeText(this, "Set to Google Lens", Toast.LENGTH_SHORT).show();
                             showSearchAssistConfigDialog();
                         })
-                .addOption(4, "⚙️", "Device Assistant Settings",
-                        "Open phone settings to choose Google or Gemini as system default assistant",
+                .addOption(4, "⚙️", "Device Assistant Settings (Google / Gemini)",
+                        "Switch your phone's Digital Assistant between Google (Circle to Search) & Gemini",
                         false, () -> {
                             try {
                                 Intent intent = new Intent(Settings.ACTION_VOICE_INPUT_SETTINGS);
