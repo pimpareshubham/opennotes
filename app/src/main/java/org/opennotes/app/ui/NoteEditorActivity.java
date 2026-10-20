@@ -22,6 +22,8 @@ import android.media.MediaPlayer;
 import android.media.MediaRecorder;
 import android.net.Uri;
 import android.os.Bundle;
+import android.app.SearchManager;
+import java.lang.reflect.Method;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -3099,43 +3101,169 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
+    private Bundle createHomeButtonLongPressAssistBundle() {
+        Bundle b = new Bundle();
+        // AOSP AssistUtils invocation type constants:
+        // INVOCATION_TYPE_KEY = "invocation_type"
+        // INVOCATION_TYPE_HOME_BUTTON_LONG_PRESS = 5
+        b.putInt("invocation_type", 5);
+        b.putInt("android.intent.extra.ASSIST_INPUT_DEVICE_ID", 1);
+        b.putLong("android.intent.extra.TIME", SystemClock.uptimeMillis());
+
+        // Android ContextualSearchManager entrypoint constants (Android 14+):
+        // ENTRYPOINT_LONG_PRESS_HOME = 2
+        b.putInt("entryPoint", 2);
+        b.putInt("entry_point", 2);
+        b.putInt("contextual_search_entry_point", 2);
+        b.putInt("android.app.contextualsearch.extra.ENTRYPOINT", 2);
+
+        // Google App (GSA / OPA / Omnient Circle to Search trigger):
+        b.putString("triggered_by", "home_button_long_press");
+        b.putInt("opa_bundle_trigger", 5);
+        b.putInt("opa_trigger", 5);
+        b.putBoolean("is_circle_to_search", true);
+        b.putBoolean("screen_search", true);
+        b.putBoolean("opa_force_screen_search", true);
+        b.putInt("omni.entry_point", 2);
+        b.putBoolean("omni_active", true);
+
+        // Xiaomi HyperOS / MIUI shortcut mapping:
+        b.putString("action_type", "circle_to_search");
+        b.putString("shortcut_action", "circle_to_search");
+        b.putString("key_action", "long_press_home_key");
+        return b;
+    }
+
+    private Bundle createNavHandleLongPressAssistBundle() {
+        Bundle b = new Bundle();
+        b.putInt("invocation_type", 8); // INVOCATION_TYPE_NAV_HANDLE_LONG_PRESS = 8
+        b.putInt("android.intent.extra.ASSIST_INPUT_DEVICE_ID", 1);
+        b.putLong("android.intent.extra.TIME", SystemClock.uptimeMillis());
+        b.putInt("entryPoint", 1); // ENTRYPOINT_LONG_PRESS_NAV_HANDLE = 1
+        b.putInt("entry_point", 1);
+        b.putInt("contextual_search_entry_point", 1);
+        b.putString("triggered_by", "nav_handle_long_press");
+        b.putBoolean("is_circle_to_search", true);
+        b.putBoolean("screen_search", true);
+        b.putBoolean("opa_force_screen_search", true);
+        b.putInt("omni.entry_point", 1);
+        b.putBoolean("omni_active", true);
+        return b;
+    }
+
     private void launchCircleToSearch() {
-        // 1. First: Try native showAssist() which triggers device Circle to Search when default assistant is Google
+        Bundle homeBundle = createHomeButtonLongPressAssistBundle();
+
+        // 1. Native showAssist(homeBundle)
+        // Dispatches the assist request with AOSP INVOCATION_TYPE_HOME_BUTTON_LONG_PRESS (5)
+        // directly to the system VoiceInteractionSession / Google Omnient overlay
         try {
-            boolean shown = showAssist(new Bundle());
+            boolean shown = showAssist(homeBundle);
             if (shown) {
+                Log.d("NoteEditorActivity", "Circle to Search invoked via showAssist(homeBundle)");
                 return;
             }
-        } catch (Exception e) {
-            Log.d("NoteEditorActivity", "showAssist invocation failed", e);
+        } catch (Throwable t) {
+            Log.d("NoteEditorActivity", "showAssist homeBundle failed", t);
         }
 
-        // 2. Try launching OmnientActivity directly (Google's internal Circle to Search host activity)
+        // 2. Try showAssist(navBundle) (for gesture navigation pill long-press)
+        try {
+            Bundle navBundle = createNavHandleLongPressAssistBundle();
+            boolean shown = showAssist(navBundle);
+            if (shown) {
+                Log.d("NoteEditorActivity", "Circle to Search invoked via showAssist(navBundle)");
+                return;
+            }
+        } catch (Throwable t) {
+            Log.d("NoteEditorActivity", "showAssist navBundle failed", t);
+        }
+
+        // 3. Try SearchManager.launchAssist(homeBundle) via reflection (used by PhoneWindowManager)
+        try {
+            SearchManager sm = (SearchManager) getSystemService(Context.SEARCH_SERVICE);
+            if (sm != null) {
+                Method launchAssistMethod = sm.getClass().getMethod("launchAssist", Bundle.class);
+                launchAssistMethod.invoke(sm, homeBundle);
+                Log.d("NoteEditorActivity", "Circle to Search invoked via SearchManager.launchAssist");
+                return;
+            }
+        } catch (Throwable t) {
+            Log.d("NoteEditorActivity", "SearchManager.launchAssist failed", t);
+        }
+
+        // 4. Try ContextualSearchManager.startContextualSearch(2) via reflection (Android 14+ / HyperOS)
+        try {
+            Object csm = getSystemService("contextual_search");
+            if (csm != null) {
+                Method startMethod = csm.getClass().getMethod("startContextualSearch", int.class);
+                startMethod.invoke(csm, 2); // 2 = ENTRYPOINT_LONG_PRESS_HOME
+                Log.d("NoteEditorActivity", "Circle to Search invoked via startContextualSearch(2)");
+                return;
+            }
+        } catch (Throwable t) {
+            Log.d("NoteEditorActivity", "ContextualSearchManager reflection failed", t);
+        }
+
+        // 5. Explicit Intent.ACTION_ASSIST targeting Google App with home button long-press extras
+        try {
+            Intent assistIntent = new Intent(Intent.ACTION_ASSIST);
+            assistIntent.setPackage("com.google.android.googlequicksearchbox");
+            assistIntent.putExtras(homeBundle);
+            assistIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (assistIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(assistIntent);
+                Log.d("NoteEditorActivity", "Circle to Search invoked via Google App ACTION_ASSIST");
+                return;
+            }
+        } catch (Throwable t) {
+            Log.d("NoteEditorActivity", "Explicit ACTION_ASSIST failed", t);
+        }
+
+        // 6. Try Google App's Omnient Activity or Screen Search
         try {
             Intent omniIntent = new Intent();
             omniIntent.setComponent(new ComponentName(
                     "com.google.android.googlequicksearchbox",
                     "com.google.android.apps.search.omnient.host.activity.OmnientActivity"
             ));
+            omniIntent.putExtras(homeBundle);
             omniIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
             if (omniIntent.resolveActivity(getPackageManager()) != null) {
                 startActivity(omniIntent);
                 return;
             }
-        } catch (Exception ignored) {}
+        } catch (Throwable ignored) {}
 
-        // 3. Try Google Screen Search action
         try {
             Intent screenSearchIntent = new Intent("com.google.android.googlequicksearchbox.action.SCREEN_SEARCH");
             screenSearchIntent.setPackage("com.google.android.googlequicksearchbox");
+            screenSearchIntent.putExtras(homeBundle);
             screenSearchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             if (screenSearchIntent.resolveActivity(getPackageManager()) != null) {
                 startActivity(screenSearchIntent);
                 return;
             }
-        } catch (Exception ignored) {}
+        } catch (Throwable ignored) {}
 
-        // 4. Direct Google Image Search on screen capture (opens "Search image" in Google App with NO share sheet)
+        // 7. Try MiCTS if installed (Circle to Search helper)
+        try {
+            Intent micts = getPackageManager().getLaunchIntentForPackage("com.parallelc.micts");
+            if (micts != null) {
+                micts.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(micts);
+                return;
+            }
+        } catch (Throwable ignored) {}
+
+        // 8. Try Xiaomi system broadcast for button shortcut
+        try {
+            Intent miuiIntent = new Intent("miui.intent.action.CIRCLE_TO_SEARCH");
+            miuiIntent.putExtras(homeBundle);
+            sendBroadcast(miuiIntent);
+        } catch (Throwable ignored) {}
+
+        // 9. Direct Google Image Search on screen/selection capture (Opens Google "Search image" with ZERO share sheet dialog)
         boolean directSearchLaunched = launchDirectGoogleImageSearch(captureSearchBitmap());
         if (!directSearchLaunched) {
             Toast.makeText(this, "Could not open Circle to Search on this device", Toast.LENGTH_SHORT).show();
@@ -3278,11 +3406,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .setTitle("Search & AI Assistant Gesture")
                 .setSubtitle("Choose what opens when using the two-finger hold gesture or search button")
                 .setHeaderSymbol("🔍")
-                .addOption(1, "🔍", "Google Circle to Search (Device Assist)",
-                        "Open native Circle to Search overlay (requires Google as phone's Digital Assistant)",
+                .addOption(1, "🔍", "Google Circle to Search (Home Button Long Press)",
+                        "Mimics 'Press and hold Home button' to trigger device's Circle to Search overlay",
                         isCircle, () -> {
                             appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH);
-                            Toast.makeText(this, "Set to Google Circle to Search", Toast.LENGTH_SHORT).show();
+                            Toast.makeText(this, "Set to Google Circle to Search (Home Long Press)", Toast.LENGTH_SHORT).show();
                             showSearchAssistConfigDialog();
                         })
                 .addOption(2, "✨", "Gemini AI Assistant",
@@ -3314,7 +3442,30 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                                 }
                             }
                         })
+                .addOption(5, "📱", "System Button & Gesture Settings",
+                        "Open system settings for 'Press and hold Home button' / Navigation shortcuts",
+                        false, this::openSystemButtonShortcutsSettings)
                 .show();
+    }
+
+    private void openSystemButtonShortcutsSettings() {
+        Intent[] shortcutIntents = new Intent[] {
+                new Intent().setComponent(new ComponentName("com.android.settings", "com.android.settings.Settings$KeyCombinationSettingsActivity")),
+                new Intent().setComponent(new ComponentName("com.android.settings", "com.android.settings.Settings$SystemNavigationActivity")),
+                new Intent("miui.intent.action.KEY_COMBINATION_SETTINGS"),
+                new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS),
+                new Intent(Settings.ACTION_SETTINGS)
+        };
+        for (Intent intent : shortcutIntents) {
+            try {
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                if (intent.resolveActivity(getPackageManager()) != null) {
+                    startActivity(intent);
+                    return;
+                }
+            } catch (Throwable ignored) {}
+        }
+        Toast.makeText(this, "Open phone Settings > Additional settings > Button shortcuts", Toast.LENGTH_LONG).show();
     }
 
     public void updatePasteButtonVisibility() {
