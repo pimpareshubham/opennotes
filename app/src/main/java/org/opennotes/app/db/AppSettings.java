@@ -334,4 +334,18 @@ public class AppSettings {
     public void setPdfAmoledDarkMode(boolean enabled) {
         prefs.edit().putBoolean(KEY_PDF_AMOLED_DARK_MODE, enabled).apply();
     }
+
+    // Search & Assist Trigger Target (Circle to Search vs Gemini vs Google Lens)
+    private static final String KEY_SEARCH_ASSIST_TARGET = "pref_search_assist_target";
+    public static final String SEARCH_TARGET_CIRCLE_TO_SEARCH = "CIRCLE_TO_SEARCH";
+    public static final String SEARCH_TARGET_GEMINI = "GEMINI";
+    public static final String SEARCH_TARGET_LENS = "GOOGLE_LENS";
+
+    public String getSearchAssistTarget() {
+        return prefs.getString(KEY_SEARCH_ASSIST_TARGET, SEARCH_TARGET_CIRCLE_TO_SEARCH);
+    }
+
+    public void setSearchAssistTarget(String target) {
+        prefs.edit().putString(KEY_SEARCH_ASSIST_TARGET, target != null ? target : SEARCH_TARGET_CIRCLE_TO_SEARCH).apply();
+    }
 }

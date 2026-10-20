@@ -2063,6 +2063,16 @@ public class CanvasView extends View {
         return bmp;
     }
 
+    public Bitmap captureCurrentScreenBitmap() {
+        int w = getWidth();
+        int h = getHeight();
+        if (w <= 0 || h <= 0) return null;
+        Bitmap bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+        Canvas c = new Canvas(bmp);
+        draw(c);
+        return bmp;
+    }
+
     public boolean canUndo() {
         return !undoStack.isEmpty();
     }

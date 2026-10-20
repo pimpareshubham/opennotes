@@ -1,6 +1,8 @@
 package org.opennotes.app.ui;
 
+import android.content.ComponentName;
 import android.content.Intent;
+import android.provider.Settings;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -1600,6 +1602,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         // Contextual Lasso Action Bar
         if (btnLassoSearch != null) {
             btnLassoSearch.setOnClickListener(v -> triggerCircleToSearch());
+            btnLassoSearch.setOnLongClickListener(v -> {
+                showSearchAssistConfigDialog();
+                return true;
+            });
         }
 
         View.OnTouchListener lassoDragListener = new View.OnTouchListener() {
@@ -3063,68 +3069,139 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     public void triggerCircleToSearch() {
-        try {
-            if (canvasView != null) {
-                canvasView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
-            }
-
-            // Temporarily hide the lasso bar so it doesn't obstruct the screen capture overlay
-            if (lassoFloatingActionBar != null && lassoFloatingActionBar.getVisibility() == View.VISIBLE) {
-                lassoFloatingActionBar.setVisibility(View.INVISIBLE);
-                lassoFloatingActionBar.postDelayed(() -> {
-                    if (canvasView != null && canvasView.hasSelection()) {
-                        lassoFloatingActionBar.setVisibility(View.VISIBLE);
-                    }
-                }, 1200L);
-            }
-
-            // 1. Native OS hook: showAssist() directly asks Android to show the system assistant.
-            // On Samsung Galaxy (One UI 6.1+) and Google Pixel devices with Circle to Search,
-            // this directly launches the native Circle to Search overlay!
-            boolean assistShown = showAssist(new Bundle());
-            if (assistShown) {
-                return;
-            }
-
-            // 2. Alternative system assist intent
-            Intent assistIntent = new Intent(Intent.ACTION_ASSIST);
-            assistIntent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            if (assistIntent.resolveActivity(getPackageManager()) != null) {
-                startActivity(assistIntent);
-                return;
-            }
-        } catch (Exception e) {
-            Log.w("NoteEditorActivity", "Native assist invocation failed, falling back to Lens", e);
-        }
-
-        // 3. Fallback: Crop high-res selection bitmap and launch Google Lens
-        fallbackToGoogleLensSearch();
+        String target = appSettings != null ? appSettings.getSearchAssistTarget() : AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH;
+        triggerSearchAction(target);
     }
 
-    private void fallbackToGoogleLensSearch() {
-        try {
-            Bitmap bmp = null;
-            if (canvasView != null && canvasView.hasSelection()) {
-                bmp = canvasView.captureSelectionBitmap();
-            }
-            if (bmp == null && canvasView != null) {
-                int w = canvasView.getWidth();
-                int h = canvasView.getHeight();
-                if (w > 0 && h > 0) {
-                    bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
-                    Canvas c = new Canvas(bmp);
-                    canvasView.draw(c);
+    public void triggerSearchAction(String target) {
+        if (canvasView != null) {
+            canvasView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+        }
+
+        // Temporarily hide the lasso bar so it doesn't obstruct the screen capture overlay
+        if (lassoFloatingActionBar != null && lassoFloatingActionBar.getVisibility() == View.VISIBLE) {
+            lassoFloatingActionBar.setVisibility(View.INVISIBLE);
+            lassoFloatingActionBar.postDelayed(() -> {
+                if (canvasView != null && canvasView.hasSelection()) {
+                    lassoFloatingActionBar.setVisibility(View.VISIBLE);
                 }
-            }
-            if (bmp == null) {
-                Toast.makeText(this, "Circle or select handwriting/content to search", Toast.LENGTH_SHORT).show();
+            }, 1200L);
+        }
+
+        if (AppSettings.SEARCH_TARGET_GEMINI.equals(target)) {
+            launchGeminiAssist();
+        } else if (AppSettings.SEARCH_TARGET_LENS.equals(target)) {
+            launchGoogleLensSearch();
+        } else {
+            // Default: CIRCLE_TO_SEARCH
+            launchCircleToSearch();
+        }
+    }
+
+    private void launchCircleToSearch() {
+        // 1. Try launching OmnientActivity directly (Google's internal Circle to Search host activity)
+        try {
+            Intent omniIntent = new Intent();
+            omniIntent.setComponent(new ComponentName(
+                    "com.google.android.googlequicksearchbox",
+                    "com.google.android.apps.search.omnient.host.activity.OmnientActivity"
+            ));
+            omniIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS);
+            if (omniIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(omniIntent);
                 return;
             }
-            shareBitmapToGoogleLens(bmp);
         } catch (Exception e) {
-            Log.e("NoteEditorActivity", "Fallback Google Lens search failed", e);
-            Toast.makeText(this, "Unable to launch Circle to Search on this device", Toast.LENGTH_SHORT).show();
+            Log.d("NoteEditorActivity", "OmnientActivity direct launch not permitted", e);
         }
+
+        // 2. Try launching Assist specifically targeted to Google App (com.google.android.googlequicksearchbox)
+        // This directs assist to Google App (Circle to Search / Screen Search) rather than Gemini!
+        try {
+            Intent googleAssistIntent = new Intent(Intent.ACTION_ASSIST);
+            googleAssistIntent.setPackage("com.google.android.googlequicksearchbox");
+            googleAssistIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (googleAssistIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(googleAssistIntent);
+                return;
+            }
+        } catch (Exception e) {
+            Log.d("NoteEditorActivity", "Google assist intent failed", e);
+        }
+
+        // 3. Try Google Screen Search action
+        try {
+            Intent screenSearchIntent = new Intent("com.google.android.googlequicksearchbox.action.SCREEN_SEARCH");
+            screenSearchIntent.setPackage("com.google.android.googlequicksearchbox");
+            screenSearchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (screenSearchIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(screenSearchIntent);
+                return;
+            }
+        } catch (Exception e) {
+            Log.d("NoteEditorActivity", "Google screen search intent failed", e);
+        }
+
+        // 4. Try Google Lens Screen Search with captured screen bitmap
+        try {
+            Bitmap bmp = captureSearchBitmap();
+            if (bmp != null) {
+                shareBitmapToGoogleLens(bmp);
+                return;
+            }
+        } catch (Exception e) {
+            Log.d("NoteEditorActivity", "Lens search fallback failed", e);
+        }
+
+        // 5. Fallback to system showAssist
+        try {
+            showAssist(new Bundle());
+        } catch (Exception e) {
+            Toast.makeText(this, "Could not open Circle to Search on this device", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void launchGeminiAssist() {
+        // 1. Try launching Gemini app directly
+        try {
+            Intent geminiIntent = new Intent(Intent.ACTION_ASSIST);
+            geminiIntent.setPackage("com.google.android.apps.bard");
+            geminiIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            if (geminiIntent.resolveActivity(getPackageManager()) != null) {
+                startActivity(geminiIntent);
+                return;
+            }
+        } catch (Exception ignored) {}
+
+        // 2. Call native showAssist() (which invokes Gemini when set as assistant)
+        try {
+            boolean shown = showAssist(new Bundle());
+            if (!shown) {
+                Intent genericAssist = new Intent(Intent.ACTION_ASSIST);
+                genericAssist.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                startActivity(genericAssist);
+            }
+        } catch (Exception e) {
+            Log.e("NoteEditorActivity", "Failed to launch Gemini assist", e);
+            Toast.makeText(this, "Could not open Gemini Assistant", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void launchGoogleLensSearch() {
+        Bitmap bmp = captureSearchBitmap();
+        if (bmp != null) {
+            shareBitmapToGoogleLens(bmp);
+        } else {
+            Toast.makeText(this, "Could not capture content for Google Lens", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private Bitmap captureSearchBitmap() {
+        if (canvasView == null) return null;
+        if (canvasView.hasSelection()) {
+            return canvasView.captureSelectionBitmap();
+        }
+        return canvasView.captureCurrentScreenBitmap();
     }
 
     private void shareBitmapToGoogleLens(Bitmap bmp) {
@@ -3176,6 +3253,56 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             Log.e("NoteEditorActivity", "Failed to share bitmap to search", e);
             Toast.makeText(this, "Could not open visual search", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void showSearchAssistConfigDialog() {
+        if (appSettings == null) return;
+        String currentTarget = appSettings.getSearchAssistTarget();
+        boolean isCircle = AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH.equals(currentTarget);
+        boolean isGemini = AppSettings.SEARCH_TARGET_GEMINI.equals(currentTarget);
+        boolean isLens = AppSettings.SEARCH_TARGET_LENS.equals(currentTarget);
+
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Search & AI Assistant Gesture")
+                .setSubtitle("Choose what opens when using the two-finger hold gesture or search button")
+                .setHeaderSymbol("🔍")
+                .addOption(1, "🔍", "Google Circle to Search",
+                        "Open Google Screen Search with 'Ask about screen' & translation overlay",
+                        isCircle, () -> {
+                            appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH);
+                            Toast.makeText(this, "Set to Google Circle to Search", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(2, "✨", "Gemini AI Assistant",
+                        "Open Gemini with 'Ask Gemini' and Live screen sharing",
+                        isGemini, () -> {
+                            appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_GEMINI);
+                            Toast.makeText(this, "Set to Gemini Assistant", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(3, "📷", "Google Lens",
+                        "Capture circled/screen content directly in Google Lens (OCR & visual search)",
+                        isLens, () -> {
+                            appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_LENS);
+                            Toast.makeText(this, "Set to Google Lens", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(4, "⚙️", "Device Assistant Settings",
+                        "Open phone settings to choose Google or Gemini as system default assistant",
+                        false, () -> {
+                            try {
+                                Intent intent = new Intent(Settings.ACTION_VOICE_INPUT_SETTINGS);
+                                startActivity(intent);
+                            } catch (Exception e) {
+                                try {
+                                    Intent intent2 = new Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS);
+                                    startActivity(intent2);
+                                } catch (Exception e2) {
+                                    Toast.makeText(this, "Open phone Settings > Apps > Default Apps > Digital Assistant", Toast.LENGTH_LONG).show();
+                                }
+                            }
+                        })
+                .show();
     }
 
     public void updatePasteButtonVisibility() {
@@ -3740,9 +3867,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .addOption(6, "🌙", "Super AMOLED Dark Mode (PDF)",
                         appSettings != null && appSettings.isPdfAmoledDarkMode() ? "Forced pure black AMOLED mode ON" : "Disabled (Original PDF white background)",
                         appSettings != null && appSettings.isPdfAmoledDarkMode(), this::togglePdfAmoledDarkMode)
-                .addOption(7, "🔍", "Circle to Search", "Invoke device Circle to Search or visual search", false, this::triggerCircleToSearch)
-                .addOption(8, "↔️", "Page Swipe Gestures", "Configure swipe left/right gestures for PDF & notebook pages", false, this::showSwipeGestureOptionsDialog)
-                .addOption(9, "➰", "Select All Content", "Select all ink strokes and items on this page", false, () -> {
+                .addOption(7, "🔍", "Circle to Search", "Invoke search or AI assistant for current note", false, this::triggerCircleToSearch)
+                .addOption(8, "⚙️", "Search & Assistant Settings", "Configure Circle to Search vs Gemini vs Google Lens", false, this::showSearchAssistConfigDialog)
+                .addOption(9, "↔️", "Page Swipe Gestures", "Configure swipe left/right gestures for PDF & notebook pages", false, this::showSwipeGestureOptionsDialog)
+                .addOption(10, "➰", "Select All Content", "Select all ink strokes and items on this page", false, () -> {
                     if (!canvasView.selectAllContent()) {
                         Toast.makeText(this, "There is no content on this page to select", Toast.LENGTH_SHORT).show();
                     } else if (canvasView.getTool() != DrawingTool.LASSO) {
