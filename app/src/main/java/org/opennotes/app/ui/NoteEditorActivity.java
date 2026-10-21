@@ -1684,7 +1684,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 resetZoomHandler.removeCallbacksAndMessages(null);
                 resetZoomHandler.postDelayed(() -> {
                     if (isFinishing() || isDestroyed()) return;
-                    if (canvasView.getBackgroundImage() != null) {
+                    if (canvasView.getBackgroundImage() != null || (canvasView.isContinuousVerticalScroll() && pages != null && !pages.isEmpty())) {
                         canvasView.fitPageToAvailableSpace(true);
                         Toast.makeText(this, "Aligned to page fit", Toast.LENGTH_SHORT).show();
                     } else {
@@ -2819,7 +2819,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         if (btnResetZoomDialog != null) {
             btnResetZoomDialog.setOnClickListener(v -> {
-                if (canvasView.getBackgroundImage() != null) {
+                if (canvasView.getBackgroundImage() != null || (canvasView.isContinuousVerticalScroll() && pages != null && !pages.isEmpty())) {
                     canvasView.fitPageToAvailableSpace(true);
                 } else {
                     int target = ZoomFavoritesManager.getDefaultResetZoom(this);
