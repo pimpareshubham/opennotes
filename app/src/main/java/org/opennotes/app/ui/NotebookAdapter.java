@@ -18,6 +18,7 @@ import org.opennotes.app.R;
 import org.opennotes.app.model.Notebook;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
@@ -52,11 +53,19 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         this.listener = listener;
     }
 
+    public List<Notebook> getNotebooks() {
+        return notebooks != null ? new ArrayList<>(notebooks) : new ArrayList<>();
+    }
+
     public void updateData(List<Notebook> newNotebooks) {
         updateData(newNotebooks, false);
     }
 
     public void updateData(List<Notebook> newNotebooks, boolean isSearching) {
+        if (this.notebooks != null && newNotebooks != null && !isSelectionMode
+                && this.isSearching == isSearching && isDataIdentical(this.notebooks, newNotebooks)) {
+            return;
+        }
         this.notebooks = newNotebooks;
         this.isSearching = isSearching;
         // Clean up selected IDs that no longer exist
@@ -71,6 +80,27 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             }
         }
         notifyDataSetChanged();
+    }
+
+    private boolean isDataIdentical(List<Notebook> a, List<Notebook> b) {
+        if (a == b) return true;
+        if (a == null || b == null) return false;
+        if (a.size() != b.size()) return false;
+        for (int i = 0; i < a.size(); i++) {
+            Notebook n1 = a.get(i);
+            Notebook n2 = b.get(i);
+            if (n1 == null || n2 == null) return false;
+            if (n1.id != n2.id
+                    || n1.updatedAt != n2.updatedAt
+                    || n1.pageCount != n2.pageCount
+                    || n1.isFavorite != n2.isFavorite
+                    || n1.coverColor != n2.coverColor
+                    || !java.util.Objects.equals(n1.title, n2.title)
+                    || !java.util.Objects.equals(n1.folder, n2.folder)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     public boolean isSelectionMode() {

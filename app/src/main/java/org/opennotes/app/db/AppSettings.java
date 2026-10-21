@@ -157,13 +157,13 @@ public class AppSettings {
         prefs.edit().putInt(KEY_PAGE_BG_COLOR, color).apply();
     }
 
-    // Default Paper Template
+    // Default Paper Template (remembers last created notebook template, defaults to BLANK)
     public PaperTemplate getDefaultPaperTemplate() {
-        String name = prefs.getString(KEY_PAPER_TEMPLATE, PaperTemplate.RULED.name());
+        String name = prefs.getString(KEY_PAPER_TEMPLATE, PaperTemplate.BLANK.name());
         try {
             return PaperTemplate.valueOf(name);
         } catch (Exception e) {
-            return PaperTemplate.RULED;
+            return PaperTemplate.BLANK;
         }
     }
 

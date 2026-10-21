@@ -78,6 +78,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
 
     private static NotesDbHelper instance;
     private final Context appContext;
+    private final List<Notebook> cachedNotebooks = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     public static synchronized NotesDbHelper getInstance(Context context) {
         if (instance == null) {
@@ -85,15 +86,68 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             new Thread(() -> {
                 try {
                     instance.migrateLargeBlobsToFile();
+                    instance.getAllNotebooks("All", false, null);
                 } catch (Throwable ignored) {}
             }).start();
         }
         return instance;
     }
 
+    public List<Notebook> getCachedNotebooks() {
+        if (cachedNotebooks.isEmpty()) {
+            try {
+                return getAllNotebooks("All", false, null);
+            } catch (Throwable ignored) {}
+        }
+        return new ArrayList<>(cachedNotebooks);
+    }
+
+    public synchronized void closeDatabase() {
+        try {
+            close();
+        } catch (Exception ignored) {}
+        cachedNotebooks.clear();
+        instance = null;
+    }
+
+    public static synchronized void resetInstance(Context context) {
+        if (instance != null) {
+            instance.closeDatabase();
+        }
+        instance = new NotesDbHelper(context.getApplicationContext());
+    }
+
+    private void invalidateCachedNotebooksAsync() {
+        new Thread(() -> {
+            try {
+                getAllNotebooks("All", false, null);
+            } catch (Throwable ignored) {}
+        }).start();
+    }
+
     private NotesDbHelper(Context context) {
         super(context, DATABASE_NAME, null, DATABASE_VERSION);
         this.appContext = context.getApplicationContext();
+    }
+
+    @Override
+    public void onConfigure(SQLiteDatabase db) {
+        super.onConfigure(db);
+        try {
+            db.enableWriteAheadLogging();
+        } catch (Throwable t) {
+            Log.w("NotesDbHelper", "Could not enable WAL mode", t);
+        }
+    }
+
+    @Override
+    public void onOpen(SQLiteDatabase db) {
+        super.onOpen(db);
+        try {
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_pages_nb ON " + TABLE_PAGES + "(" + COL_PAGE_NB_ID + ", " + COL_PAGE_INDEX + ");");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_perf ON " + TABLE_NOTEBOOKS + "(" + COL_NB_FAVORITE + ", " + COL_NB_FOLDER + ", " + COL_NB_UPDATED_AT + " DESC);");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_updated ON " + TABLE_NOTEBOOKS + "(" + COL_NB_UPDATED_AT + " DESC);");
+        } catch (Throwable ignored) {}
     }
 
     @Override
@@ -130,6 +184,8 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 + ");");
 
         db.execSQL("CREATE INDEX idx_pages_nb ON " + TABLE_PAGES + "(" + COL_PAGE_NB_ID + ", " + COL_PAGE_INDEX + ");");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_perf ON " + TABLE_NOTEBOOKS + "(" + COL_NB_FAVORITE + ", " + COL_NB_FOLDER + ", " + COL_NB_UPDATED_AT + " DESC);");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_updated ON " + TABLE_NOTEBOOKS + "(" + COL_NB_UPDATED_AT + " DESC);");
     }
 
     @Override
@@ -280,6 +336,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         } finally {
             db.endTransaction();
         }
+        invalidateCachedNotebooksAsync();
         return id;
     }
 
@@ -297,6 +354,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_NB_UPDATED_AT, System.currentTimeMillis());
 
         db.update(TABLE_NOTEBOOKS, cv, COL_NB_ID + "=?", new String[]{String.valueOf(nb.id)});
+        invalidateCachedNotebooksAsync();
     }
 
     public synchronized void updateNotebookDefaultBgColor(long notebookId, int bgColor, boolean applyToAllExistingPages) {
@@ -333,6 +391,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         }
         db.delete(TABLE_PAGES, COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
         db.delete(TABLE_NOTEBOOKS, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+        invalidateCachedNotebooksAsync();
     }
 
     public synchronized void setFavorite(long notebookId, boolean fav) {
@@ -341,6 +400,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_NB_FAVORITE, fav ? 1 : 0);
         cv.put(COL_NB_UPDATED_AT, System.currentTimeMillis());
         db.update(TABLE_NOTEBOOKS, cv, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+        invalidateCachedNotebooksAsync();
     }
 
     public synchronized Notebook getNotebook(long id) {
@@ -381,6 +441,12 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 list.add(cursorToNotebook(c));
             }
             c.close();
+        }
+        if ((filterFolder == null || filterFolder.isEmpty() || filterFolder.equalsIgnoreCase("All"))
+                && !favoritesOnly
+                && (searchQuery == null || searchQuery.trim().isEmpty())) {
+            cachedNotebooks.clear();
+            cachedNotebooks.addAll(list);
         }
         return list;
     }
@@ -637,6 +703,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         ContentValues nbCv = new ContentValues();
         nbCv.put(COL_NB_UPDATED_AT, System.currentTimeMillis());
         db.update(TABLE_NOTEBOOKS, nbCv, COL_NB_ID + "=?", new String[]{String.valueOf(page.notebookId)});
+        invalidateCachedNotebooksAsync();
     }
 
     public synchronized Page getPage(long notebookId, int pageIndex) {

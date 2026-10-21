@@ -42,6 +42,7 @@ import org.opennotes.app.model.Notebook;
 import org.opennotes.app.util.ErrorDialog;
 import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.util.ThemeUtils;
+import org.opennotes.app.export.BackupManager;
 
 import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
@@ -108,6 +109,22 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 }
             });
 
+    private final ActivityResultLauncher<String> createBackupLauncher =
+            registerForActivityResult(new ActivityResultContracts.CreateDocument(BackupManager.MIME_TYPE), uri -> {
+                if (uri != null) {
+                    handleCreateBackup(uri);
+                }
+            });
+
+    private final ActivityResultLauncher<String[]> restoreBackupLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri != null) {
+                    confirmRestoreBackup(uri);
+                }
+            });
+
+    private AlertDialog backupProgressDialog;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -166,6 +183,11 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         View btnImportPdf = findViewById(R.id.btnImportPdf);
         if (btnImportPdf != null) {
             btnImportPdf.setOnClickListener(v -> openPdfPicker());
+        }
+
+        ImageView btnMenuMore = findViewById(R.id.btnMenuMore);
+        if (btnMenuMore != null) {
+            btnMenuMore.setOnClickListener(v -> showBackupRestoreDialog());
         }
 
         recyclerView.post(this::offerHandwritingModelSetup);
@@ -267,7 +289,8 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     }
 
     private void setupRecyclerView() {
-        adapter = new NotebookAdapter(this, new ArrayList<>(), this);
+        List<Notebook> cached = dbHelper.getCachedNotebooks();
+        adapter = new NotebookAdapter(this, cached != null ? cached : new ArrayList<>(), this);
         setupLayoutManager();
         recyclerView.setAdapter(adapter);
     }
@@ -370,7 +393,8 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
 
         final int[] selectedCoverColor = {PRESET_COVER_COLORS[0]};
         final int[] selectedPageBgColor = {AppSettings.getInstance(this).getDefaultPageBgColor()};
-        final PaperTemplate[] selectedTemplate = {PaperTemplate.RULED};
+        PaperTemplate initialTpl = AppSettings.getInstance(this).getDefaultPaperTemplate();
+        final PaperTemplate[] selectedTemplate = {initialTpl != null ? initialTpl : PaperTemplate.BLANK};
         final boolean[] isInfinite = {true};
 
         Runnable updatePreview = () -> {
@@ -381,6 +405,15 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             previewCoverBox.setBackground(gd);
         };
         updatePreview.run();
+
+        editTitle.setText("");
+        editTitle.setHint("Unnamed note");
+        editTitle.setSelectAllOnFocus(true);
+        editTitle.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                editTitle.selectAll();
+            }
+        });
 
         editTitle.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -425,6 +458,14 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         PaperTemplate[] tpls = {PaperTemplate.BLANK, PaperTemplate.RULED, PaperTemplate.GRID, PaperTemplate.DOTS, PaperTemplate.CORNELL};
         List<TextView> templateViews = new ArrayList<>();
 
+        int initialTplIdx = 0;
+        for (int i = 0; i < tpls.length; i++) {
+            if (tpls[i] == selectedTemplate[0]) {
+                initialTplIdx = i;
+                break;
+            }
+        }
+
         for (int i = 0; i < templateNames.length; i++) {
             final int idx = i;
             TextView btn = new TextView(this);
@@ -436,8 +477,9 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             btn.setGravity(android.view.Gravity.CENTER);
             btn.setText(templateNames[i]);
             btn.setTextSize(12f);
-            btn.setTextColor(i == 1 ? 0xFFFFFFFF : 0xFF94A3B8);
-            btn.setBackgroundResource(i == 1 ? R.drawable.bg_tool_button_active : R.drawable.bg_floating_pill);
+            boolean isSelected = (i == initialTplIdx);
+            btn.setTextColor(isSelected ? 0xFFFFFFFF : 0xFF94A3B8);
+            btn.setBackgroundResource(isSelected ? R.drawable.bg_tool_button_active : R.drawable.bg_floating_pill);
 
             btn.setOnClickListener(v -> {
                 selectedTemplate[0] = tpls[idx];
@@ -551,6 +593,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             newNb.defaultIsInfinite = isInfinite[0];
             newNb.defaultBgColor = selectedPageBgColor[0];
             AppSettings.getInstance(this).setDefaultPageBgColor(selectedPageBgColor[0]);
+            AppSettings.getInstance(this).setDefaultPaperTemplate(selectedTemplate[0]);
             if (!"All".equalsIgnoreCase(currentFolder) && !isFavoritesOnly) {
                 newNb.folder = currentFolder;
             }
@@ -572,6 +615,16 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     private void openNotebook(long notebookId) {
         Intent intent = new Intent(this, NoteEditorActivity.class);
         intent.putExtra("notebook_id", notebookId);
+        if (adapter != null) {
+            for (Notebook nb : adapter.getNotebooks()) {
+                if (nb != null && nb.id == notebookId) {
+                    if (nb.defaultTemplate != null) {
+                        intent.putExtra("template", nb.defaultTemplate.name());
+                    }
+                    break;
+                }
+            }
+        }
         startActivity(intent);
     }
 
@@ -930,6 +983,117 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 startActivity(chooser);
                 if (adapter != null) adapter.exitSelectionMode();
             });
+        });
+    }
+
+    private void showBackupRestoreDialog() {
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                .setTitle("💾 Local Backup & Restore")
+                .setMessage("Create a local compressed archive containing all notebooks, pages, handwritten strokes, drawings, and media, or restore your library from a previous backup.")
+                .setPositiveButton("📦 Create Backup", (d, w) -> {
+                    String timeStamp = new java.text.SimpleDateFormat("yyyyMMdd_HHmmss", java.util.Locale.US).format(new java.util.Date());
+                    String fileName = "OpenNotes_Backup_" + timeStamp + ".zip";
+                    try {
+                        createBackupLauncher.launch(fileName);
+                    } catch (Exception e) {
+                        Toast.makeText(this, "Could not open file picker: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNeutralButton("📥 Restore Backup", (d, w) -> {
+                    try {
+                        restoreBackupLauncher.launch(new String[]{"application/zip", "application/octet-stream", "*/*"});
+                    } catch (Exception e) {
+                        Toast.makeText(this, "Could not open file picker: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("Cancel", null);
+        AlertDialog dialog = builder.create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
+    }
+
+    private void showBackupProgress(String message) {
+        if (isFinishing() || isDestroyed()) return;
+        backupProgressDialog = new MaterialAlertDialogBuilder(this)
+                .setTitle("Please wait")
+                .setMessage(message)
+                .setCancelable(false)
+                .create();
+        ThemeUtils.styleDialog(backupProgressDialog, this);
+        backupProgressDialog.show();
+    }
+
+    private void dismissBackupProgress() {
+        if (backupProgressDialog != null && backupProgressDialog.isShowing()) {
+            backupProgressDialog.dismiss();
+            backupProgressDialog = null;
+        }
+    }
+
+    private void handleCreateBackup(Uri uri) {
+        showBackupProgress("Exporting complete library backup to ZIP...");
+        BackupManager.createBackup(this, uri, new BackupManager.BackupCallback() {
+            @Override
+            public void onSuccess(int notebookCount, long totalBytes) {
+                runOnUiThread(() -> {
+                    dismissBackupProgress();
+                    String sizeMb = String.format(java.util.Locale.US, "%.1f MB", totalBytes / (1024f * 1024f));
+                    Toast.makeText(MainActivity.this,
+                            "✅ Backup saved successfully! (" + notebookCount + " notebooks, " + sizeMb + ")",
+                            Toast.LENGTH_LONG).show();
+                });
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                runOnUiThread(() -> {
+                    dismissBackupProgress();
+                    new MaterialAlertDialogBuilder(MainActivity.this)
+                            .setTitle("Backup Failed")
+                            .setMessage("Error creating backup: " + error.getMessage())
+                            .setPositiveButton("OK", null)
+                            .show();
+                });
+            }
+        });
+    }
+
+    private void confirmRestoreBackup(Uri uri) {
+        MaterialAlertDialogBuilder builder = new MaterialAlertDialogBuilder(this)
+                .setTitle("Restore Library from Backup?")
+                .setMessage("⚠️ Restoring will merge and replace notebooks with the contents of this backup archive.\n\nDo you want to proceed?")
+                .setPositiveButton("Restore Now", (d, w) -> executeRestore(uri))
+                .setNegativeButton("Cancel", null);
+        AlertDialog dialog = builder.create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
+    }
+
+    private void executeRestore(Uri uri) {
+        showBackupProgress("Restoring library from backup archive...");
+        BackupManager.restoreBackup(this, uri, new BackupManager.RestoreCallback() {
+            @Override
+            public void onSuccess(int notebookCount) {
+                runOnUiThread(() -> {
+                    dismissBackupProgress();
+                    loadNotebooks();
+                    Toast.makeText(MainActivity.this,
+                            "✅ Restored successfully! " + notebookCount + " notebooks loaded.",
+                            Toast.LENGTH_LONG).show();
+                });
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                runOnUiThread(() -> {
+                    dismissBackupProgress();
+                    new MaterialAlertDialogBuilder(MainActivity.this)
+                            .setTitle("Restore Failed")
+                            .setMessage("Could not restore backup:\n" + error.getMessage())
+                            .setPositiveButton("OK", null)
+                            .show();
+                });
+            }
         });
     }
 

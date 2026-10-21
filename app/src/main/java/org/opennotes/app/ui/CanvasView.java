@@ -124,7 +124,7 @@ public class CanvasView extends View {
     private boolean singleTouchSwipeConsumed = false;
 
     private Page currentPage;
-    private PaperTemplate paperTemplate = PaperTemplate.RULED;
+    private PaperTemplate paperTemplate = PaperTemplate.BLANK;
     private int pageBackgroundColor = 0xFF121214; // Default sleek dark note background matching video
     private boolean isInfinite = true;
     private boolean isStylusOnly = false;
@@ -3062,7 +3062,7 @@ public class CanvasView extends View {
     }
 
     private void drawPaperTemplate(Canvas canvas, int width, float totalHeight, boolean isDark, float drawingScale) {
-        if (paperTemplate == PaperTemplate.BLANK) return;
+        if (currentPage == null || paperTemplate == null || paperTemplate == PaperTemplate.BLANK) return;
 
         // Thin template guides otherwise fade into sub-pixel coverage at low zoom. Keep
         // their screen-space weight legible while preserving the lighter look at 1x+.

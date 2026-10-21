@@ -377,6 +377,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         bindViews();
+        if (getIntent().hasExtra("template")) {
+            String passedTpl = getIntent().getStringExtra("template");
+            if (passedTpl != null && canvasView != null) {
+                try {
+                    canvasView.setPaperTemplate(PaperTemplate.fromString(passedTpl));
+                } catch (Throwable ignored) {}
+            }
+        }
         applyResponsiveEditorLayout();
         loadNotebookData();
         setupListeners();
@@ -940,7 +948,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         final int[] selectedCoverColor = {PRESET_COVER_COLORS[0]};
         final int[] selectedPageBgColor = {appSettings != null ? appSettings.getDefaultPageBgColor() : 0xFF000000};
-        final PaperTemplate[] selectedTemplate = {PaperTemplate.RULED};
+        PaperTemplate initialTpl = appSettings != null ? appSettings.getDefaultPaperTemplate() : PaperTemplate.BLANK;
+        final PaperTemplate[] selectedTemplate = {initialTpl != null ? initialTpl : PaperTemplate.BLANK};
         final boolean[] isInfinite = {true};
 
         Runnable updatePreview = () -> {
@@ -951,6 +960,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             previewCoverBox.setBackground(gd);
         };
         updatePreview.run();
+
+        editTitle.setText("");
+        editTitle.setHint("Unnamed note");
+        editTitle.setSelectAllOnFocus(true);
+        editTitle.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                editTitle.selectAll();
+            }
+        });
 
         editTitle.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
@@ -995,6 +1013,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         PaperTemplate[] tpls = {PaperTemplate.BLANK, PaperTemplate.RULED, PaperTemplate.GRID, PaperTemplate.DOTS, PaperTemplate.CORNELL};
         java.util.List<TextView> templateViews = new java.util.ArrayList<>();
 
+        int initialTplIdx = 0;
+        for (int i = 0; i < tpls.length; i++) {
+            if (tpls[i] == selectedTemplate[0]) {
+                initialTplIdx = i;
+                break;
+            }
+        }
+
         for (int i = 0; i < templateNames.length; i++) {
             final int idx = i;
             TextView btn = new TextView(this);
@@ -1006,8 +1032,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             btn.setGravity(android.view.Gravity.CENTER);
             btn.setText(templateNames[i]);
             btn.setTextSize(12f);
-            btn.setTextColor(i == 1 ? 0xFFFFFFFF : 0xFF94A3B8);
-            btn.setBackgroundResource(i == 1 ? R.drawable.bg_tool_button_active : R.drawable.bg_floating_pill);
+            boolean isSelected = (i == initialTplIdx);
+            btn.setTextColor(isSelected ? 0xFFFFFFFF : 0xFF94A3B8);
+            btn.setBackgroundResource(isSelected ? R.drawable.bg_tool_button_active : R.drawable.bg_floating_pill);
 
             btn.setOnClickListener(v -> {
                 selectedTemplate[0] = tpls[idx];
@@ -1113,6 +1140,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             newNb.defaultBgColor = selectedPageBgColor[0];
             if (appSettings != null) {
                 appSettings.setDefaultPageBgColor(selectedPageBgColor[0]);
+                appSettings.setDefaultPaperTemplate(selectedTemplate[0]);
             }
             if (currentNotebook != null && currentNotebook.folder != null && !"All".equalsIgnoreCase(currentNotebook.folder)) {
                 newNb.folder = currentNotebook.folder;
