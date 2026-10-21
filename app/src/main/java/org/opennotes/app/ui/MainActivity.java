@@ -999,18 +999,74 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     private void showSettingsMenu() {
         AppSettings settings = AppSettings.getInstance(this);
         boolean isVerticalScroll = settings.isContinuousVerticalScroll();
+        boolean isHoldSearch = settings.isTwoFingerSearchGestureEnabled();
 
         new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Settings & Options")
-                .setSubtitle("Configure page navigation and backups")
+                .setSubtitle("Configure gestures, navigation, and backups")
                 .setHeaderSymbol("⚙️")
                 .addOption(1, "📜", "Page Navigation Mode",
                         !isVerticalScroll ? "No Scroll / Change Pages Only (Original discrete pages)"
                                           : "Smooth Continuous Vertical Scroll (All pages in one flow)",
                         isVerticalScroll, this::showPageViewModeDialog)
-                .addOption(2, "💾", "Local Backup & Restore",
+                .addOption(2, "🔍", "Search & AI Assistant Gesture",
+                        isHoldSearch
+                                ? "Two-finger hold gesture: ENABLED (" + settings.getSearchAssistTargetName() + ")"
+                                : "Two-finger hold gesture: DISABLED (Tap to configure or enable)",
+                        isHoldSearch, this::showSearchAssistConfigDialog)
+                .addOption(3, "💾", "Local Backup & Restore",
                         "Backup all notes, pages, drawings & media locally or restore",
                         false, this::showBackupRestoreDialog)
+                .show();
+    }
+
+    private void showSearchAssistConfigDialog() {
+        AppSettings settings = AppSettings.getInstance(this);
+        String currentTarget = settings.getSearchAssistTarget();
+        boolean isCircle = AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH.equals(currentTarget);
+        boolean isGemini = AppSettings.SEARCH_TARGET_GEMINI.equals(currentTarget);
+        boolean isLens = AppSettings.SEARCH_TARGET_LENS.equals(currentTarget);
+        boolean isTwoFingerEnabled = settings.isTwoFingerSearchGestureEnabled();
+
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Search & AI Assistant Gesture")
+                .setSubtitle("Enable/disable two-finger hold shortcut and choose search engine")
+                .setHeaderSymbol("🔍")
+                .addOption(1, "✌️", "Enable Two-Finger Hold Gesture",
+                        "Hold 2 fingers still on canvas for 0.6s to trigger search overlay",
+                        isTwoFingerEnabled, () -> {
+                            settings.setTwoFingerSearchGestureEnabled(true);
+                            Toast.makeText(this, "✌️ Two-Finger Hold Gesture ENABLED", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(2, "🚫", "Disable Two-Finger Hold Gesture",
+                        "Turn off two-finger hold shortcut completely (prevents accidental triggers)",
+                        !isTwoFingerEnabled, () -> {
+                            settings.setTwoFingerSearchGestureEnabled(false);
+                            Toast.makeText(this, "🚫 Two-Finger Hold Gesture DISABLED", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(3, "🔍", "Google Circle to Search (Home Button Long Press)",
+                        "Mimics 'Press and hold Home button' to trigger device's Circle to Search overlay",
+                        isCircle, () -> {
+                            settings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH);
+                            Toast.makeText(this, "Set to Google Circle to Search (Home Long Press)", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(4, "✨", "Gemini AI Assistant",
+                        "Open Gemini with 'Ask Gemini' and Live screen sharing",
+                        isGemini, () -> {
+                            settings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_GEMINI);
+                            Toast.makeText(this, "Set to Gemini Assistant", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(5, "📷", "Google Lens (Instant Image Search)",
+                        "Directly search circled/screen content in Google Lens (No share sheet)",
+                        isLens, () -> {
+                            settings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_LENS);
+                            Toast.makeText(this, "Set to Google Lens", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
                 .show();
     }
 

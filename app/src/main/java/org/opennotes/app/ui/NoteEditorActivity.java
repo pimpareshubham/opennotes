@@ -585,6 +585,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             updateFavoriteZoomIcon(rounded);
         });
         canvasView.setOnCircleToSearchGestureListener(this::triggerCircleToSearch);
+        if (appSettings != null) {
+            canvasView.setTwoFingerSearchGestureEnabled(appSettings.isTwoFingerSearchGestureEnabled());
+        }
         canvasView.setOnLassoSelectionListener((hasSelection, screenBounds) -> {
             if (hasSelection && screenBounds != null) {
                 lassoFloatingActionBar.animate().cancel();
@@ -3462,33 +3465,50 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         boolean isCircle = AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH.equals(currentTarget);
         boolean isGemini = AppSettings.SEARCH_TARGET_GEMINI.equals(currentTarget);
         boolean isLens = AppSettings.SEARCH_TARGET_LENS.equals(currentTarget);
+        boolean isTwoFingerEnabled = appSettings.isTwoFingerSearchGestureEnabled();
 
         new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Search & AI Assistant Gesture")
-                .setSubtitle("Choose what opens when using the two-finger hold gesture or search button")
+                .setSubtitle("Enable/disable two-finger hold shortcut and choose search engine")
                 .setHeaderSymbol("🔍")
-                .addOption(1, "🔍", "Google Circle to Search (Home Button Long Press)",
+                .addOption(1, "✌️", "Enable Two-Finger Hold Gesture",
+                        "Hold 2 fingers still on canvas for 0.6s to trigger search overlay",
+                        isTwoFingerEnabled, () -> {
+                            appSettings.setTwoFingerSearchGestureEnabled(true);
+                            if (canvasView != null) canvasView.setTwoFingerSearchGestureEnabled(true);
+                            Toast.makeText(this, "✌️ Two-Finger Hold Gesture ENABLED", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(2, "🚫", "Disable Two-Finger Hold Gesture",
+                        "Turn off two-finger hold shortcut completely (prevents accidental triggers)",
+                        !isTwoFingerEnabled, () -> {
+                            appSettings.setTwoFingerSearchGestureEnabled(false);
+                            if (canvasView != null) canvasView.setTwoFingerSearchGestureEnabled(false);
+                            Toast.makeText(this, "🚫 Two-Finger Hold Gesture DISABLED", Toast.LENGTH_SHORT).show();
+                            showSearchAssistConfigDialog();
+                        })
+                .addOption(3, "🔍", "Google Circle to Search (Home Button Long Press)",
                         "Mimics 'Press and hold Home button' to trigger device's Circle to Search overlay",
                         isCircle, () -> {
                             appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH);
                             Toast.makeText(this, "Set to Google Circle to Search (Home Long Press)", Toast.LENGTH_SHORT).show();
                             showSearchAssistConfigDialog();
                         })
-                .addOption(2, "✨", "Gemini AI Assistant",
+                .addOption(4, "✨", "Gemini AI Assistant",
                         "Open Gemini with 'Ask Gemini' and Live screen sharing",
                         isGemini, () -> {
                             appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_GEMINI);
                             Toast.makeText(this, "Set to Gemini Assistant", Toast.LENGTH_SHORT).show();
                             showSearchAssistConfigDialog();
                         })
-                .addOption(3, "📷", "Google Lens (Instant Image Search)",
+                .addOption(5, "📷", "Google Lens (Instant Image Search)",
                         "Directly search circled/screen content in Google Lens (No share sheet)",
                         isLens, () -> {
                             appSettings.setSearchAssistTarget(AppSettings.SEARCH_TARGET_LENS);
                             Toast.makeText(this, "Set to Google Lens", Toast.LENGTH_SHORT).show();
                             showSearchAssistConfigDialog();
                         })
-                .addOption(4, "⚙️", "Device Assistant Settings (Google / Gemini)",
+                .addOption(6, "⚙️", "Device Assistant Settings (Google / Gemini)",
                         "Switch your phone's Digital Assistant between Google (Circle to Search) & Gemini",
                         false, () -> {
                             try {
@@ -3503,7 +3523,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                                 }
                             }
                         })
-                .addOption(5, "📱", "System Button & Gesture Settings",
+                .addOption(7, "📱", "System Button & Gesture Settings",
                         "Open system settings for 'Press and hold Home button' / Navigation shortcuts",
                         false, this::openSystemButtonShortcutsSettings)
                 .show();
@@ -4106,7 +4126,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         appSettings != null && appSettings.isPdfAmoledDarkMode() ? "Forced pure black AMOLED mode ON" : "Disabled (Original PDF white background)",
                         appSettings != null && appSettings.isPdfAmoledDarkMode(), this::togglePdfAmoledDarkMode)
                 .addOption(7, "🔍", "Circle to Search", "Invoke search or AI assistant for current note", false, this::triggerCircleToSearch)
-                .addOption(8, "⚙️", "Search & Assistant Settings", "Configure Circle to Search vs Gemini vs Google Lens", false, this::showSearchAssistConfigDialog)
+                .addOption(8, "⚙️", "Search & Assistant Gesture",
+                        appSettings != null && appSettings.isTwoFingerSearchGestureEnabled()
+                                ? "Two-Finger Hold: Enabled (" + (appSettings != null ? appSettings.getSearchAssistTargetName() : "Circle to Search") + ")"
+                                : "Two-Finger Hold: Disabled (Tap to enable or configure)",
+                        appSettings != null && appSettings.isTwoFingerSearchGestureEnabled(), this::showSearchAssistConfigDialog)
                 .addOption(9, "📜", "Page Navigation & Swipe Gestures",
                         appSettings != null && appSettings.isContinuousVerticalScroll()
                                 ? "Current: Smooth Vertical Scroll (Tap to configure or switch to No Scroll)"
@@ -4543,6 +4567,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 appSettings.isSwipeEdgeEnabled(),
                 appSettings.getSwipeSensitivity()
         );
+        canvasView.setTwoFingerSearchGestureEnabled(appSettings.isTwoFingerSearchGestureEnabled());
     }
 
     private void goToNextPageWithAnimation() {
@@ -4709,6 +4734,17 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         isAmoled ? "Pure AMOLED black paper with crisp high-contrast text" : "Disabled (Original PDF white background)",
                         isAmoled, () -> {
                             togglePdfAmoledDarkMode();
+                            showSwipeGestureOptionsDialog();
+                        })
+                .addOption(7, "🔍", "Two-Finger Hold Search Shortcut",
+                        appSettings.isTwoFingerSearchGestureEnabled()
+                                ? "Enabled (Hold 2 fingers still to trigger search. Tap to disable)"
+                                : "Disabled (Turned off to prevent accidental triggers. Tap to enable)",
+                        appSettings.isTwoFingerSearchGestureEnabled(), () -> {
+                            boolean next = !appSettings.isTwoFingerSearchGestureEnabled();
+                            appSettings.setTwoFingerSearchGestureEnabled(next);
+                            if (canvasView != null) canvasView.setTwoFingerSearchGestureEnabled(next);
+                            Toast.makeText(this, next ? "Two-Finger Hold Search ON" : "Two-Finger Hold Search OFF", Toast.LENGTH_SHORT).show();
                             showSwipeGestureOptionsDialog();
                         })
                 .show();

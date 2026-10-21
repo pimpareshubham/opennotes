@@ -341,12 +341,34 @@ public class AppSettings {
     public static final String SEARCH_TARGET_GEMINI = "GEMINI";
     public static final String SEARCH_TARGET_LENS = "GOOGLE_LENS";
 
+    // Two-Finger Hold Search Gesture Enabled (can be turned off to avoid accidental triggers)
+    private static final String KEY_TWO_FINGER_SEARCH_GESTURE_ENABLED = "pref_two_finger_search_gesture_enabled";
+
+    public boolean isTwoFingerSearchGestureEnabled() {
+        return prefs.getBoolean(KEY_TWO_FINGER_SEARCH_GESTURE_ENABLED, true);
+    }
+
+    public void setTwoFingerSearchGestureEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_TWO_FINGER_SEARCH_GESTURE_ENABLED, enabled).apply();
+    }
+
     public String getSearchAssistTarget() {
         return prefs.getString(KEY_SEARCH_ASSIST_TARGET, SEARCH_TARGET_CIRCLE_TO_SEARCH);
     }
 
     public void setSearchAssistTarget(String target) {
         prefs.edit().putString(KEY_SEARCH_ASSIST_TARGET, target != null ? target : SEARCH_TARGET_CIRCLE_TO_SEARCH).apply();
+    }
+
+    public String getSearchAssistTargetName() {
+        String target = getSearchAssistTarget();
+        if (SEARCH_TARGET_GEMINI.equals(target)) {
+            return "Gemini Assistant";
+        } else if (SEARCH_TARGET_LENS.equals(target)) {
+            return "Google Lens";
+        } else {
+            return "Circle to Search";
+        }
     }
 
     // PDF Import Mode: Native PDF without conversion is the sole, high-performance import standard

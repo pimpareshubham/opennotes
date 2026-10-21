@@ -98,13 +98,25 @@ public class CanvasView extends View {
 
     private OnCircleToSearchGestureListener circleToSearchGestureListener;
     private final Runnable twoFingerSearchRunnable = this::triggerCircleToSearchGesture;
+    private boolean isTwoFingerSearchGestureEnabled = true;
 
     public void setOnCircleToSearchGestureListener(OnCircleToSearchGestureListener listener) {
         this.circleToSearchGestureListener = listener;
     }
 
+    public void setTwoFingerSearchGestureEnabled(boolean enabled) {
+        this.isTwoFingerSearchGestureEnabled = enabled;
+        if (!enabled) {
+            removeCallbacks(twoFingerSearchRunnable);
+        }
+    }
+
+    public boolean isTwoFingerSearchGestureEnabled() {
+        return isTwoFingerSearchGestureEnabled;
+    }
+
     public void triggerCircleToSearchGesture() {
-        if (circleToSearchGestureListener != null) {
+        if (isTwoFingerSearchGestureEnabled && circleToSearchGestureListener != null) {
             performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
             circleToSearchGestureListener.onCircleToSearchTriggered();
         }
@@ -6007,7 +6019,9 @@ public class CanvasView extends View {
                             twoFingerStartX1 - twoFingerStartX0,
                             twoFingerStartY1 - twoFingerStartY0);
                     removeCallbacks(twoFingerSearchRunnable);
-                    postDelayed(twoFingerSearchRunnable, 600L);
+                    if (isTwoFingerSearchGestureEnabled) {
+                        postDelayed(twoFingerSearchRunnable, 600L);
+                    }
                     if (twoFingerStartSpan < dp(45f)) {
                         manualTwoFingerPanConfirmed = false;
                         break;

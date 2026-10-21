@@ -80,6 +80,9 @@ public class PdfSupportTest {
         assertEquals("NATIVE_PDF", org.opennotes.app.db.AppSettings.PDF_IMPORT_MODE_NATIVE_PDF);
         assertEquals("VERTICAL_SCROLL", org.opennotes.app.db.AppSettings.PAGE_VIEW_MODE_VERTICAL_SCROLL);
         assertEquals("HORIZONTAL_SWITCH", org.opennotes.app.db.AppSettings.PAGE_VIEW_MODE_HORIZONTAL_SWITCH);
+        assertEquals("CIRCLE_TO_SEARCH", org.opennotes.app.db.AppSettings.SEARCH_TARGET_CIRCLE_TO_SEARCH);
+        assertEquals("GEMINI", org.opennotes.app.db.AppSettings.SEARCH_TARGET_GEMINI);
+        assertEquals("GOOGLE_LENS", org.opennotes.app.db.AppSettings.SEARCH_TARGET_LENS);
     }
 }
 
