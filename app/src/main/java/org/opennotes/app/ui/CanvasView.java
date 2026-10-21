@@ -73,7 +73,6 @@ public class CanvasView extends View {
     private static final float STROKE_GRID_CELL_SIZE = 512f;
     private static final long MAX_STROKE_GRID_CELLS = 64L;
     private static final long MAX_VISIBLE_GRID_CELLS = 128L;
-    private static final int LASER_FADE_BUCKETS = 24;
     private static final ExecutorService RECOGNITION_PREPROCESSOR =
             Executors.newSingleThreadExecutor();
 
@@ -265,9 +264,10 @@ public class CanvasView extends View {
             this.startsSubpath = startsSubpath;
         }
     }
-    private final List<LaserPoint> laserTrail = new ArrayList<>(256);
-    private final Path[] laserFadePaths = new Path[LASER_FADE_BUCKETS];
-    private final boolean[] usedLaserFadePaths = new boolean[LASER_FADE_BUCKETS];
+    private final List<LaserPoint> laserTrail = new ArrayList<>(512);
+    private final Path laserStrokePath = new Path();
+    private long lastLaserTouchEndTime = 0L;
+    private boolean laserNeedsPathRebuild = true;
     private Page spatialIndexPage;
     private int spatialIndexStrokeCount;
     private final LongSparseArray<List<Integer>> strokeSpatialGrid = new LongSparseArray<>();
@@ -602,9 +602,6 @@ public class CanvasView extends View {
             // MotionEvent path remains fully functional if a device has no provider.
             motionEventPredictor = null;
         }
-        for (int i = 0; i < laserFadePaths.length; i++) {
-            laserFadePaths[i] = new Path();
-        }
         amoledBitmapPaint.setColorFilter(AMOLED_DARK_FILTER);
 
         scaleDetector = new ScaleGestureDetector(getContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
@@ -899,6 +896,7 @@ public class CanvasView extends View {
         }
         viewportOffsetY = 0f;
         clearSelection();
+        clearLaserTrail();
         cancelPendingAutoConversion();
         undoStack.clear();
         redoStack.clear();
@@ -2051,6 +2049,9 @@ public class CanvasView extends View {
             return;
         }
         this.currentTool = tool;
+        if (tool != DrawingTool.LASER) {
+            clearLaserTrail();
+        }
         if (tool != DrawingTool.LASSO) {
             clearSelection();
         }
@@ -2185,7 +2186,72 @@ public class CanvasView extends View {
     public void setLaserStrokeWidth(float width) {
         this.laserStrokeWidth = width;
         this.laserTipRadius = Math.max(8f, width * 0.85f);
+        this.laserNeedsPathRebuild = true;
         invalidate();
+    }
+
+    public void clearLaserTrail() {
+        if (!laserTrail.isEmpty() || !laserStrokePath.isEmpty() || isLaserTouching) {
+            laserTrail.clear();
+            laserStrokePath.reset();
+            laserNeedsPathRebuild = true;
+            lastLaserTouchEndTime = 0L;
+            isLaserTouching = false;
+            invalidate();
+        }
+    }
+
+    private void appendLaserPoint(float x, float y, long timestamp) {
+        if (!laserTrail.isEmpty()) {
+            LaserPoint last = laserTrail.get(laserTrail.size() - 1);
+            float dx = x - last.x;
+            float dy = y - last.y;
+            if (dx * dx + dy * dy < 2.0f / (scaleFactor * scaleFactor)) {
+                return;
+            }
+        }
+        laserTrail.add(new LaserPoint(x, y, timestamp, false));
+    }
+
+    private void buildLaserPath(Path path, List<LaserPoint> points) {
+        path.reset();
+        if (points == null || points.isEmpty()) return;
+
+        int size = points.size();
+        int subpathStart = 0;
+
+        for (int i = 0; i <= size; i++) {
+            if (i == size || (i > subpathStart && points.get(i).startsSubpath)) {
+                int count = i - subpathStart;
+                if (count == 1) {
+                    LaserPoint p = points.get(subpathStart);
+                    path.moveTo(p.x - 0.5f, p.y);
+                    path.lineTo(p.x + 0.5f, p.y);
+                } else if (count == 2) {
+                    LaserPoint p1 = points.get(subpathStart);
+                    LaserPoint p2 = points.get(subpathStart + 1);
+                    path.moveTo(p1.x, p1.y);
+                    path.lineTo(p2.x, p2.y);
+                } else if (count > 2) {
+                    LaserPoint p0 = points.get(subpathStart);
+                    path.moveTo(p0.x, p0.y);
+                    for (int j = subpathStart; j < i - 1; j++) {
+                        LaserPoint prev = j > subpathStart ? points.get(j - 1) : points.get(j);
+                        LaserPoint cur = points.get(j);
+                        LaserPoint next = points.get(j + 1);
+                        LaserPoint nextNext = j + 2 < i ? points.get(j + 2) : next;
+
+                        float cp1x = cur.x + (next.x - prev.x) / 6f;
+                        float cp1y = cur.y + (next.y - prev.y) / 6f;
+                        float cp2x = next.x - (nextNext.x - cur.x) / 6f;
+                        float cp2y = next.y - (nextNext.y - cur.y) / 6f;
+
+                        path.cubicTo(cp1x, cp1y, cp2x, cp2y, next.x, next.y);
+                    }
+                }
+                subpathStart = i;
+            }
+        }
     }
 
     public void setOnAudioMemoClickListener(OnAudioMemoClickListener listener) {
@@ -3083,79 +3149,108 @@ public class CanvasView extends View {
                 }
             }
 
-            // 9. Draw Laser Pointer Presentation Trail & StarNote Glowing Bullseye Tip
+            // 9. Draw Laser Pointer Presentation Trail (Steady glowing line + smooth easing fade)
             if (!laserTrail.isEmpty() && laserMode == LaserMode.LINE) {
                 long now = SystemClock.uptimeMillis();
-                int expiredCount = 0;
-                while (expiredCount < laserTrail.size()
-                        && now - laserTrail.get(expiredCount).timestamp > laserFadeDurationMs) {
-                    expiredCount++;
-                }
-                if (expiredCount > 0) laserTrail.subList(0, expiredCount).clear();
-                Arrays.fill(usedLaserFadePaths, false);
-                for (Path path : laserFadePaths) path.reset();
-                if (laserTrail.size() >= 2) {
-                    for (int i = 0; i < laserTrail.size() - 1; i++) {
-                        LaserPoint p1 = laserTrail.get(i);
-                        LaserPoint p2 = laserTrail.get(i + 1);
-                        if (p2.startsSubpath) continue;
-                        LaserPoint p0 = i > 0 && !p1.startsSubpath ? laserTrail.get(i - 1) : p1;
-                        LaserPoint p3 = i + 2 < laserTrail.size() && !laserTrail.get(i + 2).startsSubpath ? laserTrail.get(i + 2) : p2;
-                        float lifeRatio = Math.max(0f, Math.min(1f,
-                                1.0f - (float) (now - p2.timestamp) / (float) laserFadeDurationMs));
-                        int bucket = Math.min(LASER_FADE_BUCKETS - 1, (int) (lifeRatio * LASER_FADE_BUCKETS));
-                        Path path = laserFadePaths[bucket];
-                        float control1X = p1.x + (p2.x - p0.x) / 6f;
-                        float control1Y = p1.y + (p2.y - p0.y) / 6f;
-                        float control2X = p2.x - (p3.x - p1.x) / 6f;
-                        float control2Y = p2.y - (p3.y - p1.y) / 6f;
-                        path.moveTo(p1.x, p1.y);
-                        path.cubicTo(control1X, control1Y, control2X, control2Y, p2.x, p2.y);
-                        usedLaserFadePaths[bucket] = true;
+                float alpha = 1.0f;
+                if (!isLaserTouching) {
+                    if (lastLaserTouchEndTime == 0L) {
+                        lastLaserTouchEndTime = now;
                     }
+                    long elapsed = now - lastLaserTouchEndTime;
+                    if (elapsed >= laserFadeDurationMs) {
+                        alpha = 0f;
+                        laserTrail.clear();
+                        laserStrokePath.reset();
+                        laserNeedsPathRebuild = true;
+                        lastLaserTouchEndTime = 0L;
+                    } else {
+                        // Steady hold period, followed by smooth cubic ease-out fade
+                        long fadePeriod = Math.min(650L, Math.max(300L, (long) (laserFadeDurationMs * 0.4f)));
+                        long holdPeriod = Math.max(0L, laserFadeDurationMs - fadePeriod);
+                        if (elapsed <= holdPeriod) {
+                            alpha = 1.0f;
+                        } else {
+                            float progress = (float) (elapsed - holdPeriod) / (float) fadePeriod;
+                            progress = Math.max(0f, Math.min(1f, progress));
+                            float fade = 1.0f - progress;
+                            alpha = fade * fade * (3f - 2f * fade);
+                        }
+                    }
+                } else {
+                    alpha = 1.0f;
                 }
-                for (int bucket = 0; bucket < LASER_FADE_BUCKETS; bucket++) {
-                    if (!usedLaserFadePaths[bucket]) continue;
-                    float lifeRatio = (bucket + 0.5f) / LASER_FADE_BUCKETS;
-                    float fade = lifeRatio * lifeRatio * (3f - 2f * lifeRatio);
-                    float widthScale = 0.72f + 0.28f * fade;
+
+                if (alpha > 0f && !laserTrail.isEmpty()) {
+                    if (laserNeedsPathRebuild) {
+                        buildLaserPath(laserStrokePath, laserTrail);
+                        laserNeedsPathRebuild = false;
+                    }
+
+                    // Layer 1: Wide diffused ambient laser glow
                     laserGlowPaint.setColor(laserColor);
-                    laserGlowPaint.setAlpha(Math.round(180f * fade));
-                    laserGlowPaint.setStrokeWidth(laserStrokeWidth * 2.2f * widthScale);
-                    canvas.drawPath(laserFadePaths[bucket], laserGlowPaint);
-                    laserCorePaint.setAlpha(Math.round(255f * fade));
-                    laserCorePaint.setStrokeWidth(laserStrokeWidth * 0.65f * widthScale);
-                    canvas.drawPath(laserFadePaths[bucket], laserCorePaint);
-                }
-                if (!laserTrail.isEmpty()) {
+                    laserGlowPaint.setAlpha(Math.round(85f * alpha));
+                    laserGlowPaint.setStrokeWidth(laserStrokeWidth * 3.2f);
+                    canvas.drawPath(laserStrokePath, laserGlowPaint);
+
+                    // Layer 2: Intense inner laser glow
+                    laserGlowPaint.setAlpha(Math.round(195f * alpha));
+                    laserGlowPaint.setStrokeWidth(laserStrokeWidth * 1.8f);
+                    canvas.drawPath(laserStrokePath, laserGlowPaint);
+
+                    // Layer 3: Brilliant white core (StarNote presentation laser beam)
+                    laserCorePaint.setColor(Color.WHITE);
+                    laserCorePaint.setAlpha(Math.round(255f * alpha));
+                    laserCorePaint.setStrokeWidth(Math.max(2f, laserStrokeWidth * 0.65f));
+                    canvas.drawPath(laserStrokePath, laserCorePaint);
+
                     postInvalidateOnAnimation();
                 }
             }
 
-            // Draw Active Concentric Bullseye Reticle (visible ONLY while touching)
+            // Draw Concentric Bullseye Reticle (visible while touching or smoothly fading in DOT mode)
+            float dotAlpha = 0f;
             if (isLaserTouching) {
+                dotAlpha = 1.0f;
+            } else if (laserMode == LaserMode.DOT && lastLaserTouchEndTime > 0L) {
+                long elapsed = SystemClock.uptimeMillis() - lastLaserTouchEndTime;
+                if (elapsed < laserFadeDurationMs) {
+                    long fadePeriod = Math.min(500L, Math.max(250L, (long) (laserFadeDurationMs * 0.35f)));
+                    long holdPeriod = Math.max(0L, laserFadeDurationMs - fadePeriod);
+                    if (elapsed <= holdPeriod) {
+                        dotAlpha = 1.0f;
+                    } else {
+                        float progress = (float) (elapsed - holdPeriod) / (float) fadePeriod;
+                        progress = Math.max(0f, Math.min(1f, progress));
+                        float fade = 1.0f - progress;
+                        dotAlpha = fade * fade * (3f - 2f * fade);
+                    }
+                }
+            }
+
+            if (dotAlpha > 0f) {
                 float tipX = laserCurrentX;
                 float tipY = laserCurrentY;
                 float tipBaseRadius = laserTipRadius / Math.max(0.5f, scaleFactor);
 
                 // 1. Soft glowing halo
                 laserHaloPaint.setColor(laserColor);
-                laserHaloPaint.setAlpha(65);
+                laserHaloPaint.setAlpha(Math.round(65f * dotAlpha));
                 canvas.drawCircle(tipX, tipY, tipBaseRadius * 1.45f, laserHaloPaint);
 
                 // 2. Outer circle (solid laser color)
                 laserTipOuterPaint.setColor(laserColor);
-                laserTipOuterPaint.setAlpha(255);
+                laserTipOuterPaint.setAlpha(Math.round(255f * dotAlpha));
                 canvas.drawCircle(tipX, tipY, tipBaseRadius, laserTipOuterPaint);
 
                 // 3. Middle ring (pure white)
                 laserTipMiddlePaint.setColor(Color.WHITE);
-                laserTipMiddlePaint.setAlpha(255);
+                laserTipMiddlePaint.setAlpha(Math.round(255f * dotAlpha));
                 canvas.drawCircle(tipX, tipY, tipBaseRadius * 0.72f, laserTipMiddlePaint);
 
                 // 4. Center core dot (solid laser color)
                 laserTipCenterPaint.setColor(laserColor);
-                laserTipCenterPaint.setAlpha(255);
+                laserTipCenterPaint.setAlpha(Math.round(255f * dotAlpha));
                 canvas.drawCircle(tipX, tipY, tipBaseRadius * 0.36f, laserTipCenterPaint);
 
                 postInvalidateOnAnimation();
@@ -5393,16 +5488,24 @@ public class CanvasView extends View {
             }
         }
 
-        // 2b. StarNote Laser Presentation Tool (ephemeral trail + concentric bullseye target dot)
+        // 2b. StarNote Laser Presentation Tool (steady multi-stroke trail + refreshed timer on re-touch)
         if (currentTool == DrawingTool.LASER) {
+            long now = SystemClock.uptimeMillis();
             switch (action) {
                 case MotionEvent.ACTION_DOWN:
                     isLaserTouching = true;
                     laserCurrentX = canvasX;
                     laserCurrentY = canvasY;
+                    // If previous trail had completely expired, start clean
+                    if (lastLaserTouchEndTime > 0L && now - lastLaserTouchEndTime >= laserFadeDurationMs) {
+                        laserTrail.clear();
+                        laserStrokePath.reset();
+                    }
+                    // Reset the expiration timer: drawing again increases/refreshes the timer of all visible strokes!
+                    lastLaserTouchEndTime = 0L;
                     if (laserMode == LaserMode.LINE) {
-                        laserTrail.add(new LaserPoint(canvasX, canvasY,
-                                event.getEventTime(), true));
+                        laserTrail.add(new LaserPoint(canvasX, canvasY, now, true));
+                        laserNeedsPathRebuild = true;
                     }
                     postInvalidateOnAnimation();
                     return true;
@@ -5410,6 +5513,7 @@ public class CanvasView extends View {
                     isLaserTouching = true;
                     laserCurrentX = canvasX;
                     laserCurrentY = canvasY;
+                    lastLaserTouchEndTime = 0L; // Keep refreshing timer while dragging
                     if (laserMode == LaserMode.LINE) {
                         int historySize = event.getHistorySize();
                         for (int i = 0; i < historySize; i++) {
@@ -5417,16 +5521,17 @@ public class CanvasView extends View {
                             float histRawY = event.getHistoricalY(inputPointerIndex, i);
                             float histX = (histRawX - panOffsetX) / scaleFactor;
                             float histY = (histRawY - panOffsetY) / scaleFactor + viewportOffsetY;
-                            laserTrail.add(new LaserPoint(histX, histY,
-                                    event.getHistoricalEventTime(i)));
+                            appendLaserPoint(histX, histY, now);
                         }
-                        laserTrail.add(new LaserPoint(canvasX, canvasY, event.getEventTime()));
+                        appendLaserPoint(canvasX, canvasY, now);
+                        laserNeedsPathRebuild = true;
                     }
                     postInvalidateOnAnimation();
                     return true;
                 case MotionEvent.ACTION_UP:
                 case MotionEvent.ACTION_CANCEL:
                     isLaserTouching = false;
+                    lastLaserTouchEndTime = SystemClock.uptimeMillis(); // Expiration countdown begins now for ALL strokes
                     postInvalidateOnAnimation();
                     return true;
             }
@@ -6037,7 +6142,7 @@ public class CanvasView extends View {
         isPanning = false;
         lassoPath.reset();
         lassoPoints.clear();
-        laserTrail.clear();
+        clearLaserTrail();
         hasPredictedInkPoint = false;
         if (movedSelection) {
             finishSelectionMove();
