@@ -60,6 +60,7 @@ public final class BackupManager {
      */
     public static void createBackup(Context context, Uri destinationUri, BackupCallback callback) {
         new Thread(() -> {
+            File tempZipFile = null;
             try {
                 Context appContext = context.getApplicationContext();
                 NotesDbHelper dbHelper = NotesDbHelper.getInstance(appContext);
@@ -76,12 +77,11 @@ public final class BackupManager {
                 List<Notebook> allNotebooks = dbHelper.getAllNotebooks("All", false, null);
                 int notebookCount = allNotebooks.size();
 
-                OutputStream outStream = appContext.getContentResolver().openOutputStream(destinationUri, "w");
-                if (outStream == null) {
-                    throw new IOException("Unable to open output stream for destination URI.");
-                }
+                tempZipFile = new File(appContext.getCacheDir(), "backup_staging_" + System.currentTimeMillis() + ".zip");
+                try (FileOutputStream fos = new FileOutputStream(tempZipFile);
+                     BufferedOutputStream bos = new BufferedOutputStream(fos, BUFFER_SIZE);
+                     ZipOutputStream zos = new ZipOutputStream(bos)) {
 
-                try (ZipOutputStream zos = new ZipOutputStream(new BufferedOutputStream(outStream, BUFFER_SIZE))) {
                     // 2. Write backup manifest
                     JSONObject manifest = new JSONObject();
                     manifest.put("format", BACKUP_FORMAT);
@@ -110,21 +110,31 @@ public final class BackupManager {
                     zos.finish();
                 }
 
-                long fileSize = 0;
-                try (Cursor cursor = appContext.getContentResolver().query(destinationUri, null, null, null, null)) {
-                    if (cursor != null && cursor.moveToFirst()) {
-                        int sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE);
-                        if (sizeIndex != -1) {
-                            fileSize = cursor.getLong(sizeIndex);
-                        }
-                    }
-                } catch (Throwable ignored) {}
+                long finalSize = tempZipFile.length();
 
-                final long finalSize = fileSize;
+                // 5. Copy completed backup archive to user's selected destination URI
+                try (InputStream in = new FileInputStream(tempZipFile);
+                     OutputStream out = appContext.getContentResolver().openOutputStream(destinationUri, "w")) {
+                    if (out == null) {
+                        throw new IOException("Unable to open output stream for destination URI.");
+                    }
+                    byte[] buffer = new byte[BUFFER_SIZE];
+                    int read;
+                    while ((read = in.read(buffer)) != -1) {
+                        out.write(buffer, 0, read);
+                    }
+                    out.flush();
+                }
+
                 callback.onSuccess(notebookCount, finalSize);
             } catch (Throwable e) {
                 Log.e(TAG, "Backup creation failed", e);
                 callback.onError(e);
+            } finally {
+                if (tempZipFile != null && tempZipFile.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    tempZipFile.delete();
+                }
             }
         }).start();
     }

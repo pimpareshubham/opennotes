@@ -1037,9 +1037,9 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             public void onSuccess(int notebookCount, long totalBytes) {
                 runOnUiThread(() -> {
                     dismissBackupProgress();
-                    String sizeMb = String.format(java.util.Locale.US, "%.1f MB", totalBytes / (1024f * 1024f));
+                    String formattedSize = android.text.format.Formatter.formatShortFileSize(MainActivity.this, totalBytes);
                     Toast.makeText(MainActivity.this,
-                            "✅ Backup saved successfully! (" + notebookCount + " notebooks, " + sizeMb + ")",
+                            "✅ Backup saved successfully! (" + notebookCount + " notebooks, " + formattedSize + ")",
                             Toast.LENGTH_LONG).show();
                 });
             }
