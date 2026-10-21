@@ -348,4 +348,51 @@ public class AppSettings {
     public void setSearchAssistTarget(String target) {
         prefs.edit().putString(KEY_SEARCH_ASSIST_TARGET, target != null ? target : SEARCH_TARGET_CIRCLE_TO_SEARCH).apply();
     }
+
+    // PDF Import Mode: Option 1 (Convert to high-quality PNG images) vs Option 2 (Native PDF without conversion)
+    private static final String KEY_PDF_IMPORT_MODE = "pref_pdf_import_mode";
+    public static final String PDF_IMPORT_MODE_CONVERT_PNG = "CONVERT_PNG";
+    public static final String PDF_IMPORT_MODE_NATIVE_PDF = "NATIVE_PDF";
+
+    public String getPdfImportMode() {
+        return prefs.getString(KEY_PDF_IMPORT_MODE, PDF_IMPORT_MODE_CONVERT_PNG);
+    }
+
+    public void setPdfImportMode(String mode) {
+        prefs.edit().putString(KEY_PDF_IMPORT_MODE, mode != null ? mode : PDF_IMPORT_MODE_CONVERT_PNG).apply();
+    }
+
+    public boolean isNativePdfImport() {
+        return PDF_IMPORT_MODE_NATIVE_PDF.equals(getPdfImportMode());
+    }
+
+    // Page Navigation / Scroll Mode: No Scroll (Change pages only) vs Smooth Vertical Scroll
+    private static final String KEY_PAGE_VIEW_MODE = "pref_page_view_mode";
+    public static final String PAGE_VIEW_MODE_VERTICAL_SCROLL = "VERTICAL_SCROLL";
+    public static final String PAGE_VIEW_MODE_HORIZONTAL_SWITCH = "HORIZONTAL_SWITCH";
+
+    public String getPageViewMode() {
+        return prefs.getString(KEY_PAGE_VIEW_MODE, PAGE_VIEW_MODE_HORIZONTAL_SWITCH);
+    }
+
+    public void setPageViewMode(String mode) {
+        prefs.edit().putString(KEY_PAGE_VIEW_MODE, mode != null ? mode : PAGE_VIEW_MODE_HORIZONTAL_SWITCH).apply();
+    }
+
+    public boolean isContinuousVerticalScroll() {
+        return PAGE_VIEW_MODE_VERTICAL_SCROLL.equals(getPageViewMode());
+    }
+
+    public void setContinuousVerticalScroll(boolean continuous) {
+        setPageViewMode(continuous ? PAGE_VIEW_MODE_VERTICAL_SCROLL : PAGE_VIEW_MODE_HORIZONTAL_SWITCH);
+    }
+
+    public boolean isNoScrollMode() {
+        return !isContinuousVerticalScroll();
+    }
+
+    public void setNoScrollMode(boolean noScroll) {
+        setContinuousVerticalScroll(!noScroll);
+    }
 }
+

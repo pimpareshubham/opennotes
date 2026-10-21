@@ -20,6 +20,7 @@ import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
+import org.opennotes.app.util.PdfPageRenderer;
 import org.opennotes.app.util.TextSpacingCompat;
 
 import java.io.File;
@@ -88,10 +89,15 @@ public class PdfExporter {
                 Paint imagePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.FILTER_BITMAP_FLAG | Paint.DITHER_FLAG);
                 for (ImageItem img : page.images) {
                     if (img != null && img.isBackground && img.imagePath != null) {
-                        File imgFile = new File(img.imagePath);
-                        if (!imgFile.exists()) continue;
                         try {
-                            Bitmap bmp = BitmapFactory.decodeFile(img.imagePath);
+                            Bitmap bmp;
+                            if (PdfPageRenderer.isPdfPageReference(img.imagePath)) {
+                                bmp = PdfPageRenderer.renderPageForExport(context, img.imagePath, (int) img.width, (int) img.height);
+                            } else {
+                                File imgFile = new File(img.imagePath);
+                                if (!imgFile.exists()) continue;
+                                bmp = BitmapFactory.decodeFile(img.imagePath);
+                            }
                             if (bmp != null) {
                                 canvas.drawBitmap(bmp, null, img.getBounds(), imagePaint);
                             }

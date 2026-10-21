@@ -432,6 +432,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void bindViews() {
         canvasView = findViewById(R.id.canvasView);
+        canvasView.setOnActivePageChangeListener(newIndex -> {
+            if (pages != null && newIndex >= 0 && newIndex < pages.size()) {
+                currentPageIndex = newIndex;
+                currentPage = pages.get(currentPageIndex);
+                updatePageNavUi();
+                updateUndoRedoUi();
+            }
+        });
         topBar = findViewById(R.id.topBar);
 
         // Apply status bar and display cutout insets so top navbar never clashes with device status bar
@@ -1249,16 +1257,23 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void loadCurrentPage() {
         if (currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
         currentPage = pages.get(currentPageIndex);
+        boolean isContinuous = appSettings != null && appSettings.isContinuousVerticalScroll();
         if (appSettings != null) {
             canvasView.setPdfAmoledDarkMode(appSettings.isPdfAmoledDarkMode());
+            canvasView.setContinuousVerticalScroll(isContinuous);
         }
-        canvasView.setPage(currentPage);
+        if (isContinuous && pages.size() > 1) {
+            canvasView.setPages(pages, currentPageIndex);
+        } else {
+            canvasView.setPage(currentPage);
+        }
         updatePageNavUi();
         updateUndoRedoUi();
     }
 
     private void updatePageNavUi() {
-        textPageCounter.setText((currentPageIndex + 1) + " / " + pages.size());
+        boolean isContinuous = appSettings != null && appSettings.isContinuousVerticalScroll();
+        textPageCounter.setText((currentPageIndex + 1) + " / " + pages.size() + (isContinuous ? " ↕" : ""));
         btnPrevPage.setEnabled(currentPageIndex > 0);
         btnPrevPage.setAlpha(currentPageIndex > 0 ? 1.0f : 0.35f);
         btnNextPage.setEnabled(currentPageIndex < pages.size() - 1);
@@ -3840,9 +3855,23 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         com.google.android.material.button.MaterialButton btnOverviewAddPage = dialogView.findViewById(R.id.btnOverviewAddPage);
         rv.setLayoutManager(new GridLayoutManager(this, 3));
 
+        boolean isContinuous = appSettings != null && appSettings.isContinuousVerticalScroll();
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setView(dialogView)
                 .setTitle("Pages (" + pages.size() + ")")
+                .setPositiveButton(isContinuous ? "Mode: ↕ Vertical Scroll" : "Mode: ↔ No Scroll (Page Turn)", (d, w) -> {
+                    boolean next = !appSettings.isContinuousVerticalScroll();
+                    appSettings.setContinuousVerticalScroll(next);
+                    canvasView.setContinuousVerticalScroll(next);
+                    if (next && pages.size() > 1) {
+                        canvasView.setPages(pages, currentPageIndex);
+                    } else {
+                        canvasView.setPage(currentPage);
+                    }
+                    updatePageNavUi();
+                    Toast.makeText(this, next ? "Smooth Vertical Scroll enabled" : "No Scroll: Change Pages Only enabled", Toast.LENGTH_SHORT).show();
+                    showPageOverviewDialog();
+                })
                 .setNegativeButton("Close", null)
                 .create();
         ThemeUtils.styleDialog(dialog, this);
@@ -4078,7 +4107,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         appSettings != null && appSettings.isPdfAmoledDarkMode(), this::togglePdfAmoledDarkMode)
                 .addOption(7, "🔍", "Circle to Search", "Invoke search or AI assistant for current note", false, this::triggerCircleToSearch)
                 .addOption(8, "⚙️", "Search & Assistant Settings", "Configure Circle to Search vs Gemini vs Google Lens", false, this::showSearchAssistConfigDialog)
-                .addOption(9, "↔️", "Page Swipe Gestures", "Configure swipe left/right gestures for PDF & notebook pages", false, this::showSwipeGestureOptionsDialog)
+                .addOption(9, "📜", "Page Navigation & Swipe Gestures",
+                        appSettings != null && appSettings.isContinuousVerticalScroll()
+                                ? "Current: Smooth Vertical Scroll (Tap to configure or switch to No Scroll)"
+                                : "Current: No Scroll / Change Pages Only (Tap to configure or switch to Vertical Scroll)",
+                        appSettings != null && appSettings.isContinuousVerticalScroll(), this::showSwipeGestureOptionsDialog)
                 .addOption(10, "➰", "Select All Content", "Select all ink strokes and items on this page", false, () -> {
                     if (!canvasView.selectAllContent()) {
                         Toast.makeText(this, "There is no content on this page to select", Toast.LENGTH_SHORT).show();
@@ -4514,6 +4547,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void goToNextPageWithAnimation() {
         if (pages == null || pages.isEmpty()) return;
+        if (canvasView != null && canvasView.isContinuousVerticalScroll() && pages.size() > 1) {
+            if (currentPageIndex < pages.size() - 1) {
+                saveCurrentPage();
+                canvasView.smoothScrollToPage(currentPageIndex + 1);
+            } else {
+                Toast.makeText(this, "Last page (" + pages.size() + " / " + pages.size() + ")", Toast.LENGTH_SHORT).show();
+            }
+            return;
+        }
         if (currentPageIndex < pages.size() - 1) {
             saveCurrentPage();
             currentPageIndex++;
@@ -4545,6 +4587,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void goToPrevPageWithAnimation() {
         if (pages == null || pages.isEmpty()) return;
+        if (canvasView != null && canvasView.isContinuousVerticalScroll() && pages.size() > 1) {
+            if (currentPageIndex > 0) {
+                saveCurrentPage();
+                canvasView.smoothScrollToPage(currentPageIndex - 1);
+            }
+            return;
+        }
         if (currentPageIndex > 0) {
             saveCurrentPage();
             currentPageIndex--;
@@ -4576,6 +4625,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void showSwipeGestureOptionsDialog() {
         if (appSettings == null) return;
+        boolean isContinuous = appSettings.isContinuousVerticalScroll();
         boolean isEnabled = appSettings.isSwipePageEnabled();
         boolean isTwoFinger = appSettings.isSwipeTwoFingerEnabled();
         boolean isSingleFinger = appSettings.isSwipeSingleFingerEnabled();
@@ -4584,9 +4634,25 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         boolean isAmoled = appSettings.isPdfAmoledDarkMode();
 
         new ModernOptionsSelectorDialog.Builder(this)
-                .setTitle("Page Swipe Gestures & PDF View")
-                .setSubtitle("Customize page turn gestures and AMOLED dark mode")
+                .setTitle("Page Navigation & Swipe Gestures")
+                .setSubtitle("Customize page scroll style, gestures, and AMOLED mode")
                 .setHeaderSymbol("↔️")
+                .addOption(0, "📜", "Page Navigation Mode",
+                        isContinuous ? "Smooth Continuous Vertical Scroll (Tap for No Scroll / Change Pages Only)"
+                                     : "No Scroll / Change Pages Only (Tap for Smooth Vertical Scroll)",
+                        isContinuous, () -> {
+                            boolean next = !appSettings.isContinuousVerticalScroll();
+                            appSettings.setContinuousVerticalScroll(next);
+                            canvasView.setContinuousVerticalScroll(next);
+                            if (next && pages.size() > 1) {
+                                canvasView.setPages(pages, currentPageIndex);
+                            } else {
+                                canvasView.setPage(currentPage);
+                            }
+                            updatePageNavUi();
+                            Toast.makeText(this, next ? "Smooth Vertical Scroll enabled" : "No Scroll: Change Pages Only enabled", Toast.LENGTH_SHORT).show();
+                            showSwipeGestureOptionsDialog();
+                        })
                 .addOption(1, "↔️", "Enable Page Swipe Gestures",
                         isEnabled ? "Swipe gestures active (turning pages enabled)" : "Swipe gestures disabled",
                         isEnabled, () -> {

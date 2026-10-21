@@ -14,6 +14,7 @@ import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
+import android.view.InputDevice;
 import android.view.ScaleGestureDetector;
 import android.view.VelocityTracker;
 import android.view.View;
@@ -43,6 +44,7 @@ import org.opennotes.app.model.ShapeItem;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
 import org.opennotes.app.ai.PageWritingContext;
+import org.opennotes.app.util.PdfPageRenderer;
 import org.opennotes.app.util.SelectionClipboard;
 import org.opennotes.app.util.TextSpacingCompat;
 
@@ -282,6 +284,23 @@ public class CanvasView extends View {
     private boolean manualTwoFingerPanConfirmed;
     private float scaleGestureStartSpan;
     private boolean scaleGestureConfirmed;
+
+    // Multi-page & Continuous Vertical Scroll state
+    private List<Page> allPages;
+    private int activePageIndex = 0;
+    private boolean isContinuousVerticalScroll = false;
+    private static final float VERTICAL_PAGE_GAP = 36f;
+    private final Paint pageDividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private final Paint pageCardBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+    private float activeStrokePageTop = 0f;
+    private Page activeStrokePage = null;
+    private float handInitialViewportY = 0f;
+    private float initialViewportOffsetY = 0f;
+
+    public interface OnActivePageChangeListener {
+        void onActivePageChanged(int newPageIndex);
+    }
+    private OnActivePageChangeListener activePageChangeListener;
 
     // Shape drawing state
     private boolean isDrawingShape = false;
@@ -655,6 +674,10 @@ public class CanvasView extends View {
         scrollbarPaint.setColor(0x6638BDF8);
         scrollbarPaint.setStyle(Paint.Style.FILL);
 
+        pageDividerPaint.setColor(0x3364748B);
+        pageDividerPaint.setStyle(Paint.Style.STROKE);
+        pageCardBgPaint.setStyle(Paint.Style.FILL);
+
         lassoPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
         lassoPaint.setStyle(Paint.Style.STROKE);
         lassoPaint.setColor(0xFF38BDF8);
@@ -900,14 +923,144 @@ public class CanvasView extends View {
 
     @Nullable
     public ImageItem getBackgroundImage() {
-        if (currentPage != null && currentPage.images != null) {
-            for (ImageItem img : currentPage.images) {
+        return getPageBackgroundImage(currentPage);
+    }
+
+    @Nullable
+    public ImageItem getPageBackgroundImage(@Nullable Page p) {
+        if (p != null && p.images != null) {
+            for (ImageItem img : p.images) {
                 if (img != null && img.isBackground) {
                     return img;
                 }
             }
         }
         return null;
+    }
+
+    public void setOnActivePageChangeListener(OnActivePageChangeListener listener) {
+        this.activePageChangeListener = listener;
+    }
+
+    public void setPages(@Nullable List<Page> pages, int activeIndex) {
+        this.allPages = pages;
+        this.activePageIndex = (pages != null && activeIndex >= 0 && activeIndex < pages.size()) ? activeIndex : 0;
+        if (pages != null && !pages.isEmpty() && activeIndex >= 0 && activeIndex < pages.size()) {
+            setPage(pages.get(activeIndex));
+        }
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            recalculateTotalContentHeight();
+            viewportOffsetY = getPageTop(activePageIndex);
+            clampViewport();
+        } else {
+            viewportOffsetY = 0f;
+            if (currentPage != null) {
+                this.isInfinite = currentPage.isInfinite;
+                this.contentHeight = currentPage.canvasHeight > 0 ? currentPage.canvasHeight : 0f;
+            }
+        }
+        invalidate();
+    }
+
+    public void setContinuousVerticalScroll(boolean enabled) {
+        this.isContinuousVerticalScroll = enabled;
+        if (enabled && allPages != null && allPages.size() > 1) {
+            recalculateTotalContentHeight();
+            viewportOffsetY = getPageTop(activePageIndex);
+            clampViewport();
+        } else {
+            viewportOffsetY = 0f;
+            if (currentPage != null) {
+                this.isInfinite = currentPage.isInfinite;
+                this.contentHeight = currentPage.canvasHeight > 0 ? currentPage.canvasHeight : 0f;
+            }
+        }
+        invalidate();
+    }
+
+    public boolean isContinuousVerticalScroll() {
+        return isContinuousVerticalScroll;
+    }
+
+    public float getPageTop(int pageIndex) {
+        if (allPages == null || pageIndex <= 0) return 0f;
+        float top = 0f;
+        for (int i = 0; i < pageIndex && i < allPages.size(); i++) {
+            top += getPageHeight(allPages.get(i)) + VERTICAL_PAGE_GAP;
+        }
+        return top;
+    }
+
+    public float getPageHeight(Page p) {
+        if (p == null) return 2036f;
+        if (p.canvasHeight > 0f) return p.canvasHeight;
+        ImageItem bg = getPageBackgroundImage(p);
+        if (bg != null && bg.height > 0) return bg.height;
+        return 2036f;
+    }
+
+    public float getTotalPagesHeight() {
+        if (allPages == null || allPages.isEmpty()) return contentHeight;
+        float total = 0f;
+        for (int i = 0; i < allPages.size(); i++) {
+            total += getPageHeight(allPages.get(i));
+            if (i < allPages.size() - 1) {
+                total += VERTICAL_PAGE_GAP;
+            }
+        }
+        return total;
+    }
+
+    private void recalculateTotalContentHeight() {
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            contentHeight = getTotalPagesHeight();
+        } else if (currentPage != null) {
+            contentHeight = currentPage.canvasHeight > 0 ? currentPage.canvasHeight : 0f;
+        }
+    }
+
+    public int findPageIndexAtY(float canvasY) {
+        if (allPages == null || allPages.isEmpty()) return 0;
+        if (canvasY <= 0) return 0;
+        float currentY = 0f;
+        for (int i = 0; i < allPages.size(); i++) {
+            float h = getPageHeight(allPages.get(i));
+            if (canvasY >= currentY && canvasY <= currentY + h + VERTICAL_PAGE_GAP) {
+                return i;
+            }
+            currentY += h + VERTICAL_PAGE_GAP;
+        }
+        return allPages.size() - 1;
+    }
+
+    public void smoothScrollToPage(int pageIndex) {
+        if (allPages == null || pageIndex < 0 || pageIndex >= allPages.size()) return;
+        activePageIndex = pageIndex;
+        currentPage = allPages.get(pageIndex);
+        float targetY = getPageTop(pageIndex);
+        float maxScroll = getMaxScrollY();
+        targetY = Math.max(0f, Math.min(targetY, maxScroll));
+        int dy = Math.round(targetY - viewportOffsetY);
+        if (dy != 0) {
+            scroller.startScroll(0, (int) viewportOffsetY, 0, dy, 320);
+            postInvalidateOnAnimation();
+        }
+        if (activePageChangeListener != null) {
+            activePageChangeListener.onActivePageChanged(activePageIndex);
+        }
+    }
+
+    private void checkAndUpdateActivePage() {
+        if (!isContinuousVerticalScroll || allPages == null || allPages.isEmpty()) return;
+        float centerY = visibleViewport.centerY();
+        int newIdx = findPageIndexAtY(centerY);
+        if (newIdx >= 0 && newIdx < allPages.size() && newIdx != activePageIndex) {
+            activePageIndex = newIdx;
+            currentPage = allPages.get(newIdx);
+            if (activePageChangeListener != null) {
+                activePageChangeListener.onActivePageChanged(activePageIndex);
+            }
+        }
     }
 
     /**
@@ -2341,22 +2494,29 @@ public class CanvasView extends View {
         Bitmap bmp = imageCache.get(img.imagePath);
         if (bmp == null || bmp.isRecycled()) {
             try {
-                File file = new File(img.imagePath);
-                if (file.exists()) {
-                    BitmapFactory.Options opts = new BitmapFactory.Options();
-                    opts.inJustDecodeBounds = true;
-                    BitmapFactory.decodeFile(img.imagePath, opts);
-                    opts.inSampleSize = 1;
-                    int maxDim = Math.max(opts.outWidth, opts.outHeight);
-                    // Safe texture limit for modern OpenGL ES devices (supports full 4K / 300 DPI A4)
-                    while (maxDim / opts.inSampleSize > 4096) {
-                        opts.inSampleSize *= 2;
-                    }
-                    opts.inJustDecodeBounds = false;
-                    opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
-                    bmp = BitmapFactory.decodeFile(img.imagePath, opts);
+                if (PdfPageRenderer.isPdfPageReference(img.imagePath)) {
+                    bmp = PdfPageRenderer.renderPage(getContext(), img.imagePath, (int) img.width, (int) img.height);
                     if (bmp != null) {
                         imageCache.put(img.imagePath, bmp);
+                    }
+                } else {
+                    File file = new File(img.imagePath);
+                    if (file.exists()) {
+                        BitmapFactory.Options opts = new BitmapFactory.Options();
+                        opts.inJustDecodeBounds = true;
+                        BitmapFactory.decodeFile(img.imagePath, opts);
+                        opts.inSampleSize = 1;
+                        int maxDim = Math.max(opts.outWidth, opts.outHeight);
+                        // Safe texture limit for modern OpenGL ES devices (supports full 4K / 300 DPI A4)
+                        while (maxDim / opts.inSampleSize > 4096) {
+                            opts.inSampleSize *= 2;
+                        }
+                        opts.inJustDecodeBounds = false;
+                        opts.inPreferredConfig = Bitmap.Config.ARGB_8888;
+                        bmp = BitmapFactory.decodeFile(img.imagePath, opts);
+                        if (bmp != null) {
+                            imageCache.put(img.imagePath, bmp);
+                        }
                     }
                 }
             } catch (Throwable ignored) {}
@@ -2396,6 +2556,11 @@ public class CanvasView extends View {
     }
 
     private float getMaxScrollY() {
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            float total = getTotalPagesHeight();
+            float visibleH = getHeight() / Math.max(0.01f, scaleFactor);
+            return Math.max(0f, total - visibleH);
+        }
         if (!isInfinite) return 0;
         return Math.max(0, getContentHeight() - getHeight());
     }
@@ -2406,6 +2571,7 @@ public class CanvasView extends View {
         if (scroller.computeScrollOffset()) {
             viewportOffsetY = scroller.getCurrY();
             clampViewport();
+            checkAndUpdateActivePage();
             invalidate();
             if (changeListener != null) {
                 changeListener.onScrollChanged(viewportOffsetY, getMaxScrollY());
@@ -2413,11 +2579,32 @@ public class CanvasView extends View {
         }
     }
 
+    @Override
+    public boolean onGenericMotionEvent(MotionEvent event) {
+        if (event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)
+                && event.getAction() == MotionEvent.ACTION_SCROLL) {
+            float vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+            if (vScroll != 0f && isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                float scrollDelta = -vScroll * dp(64f) / scaleFactor;
+                viewportOffsetY += scrollDelta;
+                clampViewport();
+                checkAndUpdateActivePage();
+                invalidate();
+                if (changeListener != null) {
+                    changeListener.onScrollChanged(viewportOffsetY, getMaxScrollY());
+                }
+                return true;
+            }
+        }
+        return super.onGenericMotionEvent(event);
+    }
+
     private void clampViewport() {
         float max = getMaxScrollY();
         if (viewportOffsetY < 0) viewportOffsetY = 0;
         if (viewportOffsetY > max) viewportOffsetY = max;
     }
+
 
     private void prepareVisibleStrokeIndices(RectF viewport) {
         if (currentPage == null || currentPage.strokes == null) {
@@ -2562,70 +2749,153 @@ public class CanvasView extends View {
         canvas.translate(panOffsetX, panOffsetY - viewportOffsetY * scaleFactor);
         canvas.scale(scaleFactor, scaleFactor);
 
-        // 1.5. Draw Fixed Background Images (e.g. PDF document pages)
-        if (currentPage != null && currentPage.images != null) {
-            for (ImageItem img : currentPage.images) {
-                if (img != null && img.isBackground && RectF.intersects(img.getBounds(), visibleViewport)) {
-                    drawImage(canvas, img);
+        // 1.5. Render Pages & Content
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            for (int pIdx = 0; pIdx < allPages.size(); pIdx++) {
+                Page page = allPages.get(pIdx);
+                if (page == null) continue;
+                float pageTop = getPageTop(pIdx);
+                float pageH = getPageHeight(page);
+                float pageW = viewWidth;
+                ImageItem bg = getPageBackgroundImage(page);
+                if (bg != null && bg.width > 0) pageW = bg.width;
+
+                if (pageTop + pageH < visibleViewport.top || pageTop > visibleViewport.bottom) {
+                    continue;
+                }
+
+                canvas.save();
+                canvas.translate(0, pageTop);
+
+                int pageColor = (page.backgroundColor != 0) ? page.backgroundColor : pageBackgroundColor;
+                pageCardBgPaint.setColor(pageColor);
+                canvas.drawRect(0, 0, pageW, pageH, pageCardBgPaint);
+
+                if (page.images != null) {
+                    for (ImageItem img : page.images) {
+                        if (img != null && img.isBackground) {
+                            drawImage(canvas, img);
+                        }
+                    }
+                }
+
+                drawPaperTemplate(canvas, (int) pageW, pageH, isColorDark(pageColor), scaleFactor);
+
+                if (page.images != null) {
+                    for (ImageItem img : page.images) {
+                        if (img != null && !img.isBackground) {
+                            drawImage(canvas, img);
+                        }
+                    }
+                }
+
+                if (page.shapes != null) {
+                    for (ShapeItem shape : page.shapes) {
+                        drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth, shape.lineStyle, shape.fillColor);
+                    }
+                }
+
+                if (page.texts != null) {
+                    for (TextItem item : page.texts) {
+                        textPaint.setColor(item.color);
+                        configureTextPaint(item);
+                        if (Math.abs(item.rotationAngle) > 0.5f) {
+                            canvas.save();
+                            canvas.rotate(item.rotationAngle, item.x, item.y);
+                            TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint, item.wordSpacingEm * item.fontSize);
+                            canvas.restore();
+                        } else {
+                            TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint, item.wordSpacingEm * item.fontSize);
+                        }
+                    }
+                }
+
+                if (page.strokes != null) {
+                    for (Stroke stroke : page.strokes) {
+                        drawStroke(canvas, stroke);
+                    }
+                }
+
+                canvas.restore();
+
+                if (pIdx < allPages.size() - 1) {
+                    float dividerY = pageTop + pageH + VERTICAL_PAGE_GAP / 2f;
+                    canvas.drawLine(0, dividerY, Math.max(viewWidth, pageW), dividerY, pageDividerPaint);
                 }
             }
-        }
 
-        // 2. Draw Paper Template lines (culled to visible viewport)
-        drawPaperTemplate(canvas, viewWidth, effectiveHeight, isDarkBackground, scaleFactor);
-
-        if (currentPage != null) {
-            prepareVisibleStrokeIndices(visibleViewport);
-
-            // 2.5. Draw Committed Foreground Images (culled to visible screen)
-            if (currentPage.images != null) {
+            if (activeStroke != null) {
+                canvas.save();
+                canvas.translate(0, activeStrokePageTop);
+                drawStroke(canvas, activeStroke);
+                canvas.restore();
+            }
+        } else {
+            if (currentPage != null && currentPage.images != null) {
                 for (ImageItem img : currentPage.images) {
-                    if (img != null && !img.isBackground && RectF.intersects(img.getBounds(), visibleViewport)) {
-                        if (isTransformingSelection() && selectedImages.contains(img)) continue;
+                    if (img != null && img.isBackground && RectF.intersects(img.getBounds(), visibleViewport)) {
                         drawImage(canvas, img);
                     }
                 }
             }
 
-            // 3. Draw Committed Shapes (culled to visible screen)
-            for (ShapeItem shape : currentPage.shapes) {
-                if (!RectF.intersects(shape.getBounds(), visibleViewport)) continue;
-                if (isTransformingSelection() && selectedShapes.contains(shape)) continue;
-                drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth, shape.lineStyle, shape.fillColor);
-            }
+            // 2. Draw Paper Template lines (culled to visible viewport)
+            drawPaperTemplate(canvas, viewWidth, effectiveHeight, isDarkBackground, scaleFactor);
 
-            // 4. Draw Committed Text (culled to visible screen)
-            for (TextItem item : currentPage.texts) {
-                if (!RectF.intersects(item.getBounds(), visibleViewport)) continue;
-                if (isTransformingSelection() && selectedTexts.contains(item)) continue;
-                textPaint.setColor(item.color);
-                configureTextPaint(item);
-                if (Math.abs(item.rotationAngle) > 0.5f) {
-                    canvas.save();
-                    canvas.rotate(item.rotationAngle, item.x, item.y);
-                    TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
-                            item.wordSpacingEm * item.fontSize);
-                    canvas.restore();
-                } else {
-                    TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
-                            item.wordSpacingEm * item.fontSize);
+            if (currentPage != null) {
+                prepareVisibleStrokeIndices(visibleViewport);
+
+                // 2.5. Draw Committed Foreground Images (culled to visible screen)
+                if (currentPage.images != null) {
+                    for (ImageItem img : currentPage.images) {
+                        if (img != null && !img.isBackground && RectF.intersects(img.getBounds(), visibleViewport)) {
+                            if (isTransformingSelection() && selectedImages.contains(img)) continue;
+                            drawImage(canvas, img);
+                        }
+                    }
+                }
+
+                // 3. Draw Committed Shapes (culled to visible screen)
+                for (ShapeItem shape : currentPage.shapes) {
+                    if (!RectF.intersects(shape.getBounds(), visibleViewport)) continue;
+                    if (isTransformingSelection() && selectedShapes.contains(shape)) continue;
+                    drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth, shape.lineStyle, shape.fillColor);
+                }
+
+                // 4. Draw Committed Text (culled to visible screen)
+                for (TextItem item : currentPage.texts) {
+                    if (!RectF.intersects(item.getBounds(), visibleViewport)) continue;
+                    if (isTransformingSelection() && selectedTexts.contains(item)) continue;
+                    textPaint.setColor(item.color);
+                    configureTextPaint(item);
+                    if (Math.abs(item.rotationAngle) > 0.5f) {
+                        canvas.save();
+                        canvas.rotate(item.rotationAngle, item.x, item.y);
+                        TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
+                                item.wordSpacingEm * item.fontSize);
+                        canvas.restore();
+                    } else {
+                        TextSpacingCompat.drawText(canvas, item.text, item.x, item.y, textPaint,
+                                item.wordSpacingEm * item.fontSize);
+                    }
+                }
+
+                // 5. Draw only the visible spatial-grid candidates, preserving ink order.
+                for (int index = visibleStrokeIndices.nextSetBit(0); index >= 0;
+                     index = visibleStrokeIndices.nextSetBit(index + 1)) {
+                    if (index >= currentPage.strokes.size()) break;
+                    Stroke stroke = currentPage.strokes.get(index);
+                    if (!RectF.intersects(stroke.getBounds(), visibleViewport)) continue;
+                    if (isTransformingSelection() && selectedStrokes.contains(stroke)) continue;
+                    drawStroke(canvas, stroke);
+                }
+
+                // 6. Draw Active Stroke
+                if (activeStroke != null) {
+                    drawStroke(canvas, activeStroke);
                 }
             }
-
-            // 5. Draw only the visible spatial-grid candidates, preserving ink order.
-            for (int index = visibleStrokeIndices.nextSetBit(0); index >= 0;
-                 index = visibleStrokeIndices.nextSetBit(index + 1)) {
-                if (index >= currentPage.strokes.size()) break;
-                Stroke stroke = currentPage.strokes.get(index);
-                if (!RectF.intersects(stroke.getBounds(), visibleViewport)) continue;
-                if (isTransformingSelection() && selectedStrokes.contains(stroke)) continue;
-                drawStroke(canvas, stroke);
-            }
-
-            // 6. Draw Active Stroke
-            if (activeStroke != null) {
-                drawStroke(canvas, activeStroke);
-            }
+        }
 
             // 7. Draw Live Shape Preview
             if (isDrawingShape) {
@@ -2773,7 +3043,6 @@ public class CanvasView extends View {
             if (isScreenCropActive) {
                 drawScreenCropOverlay(canvas, viewWidth, viewHeight);
             }
-        }
 
         canvas.restore();
 
@@ -4647,18 +4916,34 @@ public class CanvasView extends View {
             // Single-finger dragging to move canvas
             float touchX = event.getX(0);
             float touchY = event.getY(0);
+            if (velocityTracker == null) {
+                velocityTracker = VelocityTracker.obtain();
+            }
+            velocityTracker.addMovement(event);
             switch (action) {
                 case MotionEvent.ACTION_DOWN:
+                    if (!scroller.isFinished()) scroller.abortAnimation();
                     handPanStartX = touchX;
                     handPanStartY = touchY;
                     handInitialPanX = panOffsetX;
                     handInitialPanY = panOffsetY;
+                    handInitialViewportY = viewportOffsetY;
                     handPanDragging = true;
                     return true;
                 case MotionEvent.ACTION_MOVE:
                     if (handPanDragging) {
-                        panOffsetX = handInitialPanX + (touchX - handPanStartX);
-                        panOffsetY = handInitialPanY + (touchY - handPanStartY);
+                        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                            float dy = (touchY - handPanStartY) / scaleFactor;
+                            viewportOffsetY = handInitialViewportY - dy;
+                            if (scaleFactor > 1.05f) {
+                                panOffsetX = handInitialPanX + (touchX - handPanStartX);
+                            }
+                            clampViewport();
+                            checkAndUpdateActivePage();
+                        } else {
+                            panOffsetX = handInitialPanX + (touchX - handPanStartX);
+                            panOffsetY = handInitialPanY + (touchY - handPanStartY);
+                        }
                         invalidate();
                         notifyLassoSelection();
                     } else {
@@ -4666,6 +4951,7 @@ public class CanvasView extends View {
                         handPanStartY = touchY;
                         handInitialPanX = panOffsetX;
                         handInitialPanY = panOffsetY;
+                        handInitialViewportY = viewportOffsetY;
                         handPanDragging = true;
                     }
                     return true;
@@ -4674,22 +4960,39 @@ public class CanvasView extends View {
                     handPanDragging = false;
                     return true;
                 case MotionEvent.ACTION_UP:
-                    if (handPanDragging && isSwipePageEnabled && isSwipeSingleFingerEnabled) {
-                        float dx = touchX - handPanStartX;
-                        float dy = touchY - handPanStartY;
-                        float threshold = dp(swipeThresholdDp);
-                        if (Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.3f) {
-                            if (dx < -threshold) {
-                                triggerSwipeNextPage();
-                            } else if (dx > threshold) {
-                                triggerSwipePrevPage();
+                    if (handPanDragging) {
+                        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                            velocityTracker.computeCurrentVelocity(1000);
+                            float vy = velocityTracker.getYVelocity() / scaleFactor;
+                            if (Math.abs(vy) > 150f) {
+                                scroller.fling(0, (int) viewportOffsetY, 0, (int) -vy, 0, 0, 0, (int) getMaxScrollY());
+                                postInvalidateOnAnimation();
+                            }
+                        } else if (isSwipePageEnabled && isSwipeSingleFingerEnabled) {
+                            float dx = touchX - handPanStartX;
+                            float dy = touchY - handPanStartY;
+                            float threshold = dp(swipeThresholdDp);
+                            if (Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                                if (dx < -threshold) {
+                                    triggerSwipeNextPage();
+                                } else if (dx > threshold) {
+                                    triggerSwipePrevPage();
+                                }
                             }
                         }
                     }
                     handPanDragging = false;
+                    if (velocityTracker != null) {
+                        velocityTracker.recycle();
+                        velocityTracker = null;
+                    }
                     return true;
                 case MotionEvent.ACTION_CANCEL:
                     handPanDragging = false;
+                    if (velocityTracker != null) {
+                        velocityTracker.recycle();
+                        velocityTracker = null;
+                    }
                     return true;
             }
             return true;
@@ -4755,33 +5058,84 @@ public class CanvasView extends View {
                     cancelInProgressGesture();
                 }
                 handleTwoFingerPanZoom(event, action);
-            } else if (pointerCount == 1 && isSwipePageEnabled && isSwipeSingleFingerEnabled && !isPalm) {
-                float touchX = event.getX(0);
-                float touchY = event.getY(0);
-                switch (action) {
-                    case MotionEvent.ACTION_DOWN:
-                        singleTouchDownX = touchX;
-                        singleTouchDownY = touchY;
-                        singleTouchSwipeConsumed = false;
-                        break;
-                    case MotionEvent.ACTION_UP:
-                        if (!singleTouchSwipeConsumed) {
-                            float dx = touchX - singleTouchDownX;
-                            float dy = touchY - singleTouchDownY;
-                            float threshold = dp(swipeThresholdDp);
-                            if (Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.3f) {
-                                if (dx < -threshold) {
-                                    triggerSwipeNextPage();
-                                } else if (dx > threshold) {
-                                    triggerSwipePrevPage();
+            } else if (pointerCount == 1 && !isPalm) {
+                if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                    float touchX = event.getX(0);
+                    float touchY = event.getY(0);
+                    if (velocityTracker == null) {
+                        velocityTracker = VelocityTracker.obtain();
+                    }
+                    velocityTracker.addMovement(event);
+                    switch (action) {
+                        case MotionEvent.ACTION_DOWN:
+                            if (!scroller.isFinished()) scroller.abortAnimation();
+                            handPanStartX = touchX;
+                            handPanStartY = touchY;
+                            handInitialPanX = panOffsetX;
+                            handInitialViewportY = viewportOffsetY;
+                            handPanDragging = true;
+                            break;
+                        case MotionEvent.ACTION_MOVE:
+                            if (handPanDragging) {
+                                float dy = (touchY - handPanStartY) / scaleFactor;
+                                viewportOffsetY = handInitialViewportY - dy;
+                                clampViewport();
+                                checkAndUpdateActivePage();
+                                invalidate();
+                            }
+                            break;
+                        case MotionEvent.ACTION_UP:
+                            if (handPanDragging) {
+                                velocityTracker.computeCurrentVelocity(1000);
+                                float vy = velocityTracker.getYVelocity() / scaleFactor;
+                                if (Math.abs(vy) > 150f) {
+                                    scroller.fling(0, (int) viewportOffsetY, 0, (int) -vy, 0, 0, 0, (int) getMaxScrollY());
+                                    postInvalidateOnAnimation();
                                 }
                             }
-                        }
-                        singleTouchSwipeConsumed = false;
-                        break;
-                    case MotionEvent.ACTION_CANCEL:
-                        singleTouchSwipeConsumed = false;
-                        break;
+                            handPanDragging = false;
+                            if (velocityTracker != null) {
+                                velocityTracker.recycle();
+                                velocityTracker = null;
+                            }
+                            break;
+                        case MotionEvent.ACTION_CANCEL:
+                            handPanDragging = false;
+                            if (velocityTracker != null) {
+                                velocityTracker.recycle();
+                                velocityTracker = null;
+                            }
+                            break;
+                    }
+                    return true;
+                } else if (isSwipePageEnabled && isSwipeSingleFingerEnabled) {
+                    float touchX = event.getX(0);
+                    float touchY = event.getY(0);
+                    switch (action) {
+                        case MotionEvent.ACTION_DOWN:
+                            singleTouchDownX = touchX;
+                            singleTouchDownY = touchY;
+                            singleTouchSwipeConsumed = false;
+                            break;
+                        case MotionEvent.ACTION_UP:
+                            if (!singleTouchSwipeConsumed) {
+                                float dx = touchX - singleTouchDownX;
+                                float dy = touchY - singleTouchDownY;
+                                float threshold = dp(swipeThresholdDp);
+                                if (Math.abs(dx) >= threshold && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                                    if (dx < -threshold) {
+                                        triggerSwipeNextPage();
+                                    } else if (dx > threshold) {
+                                        triggerSwipePrevPage();
+                                    }
+                                }
+                            }
+                            singleTouchSwipeConsumed = false;
+                            break;
+                        case MotionEvent.ACTION_CANCEL:
+                            singleTouchSwipeConsumed = false;
+                            break;
+                    }
                 }
             }
             return true;
@@ -5214,43 +5568,56 @@ public class CanvasView extends View {
                     autoConvertHandler.removeCallbacks(autoConvertRunnable);
                 }
 
+                if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                    int pIdx = findPageIndexAtY(canvasY);
+                    activePageIndex = pIdx;
+                    currentPage = allPages.get(pIdx);
+                    activeStrokePageTop = getPageTop(pIdx);
+                    activeStrokePage = currentPage;
+                } else {
+                    activeStrokePageTop = 0f;
+                    activeStrokePage = currentPage;
+                }
+                float localDownY = canvasY - activeStrokePageTop;
+
                 smoothedX = canvasX;
-                smoothedY = canvasY;
+                smoothedY = localDownY;
                 smoothedPressure = pressure;
-                resetStrokeFilter(canvasX, canvasY, event.getEventTime());
+                resetStrokeFilter(canvasX, localDownY, event.getEventTime());
                 activeStroke = new Stroke(currentColor, currentStrokeWidth, currentTool);
                 activeInputPointerId = event.getPointerId(inputPointerIndex);
                 if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
                     highlighterLockAxis = 0;
                     highlighterLockStartX = canvasX;
-                    highlighterLockStartY = canvasY;
+                    highlighterLockStartY = localDownY;
                 }
-                activeStroke.addPoint(canvasX, canvasY, pressure, event.getEventTime());
-                activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
+                activeStroke.addPoint(canvasX, localDownY, pressure, event.getEventTime());
+                activeStroke.addRecognitionPoint(canvasX, localDownY, pressure, event.getEventTime());
                 lastTouchX = canvasX;
-                lastTouchY = canvasY;
+                lastTouchY = localDownY;
                 invalidate();
                 return true;
 
             case MotionEvent.ACTION_MOVE:
                 if (activeStroke != null) {
+                    float localMoveY = canvasY - activeStrokePageTop;
                     if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
                         float dx = canvasX - highlighterLockStartX;
-                        float dy = canvasY - highlighterLockStartY;
+                        float dy = localMoveY - highlighterLockStartY;
                         if (highlighterLockAxis == 0 && (dx * dx + dy * dy >= 49f)) {
                             highlighterLockAxis = (Math.abs(dx) >= Math.abs(dy)) ? 1 : 2;
                         }
                         if (highlighterLockAxis == 1) {
-                            canvasY = highlighterLockStartY;
+                            localMoveY = highlighterLockStartY;
                         } else if (highlighterLockAxis == 2) {
                             canvasX = highlighterLockStartX;
                         }
                     }
 
                     float dirtyMinX = lastTouchX;
-                    float dirtyMinY = lastTouchY;
+                    float dirtyMinY = lastTouchY + activeStrokePageTop;
                     float dirtyMaxX = lastTouchX;
-                    float dirtyMaxY = lastTouchY;
+                    float dirtyMaxY = lastTouchY + activeStrokePageTop;
                     boolean hadPredictedPoint = hasPredictedInkPoint;
                     float previousPredictedX = predictedInkX;
                     float previousPredictedY = predictedInkY;
@@ -5260,32 +5627,33 @@ public class CanvasView extends View {
                         float histRawY = event.getHistoricalY(inputPointerIndex, i);
                         float histX = (histRawX - panOffsetX) / scaleFactor;
                         float histY = (histRawY - panOffsetY) / scaleFactor + viewportOffsetY;
+                        float localHistY = histY - activeStrokePageTop;
                         if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
-                            if (highlighterLockAxis == 1) histY = highlighterLockStartY;
+                            if (highlighterLockAxis == 1) localHistY = highlighterLockStartY;
                             else if (highlighterLockAxis == 2) histX = highlighterLockStartX;
                         }
                         float historicalPressure = normalizeInputPressure(
                                 event.getHistoricalPressure(inputPointerIndex, i), primaryToolType);
-                        activeStroke.addRecognitionPoint(histX, histY, historicalPressure,
+                        activeStroke.addRecognitionPoint(histX, localHistY, historicalPressure,
                                 event.getHistoricalEventTime(i));
 
-                        filterStrokeSample(histX, histY, historicalPressure,
+                        filterStrokeSample(histX, localHistY, historicalPressure,
                                 event.getHistoricalEventTime(i));
                         activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure,
                                 event.getHistoricalEventTime(i));
                         dirtyMinX = Math.min(dirtyMinX, smoothedX);
-                        dirtyMinY = Math.min(dirtyMinY, smoothedY);
+                        dirtyMinY = Math.min(dirtyMinY, smoothedY + activeStrokePageTop);
                         dirtyMaxX = Math.max(dirtyMaxX, smoothedX);
-                        dirtyMaxY = Math.max(dirtyMaxY, smoothedY);
+                        dirtyMaxY = Math.max(dirtyMaxY, smoothedY + activeStrokePageTop);
                     }
-                    filterStrokeSample(canvasX, canvasY, pressure, event.getEventTime());
+                    filterStrokeSample(canvasX, localMoveY, pressure, event.getEventTime());
 
-                    activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
+                    activeStroke.addRecognitionPoint(canvasX, localMoveY, pressure, event.getEventTime());
                     activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure, event.getEventTime());
                     dirtyMinX = Math.min(dirtyMinX, smoothedX);
-                    dirtyMinY = Math.min(dirtyMinY, smoothedY);
+                    dirtyMinY = Math.min(dirtyMinY, smoothedY + activeStrokePageTop);
                     dirtyMaxX = Math.max(dirtyMaxX, smoothedX);
-                    dirtyMaxY = Math.max(dirtyMaxY, smoothedY);
+                    dirtyMaxY = Math.max(dirtyMaxY, smoothedY + activeStrokePageTop);
                     lastTouchX = smoothedX;
                     lastTouchY = smoothedY;
 
@@ -5303,24 +5671,24 @@ public class CanvasView extends View {
                         dirtyMaxX = Math.max(dirtyMaxX, predictedInkX);
                         dirtyMaxY = Math.max(dirtyMaxY, predictedInkY);
                     }
-                    invalidateStrokeBounds(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY,
-                            activeStroke.width);
+                    invalidate();
                 }
                 return true;
 
             case MotionEvent.ACTION_UP:
                 if (activeStroke != null) {
+                    float localUpY = canvasY - activeStrokePageTop;
                     if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
-                        if (highlighterLockAxis == 1) canvasY = highlighterLockStartY;
+                        if (highlighterLockAxis == 1) localUpY = highlighterLockStartY;
                         else if (highlighterLockAxis == 2) canvasX = highlighterLockStartX;
                         highlighterLockAxis = 0;
                     }
                     // Finish at the real pen-up point. Filtered coordinates are only
                     // for the visible outline; recognition always gets raw samples.
                     smoothedX = canvasX;
-                    smoothedY = canvasY;
+                    smoothedY = localUpY;
                     smoothedPressure = pressure;
-                    activeStroke.addRecognitionPoint(canvasX, canvasY, pressure, event.getEventTime());
+                    activeStroke.addRecognitionPoint(canvasX, localUpY, pressure, event.getEventTime());
                     activeStroke.addPoint(smoothedX, smoothedY, smoothedPressure, event.getEventTime());
 
                     // Straight-Line Snapping Assist: strictly for long deliberate ruler divider lines,
@@ -5351,8 +5719,9 @@ public class CanvasView extends View {
                         applyAutoBeautification(activeStroke);
                     }
 
-                    if (currentPage != null && !activeStroke.points.isEmpty()) {
-                        currentPage.strokes.add(activeStroke);
+                    Page commitPage = (activeStrokePage != null) ? activeStrokePage : currentPage;
+                    if (commitPage != null && !activeStroke.points.isEmpty()) {
+                        commitPage.strokes.add(activeStroke);
 
                         ActionRecord rec = new ActionRecord();
                         rec.type = ActionRecord.Type.ADD_STROKE;
@@ -5611,6 +5980,16 @@ public class CanvasView extends View {
                     manualTwoFingerPanConfirmed = false;
                     initialPanOffsetX = panOffsetX;
                     initialPanOffsetY = panOffsetY;
+                    initialViewportOffsetY = viewportOffsetY;
+                    if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                        if (!scroller.isFinished()) scroller.abortAnimation();
+                        if (velocityTracker == null) {
+                            velocityTracker = VelocityTracker.obtain();
+                        } else {
+                            velocityTracker.clear();
+                        }
+                        velocityTracker.addMovement(event);
+                    }
                 }
                 break;
             case MotionEvent.ACTION_MOVE:
@@ -5619,6 +5998,22 @@ public class CanvasView extends View {
                     float currentY0 = event.getY(0);
                     float currentX1 = event.getX(1);
                     float currentY1 = event.getY(1);
+                    float currentCenterX = (currentX0 + currentX1) / 2f;
+                    float currentCenterY = (currentY0 + currentY1) / 2f;
+
+                    if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                        if (velocityTracker != null) {
+                            velocityTracker.addMovement(event);
+                        }
+                        float dy = (currentCenterY - twoFingerStartY) / scaleFactor;
+                        viewportOffsetY = initialViewportOffsetY - dy;
+                        clampViewport();
+                        checkAndUpdateActivePage();
+                        invalidate();
+                        notifyLassoSelection();
+                        break;
+                    }
+
                     float moveX0 = currentX0 - twoFingerStartX0;
                     float moveY0 = currentY0 - twoFingerStartY0;
                     float moveX1 = currentX1 - twoFingerStartX1;
@@ -5642,8 +6037,6 @@ public class CanvasView extends View {
                                 && directionAgreement >= 0.65f;
                     }
                     if (!manualTwoFingerPanConfirmed) break;
-                    float currentCenterX = (currentX0 + currentX1) / 2f;
-                    float currentCenterY = (currentY0 + currentY1) / 2f;
                     panOffsetX = initialPanOffsetX + (currentCenterX - twoFingerStartX);
                     panOffsetY = initialPanOffsetY + (currentCenterY - twoFingerStartY);
                     invalidate();
@@ -5653,7 +6046,18 @@ public class CanvasView extends View {
             case MotionEvent.ACTION_POINTER_UP:
             case MotionEvent.ACTION_UP:
                 removeCallbacks(twoFingerSearchRunnable);
-                if (isSwipePageEnabled && isSwipeTwoFingerEnabled && !scaleGestureConfirmed && event.getPointerCount() >= 2) {
+                if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                    if (velocityTracker != null) {
+                        velocityTracker.computeCurrentVelocity(1000);
+                        float vy = velocityTracker.getYVelocity() / scaleFactor;
+                        if (Math.abs(vy) > 100f) {
+                            scroller.fling(0, (int) viewportOffsetY, 0, (int) -vy, 0, 0, 0, (int) getMaxScrollY());
+                            postInvalidateOnAnimation();
+                        }
+                        velocityTracker.recycle();
+                        velocityTracker = null;
+                    }
+                } else if (!isContinuousVerticalScroll && isSwipePageEnabled && isSwipeTwoFingerEnabled && !scaleGestureConfirmed && event.getPointerCount() >= 2) {
                     float currentCenterX = (event.getX(0) + event.getX(1)) / 2f;
                     float currentCenterY = (event.getY(0) + event.getY(1)) / 2f;
                     float dx = currentCenterX - twoFingerStartX;
@@ -5952,18 +6356,25 @@ public class CanvasView extends View {
     }
 
     private void checkStrokeErasure(float touchX, float touchY) {
-        if (currentPage == null) return;
+        Page targetPage = currentPage;
+        float testY = touchY;
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            int pIdx = findPageIndexAtY(touchY);
+            targetPage = allPages.get(pIdx);
+            testY = touchY - getPageTop(pIdx);
+        }
+        if (targetPage == null) return;
         float hitRadius = 35f / scaleFactor;
 
         // Check text erasure first (so user can erase individual converted words)
-        if (!eraseOnlyHighlighter && currentPage.texts != null && !currentPage.texts.isEmpty()) {
-            for (int i = currentPage.texts.size() - 1; i >= 0; i--) {
-                TextItem item = currentPage.texts.get(i);
+        if (!eraseOnlyHighlighter && targetPage.texts != null && !targetPage.texts.isEmpty()) {
+            for (int i = targetPage.texts.size() - 1; i >= 0; i--) {
+                TextItem item = targetPage.texts.get(i);
                 if (item == null) continue;
                 RectF b = item.getBounds();
                 if (touchX >= b.left - hitRadius && touchX <= b.right + hitRadius
-                        && touchY >= b.top - hitRadius && touchY <= b.bottom + hitRadius) {
-                    TextItem removed = currentPage.texts.remove(i);
+                        && testY >= b.top - hitRadius && testY <= b.bottom + hitRadius) {
+                    TextItem removed = targetPage.texts.remove(i);
                     ActionRecord rec = new ActionRecord();
                     rec.type = ActionRecord.Type.REMOVE_TEXT;
                     rec.text = removed;
@@ -5976,33 +6387,28 @@ public class CanvasView extends View {
             }
         }
 
-        if (currentPage.strokes.isEmpty()) return;
-        eraserQueryBounds.set(touchX - hitRadius, touchY - hitRadius,
-                touchX + hitRadius, touchY + hitRadius);
-        prepareVisibleStrokeIndices(eraserQueryBounds);
-
-        for (int i = visibleStrokeIndices.previousSetBit(currentPage.strokes.size() - 1);
-             i >= 0; i = visibleStrokeIndices.previousSetBit(i - 1)) {
-            Stroke s = currentPage.strokes.get(i);
+        if (targetPage.strokes == null || targetPage.strokes.isEmpty()) return;
+        for (int i = targetPage.strokes.size() - 1; i >= 0; i--) {
+            Stroke s = targetPage.strokes.get(i);
             if (eraseOnlyHighlighter && s.tool != DrawingTool.HIGHLIGHTER) {
                 continue;
             }
             RectF bounds = s.getBounds();
             if (touchX < bounds.left - hitRadius || touchX > bounds.right + hitRadius
-                    || touchY < bounds.top - hitRadius || touchY > bounds.bottom + hitRadius) {
+                    || testY < bounds.top - hitRadius || testY > bounds.bottom + hitRadius) {
                 continue;
             }
             boolean hit = false;
             for (DrawingPoint pt : s.points) {
                 float dx = pt.x - touchX;
-                float dy = pt.y - touchY;
+                float dy = pt.y - testY;
                 if ((dx * dx + dy * dy) <= (hitRadius * hitRadius)) {
                     hit = true;
                     break;
                 }
             }
             if (hit) {
-                currentPage.strokes.remove(i);
+                targetPage.strokes.remove(i);
                 ActionRecord rec = new ActionRecord();
                 rec.type = ActionRecord.Type.REMOVE_STROKE;
                 rec.stroke = s;

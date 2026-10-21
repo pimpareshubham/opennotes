@@ -60,4 +60,26 @@ public class PdfSupportTest {
         float darkGrayToWhite = contrast * 30f + offset;
         assertTrue("Dark gray text must map to >= 255", darkGrayToWhite >= 255f);
     }
+
+    @Test
+    public void testPdfPageRendererReferenceParsing() {
+        String pdfRef = "/storage/emulated/0/documents/report.pdf#page=4";
+        assertTrue("Should detect PDF page reference", org.opennotes.app.util.PdfPageRenderer.isPdfPageReference(pdfRef));
+        assertEquals(4, org.opennotes.app.util.PdfPageRenderer.parsePageNumber(pdfRef));
+        assertEquals("/storage/emulated/0/documents/report.pdf", org.opennotes.app.util.PdfPageRenderer.cleanPdfFilePath(pdfRef));
+
+        String pngRef = "/storage/emulated/0/documents/page_0.png";
+        assertFalse("Standard PNG is not a PDF reference", org.opennotes.app.util.PdfPageRenderer.isPdfPageReference(pngRef));
+        assertEquals(0, org.opennotes.app.util.PdfPageRenderer.parsePageNumber(pngRef));
+        assertEquals(pngRef, org.opennotes.app.util.PdfPageRenderer.cleanPdfFilePath(pngRef));
+    }
+
+    @Test
+    public void testPdfImportAndPageViewSettings() {
+        assertEquals("CONVERT_PNG", org.opennotes.app.db.AppSettings.PDF_IMPORT_MODE_CONVERT_PNG);
+        assertEquals("NATIVE_PDF", org.opennotes.app.db.AppSettings.PDF_IMPORT_MODE_NATIVE_PDF);
+        assertEquals("VERTICAL_SCROLL", org.opennotes.app.db.AppSettings.PAGE_VIEW_MODE_VERTICAL_SCROLL);
+        assertEquals("HORIZONTAL_SWITCH", org.opennotes.app.db.AppSettings.PAGE_VIEW_MODE_HORIZONTAL_SWITCH);
+    }
 }
+

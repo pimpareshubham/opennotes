@@ -12,13 +12,16 @@ import android.provider.OpenableColumns;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import org.opennotes.app.db.AppSettings;
 import org.opennotes.app.db.NotesDbHelper;
 import org.opennotes.app.model.ImageItem;
 import org.opennotes.app.model.Notebook;
 import org.opennotes.app.model.Page;
 import org.opennotes.app.model.PaperTemplate;
+import org.opennotes.app.util.PdfPageRenderer;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -101,6 +104,21 @@ public final class PdfImporter {
             List<Page> notebookPages = new ArrayList<>(pageCount);
             float standardCanvasWidth = 1440f;
 
+            boolean isNativePdf = AppSettings.getInstance(appContext).isNativePdfImport();
+            File permanentPdfFile = null;
+            if (isNativePdf) {
+                permanentPdfFile = new File(docDir, "document.pdf");
+                try (InputStream in = new FileInputStream(tempFile);
+                     FileOutputStream out = new FileOutputStream(permanentPdfFile)) {
+                    byte[] copyBuf = new byte[16384];
+                    int r;
+                    while ((r = in.read(copyBuf)) != -1) {
+                        out.write(copyBuf, 0, r);
+                    }
+                    out.flush();
+                }
+            }
+
             for (int i = 0; i < pageCount; i++) {
                 if (listener != null) {
                     listener.onProgress(i + 1, pageCount);
@@ -116,33 +134,42 @@ public final class PdfImporter {
                 // Scale canvas height proportionally to original page aspect ratio
                 float canvasHeight = standardCanvasWidth * ((float) origH / (float) origW);
 
-                // Ultra-HD Print-Grade Rendering: true 300 DPI (300 / 72 = 4.1667x) up to 3840px
-                float dpiScale = 300f / 72f;
-                float renderScale = Math.min(dpiScale, 3840f / Math.max(origW, origH));
-                int bmpW = Math.max(1, Math.round(origW * renderScale));
-                int bmpH = Math.max(1, Math.round(origH * renderScale));
-
-                Bitmap bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
-                bitmap.eraseColor(Color.WHITE); // Base white page background
-
-                pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
-                pdfPage.close();
-
-                // Compress rendered page to lossless PNG for original maximum possible quality
-                File pageImgFile = new File(docDir, "page_" + i + ".png");
-                try (FileOutputStream imgOut = new FileOutputStream(pageImgFile)) {
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, imgOut);
-                    imgOut.flush();
-                }
-                bitmap.recycle();
-
                 // Build OpenNotes Page object
                 Page page = new Page(0, i, PaperTemplate.BLANK, 0xFFFFFFFF, false);
                 page.canvasHeight = canvasHeight;
 
-                // Add background image item spanning the full page canvas
-                ImageItem bgImage = new ImageItem(pageImgFile.getAbsolutePath(), 0f, 0f, standardCanvasWidth, canvasHeight, null, true);
-                page.images.add(bgImage);
+                if (isNativePdf && permanentPdfFile != null) {
+                    pdfPage.close();
+                    // Direct PDF page reference without generating or writing PNG files
+                    String pageRef = PdfPageRenderer.buildReference(permanentPdfFile.getAbsolutePath(), i);
+                    ImageItem bgImage = new ImageItem(pageRef, 0f, 0f, standardCanvasWidth, canvasHeight, null, true);
+                    page.images.add(bgImage);
+                } else {
+                    // Ultra-HD Print-Grade Rendering: true 300 DPI (300 / 72 = 4.1667x) up to 3840px
+                    float dpiScale = 300f / 72f;
+                    float renderScale = Math.min(dpiScale, 3840f / Math.max(origW, origH));
+                    int bmpW = Math.max(1, Math.round(origW * renderScale));
+                    int bmpH = Math.max(1, Math.round(origH * renderScale));
+
+                    Bitmap bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
+                    bitmap.eraseColor(Color.WHITE); // Base white page background
+
+                    pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
+                    pdfPage.close();
+
+                    // Compress rendered page to lossless PNG for original maximum possible quality
+                    File pageImgFile = new File(docDir, "page_" + i + ".png");
+                    try (FileOutputStream imgOut = new FileOutputStream(pageImgFile)) {
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, imgOut);
+                        imgOut.flush();
+                    }
+                    bitmap.recycle();
+
+                    // Add background image item spanning the full page canvas
+                    ImageItem bgImage = new ImageItem(pageImgFile.getAbsolutePath(), 0f, 0f, standardCanvasWidth, canvasHeight, null, true);
+                    page.images.add(bgImage);
+                }
+
                 notebookPages.add(page);
             }
 
@@ -214,6 +241,21 @@ public final class PdfImporter {
 
             float standardCanvasWidth = 1440f;
 
+            boolean isNativePdf = AppSettings.getInstance(appContext).isNativePdfImport();
+            File permanentPdfFile = null;
+            if (isNativePdf) {
+                permanentPdfFile = new File(docDir, "document_append_" + startIndex + ".pdf");
+                try (InputStream in = new FileInputStream(tempFile);
+                     FileOutputStream out = new FileOutputStream(permanentPdfFile)) {
+                    byte[] copyBuf = new byte[16384];
+                    int r;
+                    while ((r = in.read(copyBuf)) != -1) {
+                        out.write(copyBuf, 0, r);
+                    }
+                    out.flush();
+                }
+            }
+
             for (int i = 0; i < pageCount; i++) {
                 if (listener != null) {
                     listener.onProgress(i + 1, pageCount);
@@ -226,28 +268,36 @@ public final class PdfImporter {
                 if (origH <= 0) origH = 842;
 
                 float canvasHeight = standardCanvasWidth * ((float) origH / (float) origW);
-                float dpiScale = 300f / 72f;
-                float renderScale = Math.min(dpiScale, 3840f / Math.max(origW, origH));
-                int bmpW = Math.max(1, Math.round(origW * renderScale));
-                int bmpH = Math.max(1, Math.round(origH * renderScale));
-
-                Bitmap bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
-                bitmap.eraseColor(Color.WHITE);
-                pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
-                pdfPage.close();
-
-                File pageImgFile = new File(docDir, "page_append_" + (startIndex + i) + ".png");
-                try (FileOutputStream imgOut = new FileOutputStream(pageImgFile)) {
-                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, imgOut);
-                    imgOut.flush();
-                }
-                bitmap.recycle();
 
                 Page page = new Page(notebookId, startIndex + i, PaperTemplate.BLANK, 0xFFFFFFFF, false);
                 page.canvasHeight = canvasHeight;
 
-                ImageItem bgImage = new ImageItem(pageImgFile.getAbsolutePath(), 0f, 0f, standardCanvasWidth, canvasHeight, null, true);
-                page.images.add(bgImage);
+                if (isNativePdf && permanentPdfFile != null) {
+                    pdfPage.close();
+                    String pageRef = PdfPageRenderer.buildReference(permanentPdfFile.getAbsolutePath(), i);
+                    ImageItem bgImage = new ImageItem(pageRef, 0f, 0f, standardCanvasWidth, canvasHeight, null, true);
+                    page.images.add(bgImage);
+                } else {
+                    float dpiScale = 300f / 72f;
+                    float renderScale = Math.min(dpiScale, 3840f / Math.max(origW, origH));
+                    int bmpW = Math.max(1, Math.round(origW * renderScale));
+                    int bmpH = Math.max(1, Math.round(origH * renderScale));
+
+                    Bitmap bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
+                    bitmap.eraseColor(Color.WHITE);
+                    pdfPage.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_PRINT);
+                    pdfPage.close();
+
+                    File pageImgFile = new File(docDir, "page_append_" + (startIndex + i) + ".png");
+                    try (FileOutputStream imgOut = new FileOutputStream(pageImgFile)) {
+                        bitmap.compress(Bitmap.CompressFormat.PNG, 100, imgOut);
+                        imgOut.flush();
+                    }
+                    bitmap.recycle();
+
+                    ImageItem bgImage = new ImageItem(pageImgFile.getAbsolutePath(), 0f, 0f, standardCanvasWidth, canvasHeight, null, true);
+                    page.images.add(bgImage);
+                }
 
                 dbHelper.insertPage(page);
             }

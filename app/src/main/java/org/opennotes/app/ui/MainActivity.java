@@ -105,7 +105,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                         getContentResolver().takePersistableUriPermission(uri,
                                 Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     } catch (Throwable ignored) {}
-                    importPdfWithProgress(uri, null);
+                    promptPdfImportMode(uri);
                 }
             });
 
@@ -187,7 +187,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
 
         ImageView btnMenuMore = findViewById(R.id.btnMenuMore);
         if (btnMenuMore != null) {
-            btnMenuMore.setOnClickListener(v -> showBackupRestoreDialog());
+            btnMenuMore.setOnClickListener(v -> showSettingsMenu());
         }
 
         recyclerView.post(this::offerHandwritingModelSetup);
@@ -646,15 +646,51 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             pdfUri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
         }
         if (pdfUri != null) {
-            importPdfWithProgress(pdfUri, null);
+            promptPdfImportMode(pdfUri);
         }
     }
 
+    private void promptPdfImportMode(@NonNull Uri pdfUri) {
+        AppSettings settings = AppSettings.getInstance(this);
+        boolean isNative = settings.isNativePdfImport();
+
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("PDF Import Options")
+                .setSubtitle("Choose how you want to import this PDF document")
+                .setHeaderSymbol("📑")
+                .addOption(1, "🖼️", "Option 1: Convert to High-Quality PNG Images (Original Way)",
+                        "Converts PDF pages into 300 DPI PNGs upfront. No vertical scroll (page-by-page change only).",
+                        !isNative, () -> {
+                            settings.setPdfImportMode(AppSettings.PDF_IMPORT_MODE_CONVERT_PNG);
+                            importPdfWithProgress(pdfUri, null);
+                        })
+                .addOption(2, "⚡", "Option 2: Direct PDF Import (Native PDF)",
+                        "Imports the PDF file directly without converting to images. Instant import, smooth vertical scroll or page switch.",
+                        isNative, () -> {
+                            settings.setPdfImportMode(AppSettings.PDF_IMPORT_MODE_NATIVE_PDF);
+                            importPdfWithProgress(pdfUri, null);
+                        })
+                .show();
+    }
+
     private void importPdfWithProgress(@NonNull Uri pdfUri, @Nullable String customTitle) {
+        AppSettings settings = AppSettings.getInstance(this);
+        boolean isNative = settings.isNativePdfImport();
+
         View progressView = LayoutInflater.from(this).inflate(R.layout.dialog_pdf_import_progress, null);
         TextView textTitle = progressView.findViewById(R.id.textImportTitle);
         TextView textStatus = progressView.findViewById(R.id.textImportStatus);
         LinearProgressIndicator progressIndicator = progressView.findViewById(R.id.progressPdfImport);
+
+        if (textTitle != null) {
+            textTitle.setText(isNative ? "Importing Direct PDF" : "Converting PDF to PNGs");
+        }
+        if (textStatus != null) {
+            textStatus.setText(isNative ? "Importing PDF directly without conversion…" : "Preparing high-quality page conversion…");
+        }
+        if (progressIndicator != null && isNative) {
+            progressIndicator.setIndeterminate(true);
+        }
 
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setView(progressView)
@@ -674,7 +710,11 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                             progressIndicator.setProgress(current);
                         }
                         if (textStatus != null) {
-                            textStatus.setText("Rendering page " + current + " of " + total + "…");
+                            if (isNative) {
+                                textStatus.setText("Importing PDF page " + current + " of " + total + "…");
+                            } else {
+                                textStatus.setText("Converting page " + current + " of " + total + " to high-quality PNG…");
+                            }
                         }
                     });
                 });
@@ -684,7 +724,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                     if (dialog.isShowing()) dialog.dismiss();
                     loadNotebooks();
                     openNotebook(notebookId);
-                    Toast.makeText(this, "✨ PDF imported as notebook!", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, isNative ? "✨ PDF imported directly as notebook!" : "✨ PDF imported with high-quality PNG pages!", Toast.LENGTH_SHORT).show();
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> {
@@ -984,6 +1024,79 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 if (adapter != null) adapter.exitSelectionMode();
             });
         });
+    }
+
+    private void showSettingsMenu() {
+        AppSettings settings = AppSettings.getInstance(this);
+        boolean isNativePdf = settings.isNativePdfImport();
+        boolean isVerticalScroll = settings.isContinuousVerticalScroll();
+
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Settings & Options")
+                .setSubtitle("Configure PDF import, page navigation, and backups")
+                .setHeaderSymbol("⚙️")
+                .addOption(1, "📑", "PDF Import Mode",
+                        !isNativePdf ? "Option 1: High-Quality PNG Images (Original way)"
+                                     : "Option 2: Native Direct PDF (Without conversion)",
+                        isNativePdf, this::showPdfImportModeDialog)
+                .addOption(2, "📜", "Page Navigation Mode",
+                        !isVerticalScroll ? "No Scroll / Change Pages Only (Original discrete pages)"
+                                          : "Smooth Continuous Vertical Scroll (All pages in one flow)",
+                        isVerticalScroll, this::showPageViewModeDialog)
+                .addOption(3, "💾", "Local Backup & Restore",
+                        "Backup all notes, pages, drawings & media locally or restore",
+                        false, this::showBackupRestoreDialog)
+                .show();
+    }
+
+    private void showPdfImportModeDialog() {
+        AppSettings settings = AppSettings.getInstance(this);
+        boolean isNative = settings.isNativePdfImport();
+
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("PDF Import Mode")
+                .setSubtitle("Select default way to import PDFs into notebooks")
+                .setHeaderSymbol("📑")
+                .addOption(1, "🖼️", "Option 1: High-Quality PNG Images (Original Way)",
+                        "Rasterizes each PDF page into high-resolution PNG images on import (the original way). No vertical scroll.",
+                        !isNative, () -> {
+                            settings.setPdfImportMode(AppSettings.PDF_IMPORT_MODE_CONVERT_PNG);
+                            Toast.makeText(this, "Default PDF Import: Option 1 (PNG Conversion)", Toast.LENGTH_SHORT).show();
+                            showSettingsMenu();
+                        })
+                .addOption(2, "⚡", "Option 2: Native Direct PDF (Without Conversion)",
+                        "Imports PDF directly as PDF without converting to images. Instant import, minimal storage, crisp vector zoom at any scale.",
+                        isNative, () -> {
+                            settings.setPdfImportMode(AppSettings.PDF_IMPORT_MODE_NATIVE_PDF);
+                            Toast.makeText(this, "Default PDF Import: Option 2 (Direct PDF)", Toast.LENGTH_SHORT).show();
+                            showSettingsMenu();
+                        })
+                .show();
+    }
+
+    private void showPageViewModeDialog() {
+        AppSettings settings = AppSettings.getInstance(this);
+        boolean isVertical = settings.isContinuousVerticalScroll();
+
+        new ModernOptionsSelectorDialog.Builder(this)
+                .setTitle("Page Navigation Mode")
+                .setSubtitle("Select how multi-page documents are navigated in the editor")
+                .setHeaderSymbol("📜")
+                .addOption(1, "↔️", "No Scroll / Change Pages Only (Original Way)",
+                        "Original discrete single-page mode. Zero vertical scroll between pages. Change pages with swipe or previous/next buttons.",
+                        !isVertical, () -> {
+                            settings.setContinuousVerticalScroll(false);
+                            Toast.makeText(this, "Page View: No Scroll (Change Pages Only)", Toast.LENGTH_SHORT).show();
+                            showSettingsMenu();
+                        })
+                .addOption(2, "↕️", "Smooth Continuous Vertical Scroll",
+                        "Scroll smoothly through all document pages vertically with fluid momentum fling.",
+                        isVertical, () -> {
+                            settings.setContinuousVerticalScroll(true);
+                            Toast.makeText(this, "Page View: Smooth Continuous Vertical Scroll", Toast.LENGTH_SHORT).show();
+                            showSettingsMenu();
+                        })
+                .show();
     }
 
     private void showBackupRestoreDialog() {

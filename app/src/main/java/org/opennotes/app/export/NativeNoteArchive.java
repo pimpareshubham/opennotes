@@ -131,18 +131,21 @@ public final class NativeNoteArchive {
     private static AssetResult writeAssetIfNeeded(Context context, ZipOutputStream zip,
                                                   Map<String, String> assets, String sourcePath,
                                                   int nextIndex) throws IOException {
-        String existing = assets.get(sourcePath);
-        if (existing != null) return new AssetResult(existing, nextIndex);
+        String baseSource = sourcePath.contains("#page=") ? sourcePath.substring(0, sourcePath.indexOf("#page=")) : sourcePath;
+        String pageSuffix = sourcePath.contains("#page=") ? sourcePath.substring(sourcePath.indexOf("#page=")) : "";
+
+        String existing = assets.get(baseSource);
+        if (existing != null) return new AssetResult(existing + pageSuffix, nextIndex);
         String entryName = String.format(java.util.Locale.US, "assets/asset-%08d.bin", nextIndex++);
-        try (InputStream input = openSource(context, sourcePath)) {
-            if (input == null) throw new IOException("A notebook image or audio file could not be opened: " + sourcePath);
+        try (InputStream input = openSource(context, baseSource)) {
+            if (input == null) throw new IOException("A notebook image or audio file could not be opened: " + baseSource);
             zip.putNextEntry(new ZipEntry(entryName));
             copy(input, zip);
             zip.closeEntry();
         }
         String reference = "asset:" + entryName;
-        assets.put(sourcePath, reference);
-        return new AssetResult(reference, nextIndex);
+        assets.put(baseSource, reference);
+        return new AssetResult(reference + pageSuffix, nextIndex);
     }
 
     private static InputStream openSource(Context context, String sourcePath) throws IOException {
@@ -281,20 +284,26 @@ public final class NativeNoteArchive {
     private static String resolveAsset(String reference, File staging, File installDirectory,
                                        Map<String, String> resolved) throws IOException {
         if (reference == null || reference.isEmpty()) return "";
-        if (!reference.startsWith("asset:")) {
-            throw new IOException("An image or audio reference is not portable: " + reference);
+        String pageSuffix = "";
+        String baseRef = reference;
+        if (reference.contains("#page=")) {
+            pageSuffix = reference.substring(reference.indexOf("#page="));
+            baseRef = reference.substring(0, reference.indexOf("#page="));
         }
-        String entryName = reference.substring("asset:".length());
-        if (!isAssetEntry(entryName)) throw new IOException("An image or audio reference is invalid.");
+        if (!baseRef.startsWith("asset:")) {
+            throw new IOException("An image, PDF or audio reference is not portable: " + reference);
+        }
+        String entryName = baseRef.substring("asset:".length());
+        if (!isAssetEntry(entryName)) throw new IOException("An image, PDF or audio reference is invalid.");
         String path = resolved.get(entryName);
-        if (path != null) return path;
+        if (path != null) return path + pageSuffix;
         File source = new File(staging, entryName);
         if (!source.isFile()) throw new IOException("A media file is missing from the notebook archive: " + entryName);
         File destination = new File(installDirectory, entryName.substring(ASSET_PREFIX.length()));
         copy(source, destination);
         path = destination.getAbsolutePath();
         resolved.put(entryName, path);
-        return path;
+        return path + pageSuffix;
     }
 
     private static void copy(File source, File destination) throws IOException {
