@@ -48,6 +48,7 @@ import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 import org.opennotes.app.util.ZoomFavoritesManager;
+import org.opennotes.app.util.NotebookViewStateManager;
 import org.opennotes.app.importer.PdfImporter;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 
@@ -438,6 +439,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 currentPage = pages.get(currentPageIndex);
                 updatePageNavUi();
                 updateUndoRedoUi();
+                saveNotebookViewState();
             }
         });
         topBar = findViewById(R.id.topBar);
@@ -778,14 +780,72 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         textNotebookTitle.setText(currentNotebook.title);
                     }
                     updateFavoriteIcon();
-                    currentPageIndex = hasRestoredEditorState
-                            ? Math.max(0, Math.min(restoredPageIndex, resultPages.size() - 1)) : 0;
-                    loadCurrentPage();
+
+                    int savedPage = 0;
+                    float savedScrollY = 0f;
+                    float savedZoom = 100f;
+                    float savedPanX = 0f;
+                    float savedPanY = 0f;
+                    boolean shouldRestoreView = false;
+
                     if (hasRestoredEditorState) {
-                        // Wait for the canvas to be measured so infinite-page scroll bounds are valid.
-                        canvasView.post(() -> canvasView.restoreViewport(
-                                restoredZoom, restoredPanX, restoredPanY, restoredScrollY));
+                        savedPage = restoredPageIndex;
+                        savedScrollY = restoredScrollY;
+                        savedZoom = restoredZoom;
+                        savedPanX = restoredPanX;
+                        savedPanY = restoredPanY;
+                        shouldRestoreView = true;
                         hasRestoredEditorState = false;
+                    } else {
+                        // Check high-speed ViewState cache first
+                        NotebookViewStateManager.ViewState vs =
+                                NotebookViewStateManager.loadState(NoteEditorActivity.this, notebookId);
+                        if (vs != null) {
+                            savedPage = vs.pageIndex;
+                            savedScrollY = vs.scrollY;
+                            savedZoom = vs.zoomPercent;
+                            savedPanX = vs.panX;
+                            savedPanY = vs.panY;
+                            shouldRestoreView = true;
+                        } else if (loadedNotebook.lastPageIndex > 0
+                                || loadedNotebook.lastScrollY > 0
+                                || Math.abs(loadedNotebook.lastZoomPercent - 100f) > 0.01f
+                                || Math.abs(loadedNotebook.lastPanX) > 0.01f
+                                || Math.abs(loadedNotebook.lastPanY) > 0.01f) {
+                            // Fallback to SQLite loaded notebook fields
+                            savedPage = loadedNotebook.lastPageIndex;
+                            savedScrollY = loadedNotebook.lastScrollY;
+                            savedZoom = loadedNotebook.lastZoomPercent > 0 ? loadedNotebook.lastZoomPercent : 100f;
+                            savedPanX = loadedNotebook.lastPanX;
+                            savedPanY = loadedNotebook.lastPanY;
+                            shouldRestoreView = true;
+                        }
+                    }
+
+                    currentPageIndex = Math.max(0, Math.min(savedPage, resultPages.size() - 1));
+                    loadCurrentPage();
+
+                    if (shouldRestoreView) {
+                        final float targetZoom = savedZoom > 0 ? savedZoom : 100f;
+                        final float targetPanX = savedPanX;
+                        final float targetPanY = savedPanY;
+                        final float targetScrollY = savedScrollY;
+                        final int restoredPageNum = currentPageIndex + 1;
+                        final int totalPagesCount = resultPages.size();
+
+                        canvasView.post(() -> {
+                            if (isFinishing() || isDestroyed()) return;
+                            // Smoothly animate/glide into the restored reading position
+                            if (canvasView.getWidth() > 0 && canvasView.getHeight() > 0) {
+                                canvasView.smoothAnimateViewport(targetZoom, targetPanX, targetPanY, targetScrollY, 420, null);
+                            } else {
+                                canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
+                            }
+
+                            if (restoredPageNum > 1 || targetScrollY > 50) {
+                                Toast.makeText(NoteEditorActivity.this, "📖 Resumed reading at Page " + restoredPageNum + " of " + totalPagesCount, Toast.LENGTH_SHORT).show();
+                            }
+                        });
                     }
                     renderDocumentTabs();
                     canvasView.setEnabled(true);
@@ -904,6 +964,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void switchToNotebook(long targetNotebookId) {
         if (targetNotebookId == notebookId) return;
         saveCurrentPage();
+        saveNotebookViewState();
         notebookId = targetNotebookId;
         hasRestoredEditorState = false;
         currentPageIndex = 0;
@@ -911,6 +972,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void closeTab(long targetNotebookId) {
+        saveNotebookViewState();
         synchronized (openNotebookIds) {
             if (openNotebookIds.size() <= 1) {
                 saveCurrentPage();
@@ -1660,7 +1722,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         btnAddPage.setOnClickListener(v -> showAddPageMenu(v, null, null));
 
-        textPageCounter.setOnClickListener(v -> showPageOverviewDialog());
+        textPageCounter.setOnClickListener(v -> showGoToPageDialog());
         textPageCounter.setOnLongClickListener(v -> {
             showSwipeGestureOptionsDialog();
             return true;
@@ -3965,6 +4027,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             btnOverviewAddPage.setOnClickListener(v -> showAddPageMenu(v, dialog, adapter));
         }
 
+        View btnOverviewGoToPage = dialogView.findViewById(R.id.btnOverviewGoToPage);
+        if (btnOverviewGoToPage != null) {
+            btnOverviewGoToPage.setOnClickListener(v -> {
+                dialog.dismiss();
+                showGoToPageDialog();
+            });
+        }
+
         dialog.show();
     }
 
@@ -4112,6 +4182,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .setTitle("Note Options & Tools")
                 .setSubtitle("Page settings, utilities, and handwriting tools")
                 .setHeaderSymbol("⚙️")
+                .addOption(0, "🎯", "Go to Page Number", "Jump directly to any page with live scrubber or page input", false, this::showGoToPageDialog)
                 .addOption(1, "📄", "Paper Template", "Switch lined, grid, dots or blank layout", false, this::showTemplateSelectionDialog)
                 .addOption(2, "🎨", "Page Background Color", "AMOLED black, dark obsidian, warm ivory, pure white", false, this::showPageColorSelectionDialog)
                 .addOption(3, "📺", "Zen Fullscreen Mode", "Distraction-free canvas with hidden toolbars", false, () -> setZenFullscreen(true))
@@ -4646,6 +4717,246 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     .start();
             Toast.makeText(this, "First page (1 / " + pages.size() + ")", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private void showGoToPageDialog() {
+        if (pages == null || pages.isEmpty()) return;
+        saveCurrentPage();
+        final int totalPages = pages.size();
+        final int currentNum = currentPageIndex + 1;
+
+        View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_go_to_page, null);
+        TextView textGoToSubtitle = dialogView.findViewById(R.id.textGoToSubtitle);
+        ImageView btnGoToClose = dialogView.findViewById(R.id.btnGoToClose);
+        EditText editPageNumber = dialogView.findViewById(R.id.editPageNumber);
+        TextView textTotalPagesBadge = dialogView.findViewById(R.id.textTotalPagesBadge);
+        SeekBar seekPageScrubber = dialogView.findViewById(R.id.seekPageScrubber);
+        TextView textMaxPageLabel = dialogView.findViewById(R.id.textMaxPageLabel);
+        TextView chipFirstPage = dialogView.findViewById(R.id.chipFirstPage);
+        TextView chipLastPage = dialogView.findViewById(R.id.chipLastPage);
+        TextView chipGridOverview = dialogView.findViewById(R.id.chipGridOverview);
+        View btnCancelGoTo = dialogView.findViewById(R.id.btnCancelGoTo);
+        View btnConfirmGoTo = dialogView.findViewById(R.id.btnConfirmGoTo);
+
+        if (textGoToSubtitle != null) {
+            textGoToSubtitle.setText("Notebook has " + totalPages + (totalPages == 1 ? " page" : " pages"));
+        }
+        if (textTotalPagesBadge != null) {
+            textTotalPagesBadge.setText("of " + totalPages);
+        }
+        if (textMaxPageLabel != null) {
+            textMaxPageLabel.setText("Page " + totalPages);
+        }
+
+        if (editPageNumber != null) {
+            editPageNumber.setText(String.valueOf(currentNum));
+            editPageNumber.setSelection(editPageNumber.getText().length());
+        }
+
+        if (seekPageScrubber != null) {
+            seekPageScrubber.setMax(Math.max(1, totalPages - 1));
+            seekPageScrubber.setProgress(Math.max(0, Math.min(currentPageIndex, totalPages - 1)));
+        }
+
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this)
+                .setView(dialogView)
+                .create();
+        ThemeUtils.styleDialog(dialog, this);
+
+        if (dialog.getWindow() != null) {
+            dialog.getWindow().setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+        }
+
+        final boolean[] isUpdating = new boolean[]{false};
+
+        if (seekPageScrubber != null && editPageNumber != null) {
+            seekPageScrubber.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                @Override
+                public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                    if (fromUser && !isUpdating[0]) {
+                        isUpdating[0] = true;
+                        int pageVal = progress + 1;
+                        editPageNumber.setText(String.valueOf(pageVal));
+                        editPageNumber.setSelection(editPageNumber.getText().length());
+                        isUpdating[0] = false;
+                    }
+                }
+
+                @Override
+                public void onStartTrackingTouch(SeekBar seekBar) {}
+
+                @Override
+                public void onStopTrackingTouch(SeekBar seekBar) {}
+            });
+
+            editPageNumber.addTextChangedListener(new TextWatcher() {
+                @Override
+                public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+
+                @Override
+                public void onTextChanged(CharSequence s, int start, int before, int count) {
+                    if (isUpdating[0]) return;
+                    String str = s.toString().trim();
+                    if (!str.isEmpty()) {
+                        try {
+                            int num = Integer.parseInt(str);
+                            if (num >= 1 && num <= totalPages) {
+                                isUpdating[0] = true;
+                                seekPageScrubber.setProgress(num - 1);
+                                isUpdating[0] = false;
+                            }
+                        } catch (NumberFormatException ignored) {}
+                    }
+                }
+
+                @Override
+                public void afterTextChanged(Editable s) {}
+            });
+
+            editPageNumber.setOnEditorActionListener((v, actionId, event) -> {
+                if (btnConfirmGoTo != null) {
+                    btnConfirmGoTo.performClick();
+                    return true;
+                }
+                return false;
+            });
+        }
+
+        if (chipFirstPage != null && seekPageScrubber != null && editPageNumber != null) {
+            chipFirstPage.setOnClickListener(v -> {
+                isUpdating[0] = true;
+                seekPageScrubber.setProgress(0);
+                editPageNumber.setText("1");
+                editPageNumber.setSelection(1);
+                isUpdating[0] = false;
+            });
+        }
+
+        if (chipLastPage != null && seekPageScrubber != null && editPageNumber != null) {
+            chipLastPage.setOnClickListener(v -> {
+                isUpdating[0] = true;
+                seekPageScrubber.setProgress(totalPages - 1);
+                String lastStr = String.valueOf(totalPages);
+                editPageNumber.setText(lastStr);
+                editPageNumber.setSelection(lastStr.length());
+                isUpdating[0] = false;
+            });
+        }
+
+        if (chipGridOverview != null) {
+            chipGridOverview.setOnClickListener(v -> {
+                dialog.dismiss();
+                showPageOverviewDialog();
+            });
+        }
+
+        if (btnGoToClose != null) {
+            btnGoToClose.setOnClickListener(v -> dialog.dismiss());
+        }
+
+        if (btnCancelGoTo != null) {
+            btnCancelGoTo.setOnClickListener(v -> dialog.dismiss());
+        }
+
+        if (btnConfirmGoTo != null) {
+            btnConfirmGoTo.setOnClickListener(v -> {
+                int targetPageNum = currentNum;
+                if (editPageNumber != null) {
+                    String text = editPageNumber.getText().toString().trim();
+                    if (!text.isEmpty()) {
+                        try {
+                            targetPageNum = Integer.parseInt(text);
+                        } catch (NumberFormatException e) {
+                            targetPageNum = seekPageScrubber != null ? seekPageScrubber.getProgress() + 1 : currentNum;
+                        }
+                    } else if (seekPageScrubber != null) {
+                        targetPageNum = seekPageScrubber.getProgress() + 1;
+                    }
+                }
+
+                if (targetPageNum < 1) targetPageNum = 1;
+                if (targetPageNum > totalPages) targetPageNum = totalPages;
+
+                final int targetIndex = targetPageNum - 1;
+                dialog.dismiss();
+
+                if (targetIndex != currentPageIndex) {
+                    jumpToPageWithSmoothTransition(targetIndex);
+                } else {
+                    Toast.makeText(this, "Already on Page " + targetPageNum, Toast.LENGTH_SHORT).show();
+                }
+            });
+        }
+
+        dialog.show();
+        if (editPageNumber != null) {
+            editPageNumber.requestFocus();
+        }
+    }
+
+    public void jumpToPageWithSmoothTransition(int targetPageIndex) {
+        if (pages == null || pages.isEmpty()) return;
+        targetPageIndex = Math.max(0, Math.min(targetPageIndex, pages.size() - 1));
+        if (targetPageIndex == currentPageIndex) return;
+
+        saveCurrentPage();
+        if (canvasView != null && canvasView.isContinuousVerticalScroll() && pages.size() > 1) {
+            canvasView.smoothScrollToPage(targetPageIndex);
+            saveNotebookViewState();
+            return;
+        }
+
+        final int targetIndex = targetPageIndex;
+        final boolean goingForward = targetIndex > currentPageIndex;
+        int viewWidth = canvasView != null && canvasView.getWidth() > 0 ? canvasView.getWidth() : 1080;
+        float startOffset = goingForward ? -viewWidth * 0.15f : viewWidth * 0.15f;
+        float enterOffset = goingForward ? viewWidth * 0.15f : -viewWidth * 0.15f;
+
+        if (canvasView != null) {
+            canvasView.animate()
+                    .translationX(startOffset)
+                    .alpha(0.5f)
+                    .setDuration(120)
+                    .withEndAction(() -> {
+                        currentPageIndex = targetIndex;
+                        loadCurrentPage();
+                        canvasView.setTranslationX(enterOffset);
+                        canvasView.animate()
+                                .translationX(0f)
+                                .alpha(1.0f)
+                                .setDuration(160)
+                                .setInterpolator(new android.view.animation.DecelerateInterpolator(1.6f))
+                                .withEndAction(this::saveNotebookViewState)
+                                .start();
+                    })
+                    .start();
+        } else {
+            currentPageIndex = targetIndex;
+            loadCurrentPage();
+            saveNotebookViewState();
+        }
+    }
+
+    private void saveNotebookViewState() {
+        if (currentNotebook == null || notebookId <= 0) return;
+        final int pageIdx = currentPageIndex;
+        final float scrollY = canvasView != null ? canvasView.getViewportOffsetY() : 0f;
+        final float zoom = canvasView != null ? canvasView.getZoomPercent() : 100f;
+        final float panX = canvasView != null ? canvasView.getPanOffsetX() : 0f;
+        final float panY = canvasView != null ? canvasView.getPanOffsetY() : 0f;
+
+        // 1. Synchronously save to high-speed SharedPreferences cache
+        NotebookViewStateManager.saveState(this, notebookId, pageIdx, scrollY, zoom, panX, panY);
+
+        // 2. Asynchronously update SQLite database record
+        final long nId = notebookId;
+        saveExecutor.execute(() -> {
+            try {
+                dbHelper.updateNotebookViewState(nId, pageIdx, scrollY, zoom, panX, panY);
+            } catch (Throwable t) {
+                Log.w("NoteEditorActivity", "Failed to persist view state to db", t);
+            }
+        });
     }
 
     private void showSwipeGestureOptionsDialog() {
@@ -5772,6 +6083,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void saveCurrentPage() {
+        saveNotebookViewState();
         if (currentPage != null) {
             saveDebounceHandler.removeCallbacksAndMessages(null);
             if (currentPage.isInfinite) {
@@ -5949,6 +6261,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             try { voicePlayer.release(); voicePlayer = null; } catch (Exception ignored) {}
         }
         saveCurrentPage();
+        saveNotebookViewState();
     }
 
     @Override
@@ -5960,6 +6273,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     @Override
     protected void onDestroy() {
+        saveNotebookViewState();
         super.onDestroy();
         if (isFinishing()) {
             synchronized (openNotebookIds) {

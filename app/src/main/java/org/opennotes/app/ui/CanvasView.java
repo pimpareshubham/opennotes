@@ -34,6 +34,10 @@ import androidx.annotation.Nullable;
 import androidx.core.view.accessibility.AccessibilityViewCommand;
 import androidx.core.view.ViewCompat;
 import androidx.input.motionprediction.MotionEventPredictor;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
+import android.view.animation.DecelerateInterpolator;
 
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.DrawingTool;
@@ -921,16 +925,81 @@ public class CanvasView extends View {
         }
     }
 
-    /** Restores the user's viewing position after the editor is recreated. */
+    /** Restores the user's viewing position after the editor is recreated or opened. */
     public void restoreViewport(float zoomPercent, float panX, float panY, float scrollY) {
         needsInitialFit = false;
         scaleFactor = Math.max(0.10f, Math.min(16.0f, zoomPercent / 100f));
         panOffsetX = panX;
         panOffsetY = panY;
-        viewportOffsetY = isInfinite ? Math.max(0f, Math.min(scrollY, getMaxScrollY())) : 0f;
+        boolean canScroll = isInfinite || (isContinuousVerticalScroll && allPages != null && allPages.size() > 1);
+        viewportOffsetY = canScroll ? Math.max(0f, Math.min(scrollY, getMaxScrollY())) : 0f;
+        checkAndUpdateActivePage();
         invalidate();
         notifyZoomChange();
         notifyLassoSelection();
+    }
+
+    /**
+     * Smoothly animates zoom, pan, and viewport offset to the given target position.
+     * Ideal for resuming reading position or jumping to a page with premium, buttery-smooth transition.
+     */
+    public void smoothAnimateViewport(float targetZoomPercent, float targetPanX, float targetPanY, float targetScrollY, int durationMs, @Nullable Runnable onComplete) {
+        needsInitialFit = false;
+        final float startScale = scaleFactor;
+        final float targetScale = Math.max(0.10f, Math.min(16.0f, targetZoomPercent / 100f));
+        final float startPanX = panOffsetX;
+        final float startPanY = panOffsetY;
+        final float startScrollY = viewportOffsetY;
+
+        boolean canScroll = isInfinite || (isContinuousVerticalScroll && allPages != null && allPages.size() > 1);
+        final float finalScrollY = canScroll ? Math.max(0f, Math.min(targetScrollY, getMaxScrollY())) : 0f;
+
+        // If delta is negligible, apply directly without animation overhead
+        if (Math.abs(startScale - targetScale) < 0.005f
+                && Math.abs(startPanX - targetPanX) < 1f
+                && Math.abs(startPanY - targetPanY) < 1f
+                && Math.abs(startScrollY - finalScrollY) < 1f) {
+            scaleFactor = targetScale;
+            panOffsetX = targetPanX;
+            panOffsetY = targetPanY;
+            viewportOffsetY = finalScrollY;
+            checkAndUpdateActivePage();
+            invalidate();
+            notifyZoomChange();
+            notifyLassoSelection();
+            if (onComplete != null) onComplete.run();
+            return;
+        }
+
+        ValueAnimator anim = ValueAnimator.ofFloat(0f, 1f);
+        anim.setDuration(durationMs > 0 ? durationMs : 450);
+        anim.setInterpolator(new DecelerateInterpolator(2.0f));
+        anim.addUpdateListener(animation -> {
+            float fraction = animation.getAnimatedFraction();
+            scaleFactor = startScale + (targetScale - startScale) * fraction;
+            panOffsetX = startPanX + (targetPanX - startPanX) * fraction;
+            panOffsetY = startPanY + (targetPanY - startPanY) * fraction;
+            viewportOffsetY = startScrollY + (finalScrollY - startScrollY) * fraction;
+            checkAndUpdateActivePage();
+            invalidate();
+            notifyZoomChange();
+            notifyLassoSelection();
+        });
+        anim.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                scaleFactor = targetScale;
+                panOffsetX = targetPanX;
+                panOffsetY = targetPanY;
+                viewportOffsetY = finalScrollY;
+                checkAndUpdateActivePage();
+                invalidate();
+                notifyZoomChange();
+                notifyLassoSelection();
+                if (onComplete != null) onComplete.run();
+            }
+        });
+        anim.start();
     }
 
     @Nullable
@@ -1054,13 +1123,19 @@ public class CanvasView extends View {
         if (allPages == null || pageIndex < 0 || pageIndex >= allPages.size()) return;
         activePageIndex = pageIndex;
         currentPage = allPages.get(pageIndex);
-        float targetY = getPageTop(pageIndex);
-        float maxScroll = getMaxScrollY();
-        targetY = Math.max(0f, Math.min(targetY, maxScroll));
-        int dy = Math.round(targetY - viewportOffsetY);
-        if (dy != 0) {
-            scroller.startScroll(0, (int) viewportOffsetY, 0, dy, 320);
-            postInvalidateOnAnimation();
+        if (isContinuousVerticalScroll && allPages.size() > 1) {
+            float targetY = getPageTop(pageIndex);
+            float maxScroll = getMaxScrollY();
+            targetY = Math.max(0f, Math.min(targetY, maxScroll));
+            int dy = Math.round(targetY - viewportOffsetY);
+            if (dy != 0) {
+                int duration = Math.min(650, Math.max(280, 240 + Math.abs(dy) / 10));
+                scroller.startScroll(0, (int) viewportOffsetY, 0, dy, duration);
+                postInvalidateOnAnimation();
+            }
+        } else {
+            viewportOffsetY = 0f;
+            invalidate();
         }
         if (activePageChangeListener != null) {
             activePageChangeListener.onActivePageChanged(activePageIndex);

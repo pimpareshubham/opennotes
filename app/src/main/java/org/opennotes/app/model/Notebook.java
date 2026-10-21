@@ -12,6 +12,11 @@ public class Notebook {
     public boolean isFavorite;
     public long createdAt;
     public long updatedAt;
+    public int lastPageIndex = 0;
+    public float lastScrollY = 0f;
+    public float lastZoomPercent = 100f;
+    public float lastPanX = 0f;
+    public float lastPanY = 0f;
 
     public Notebook(String title, int coverColor, PaperTemplate defaultTemplate) {
         this.id = 0;
