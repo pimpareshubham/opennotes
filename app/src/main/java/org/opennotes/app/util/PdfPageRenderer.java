@@ -121,10 +121,10 @@ public final class PdfPageRenderer {
             } else {
                 scale = 1440f / origW;
             }
-            // Limit max dimension to 2880px for memory safety on mobile GPU
+            // Limit max dimension to 2560px for memory safety on mobile GPU
             float maxDim = Math.max(origW * scale, origH * scale);
-            if (maxDim > 2880f) {
-                scale = 2880f / Math.max(origW, origH);
+            if (maxDim > 2560f) {
+                scale = 2560f / Math.max(origW, origH);
             }
             int bmpW = Math.max(1, Math.round(origW * scale));
             int bmpH = Math.max(1, Math.round(origH * scale));

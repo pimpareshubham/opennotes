@@ -5727,7 +5727,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         saveDebounceHandler.removeCallbacksAndMessages(null);
         saveDebounceHandler.postDelayed(() -> {
             if (currentPage == null || isFinishing() || isDestroyed()) return;
-            currentPage.canvasHeight = canvasView.getContentHeight();
+            if (currentPage.isInfinite) {
+                currentPage.canvasHeight = canvasView.getContentHeight();
+            }
             final Page snapshot = currentPage.createSnapshot();
             saveExecutor.execute(() -> dbHelper.savePage(snapshot));
         }, 600);
@@ -5736,7 +5738,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void saveCurrentPage() {
         if (currentPage != null) {
             saveDebounceHandler.removeCallbacksAndMessages(null);
-            currentPage.canvasHeight = canvasView.getContentHeight();
+            if (currentPage.isInfinite) {
+                currentPage.canvasHeight = canvasView.getContentHeight();
+            }
             final Page snapshot = currentPage.createSnapshot();
             saveExecutor.execute(() -> dbHelper.savePage(snapshot));
         }

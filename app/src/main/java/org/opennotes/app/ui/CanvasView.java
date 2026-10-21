@@ -289,7 +289,7 @@ public class CanvasView extends View {
     private List<Page> allPages;
     private int activePageIndex = 0;
     private boolean isContinuousVerticalScroll = false;
-    private static final float VERTICAL_PAGE_GAP = 36f;
+    private static final float VERTICAL_PAGE_GAP = 0f;
     private final Paint pageDividerPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint pageCardBgPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private float activeStrokePageTop = 0f;
@@ -808,7 +808,7 @@ public class CanvasView extends View {
 
     public void setPdfAmoledDarkMode(boolean enabled) {
         this.isPdfAmoledDarkMode = enabled;
-        if (enabled && getBackgroundImage() != null) {
+        if (enabled && (getBackgroundImage() != null || (allPages != null && !allPages.isEmpty()))) {
             this.pageBackgroundColor = 0xFF000000;
             if (isColorDark(currentColor)) {
                 currentColor = 0xFFFFFFFF;
@@ -986,17 +986,25 @@ public class CanvasView extends View {
         if (allPages == null || pageIndex <= 0) return 0f;
         float top = 0f;
         for (int i = 0; i < pageIndex && i < allPages.size(); i++) {
-            top += getPageHeight(allPages.get(i)) + VERTICAL_PAGE_GAP;
+            top += getPageHeight(allPages.get(i));
         }
         return top;
     }
 
     public float getPageHeight(Page p) {
         if (p == null) return 2036f;
-        if (p.canvasHeight > 0f) return p.canvasHeight;
         ImageItem bg = getPageBackgroundImage(p);
         if (bg != null && bg.height > 0) return bg.height;
+        if (p.isInfinite && p.canvasHeight > 0f) return p.canvasHeight;
+        if (p.canvasHeight > 0f && p.canvasHeight <= 4096f) return p.canvasHeight;
         return 2036f;
+    }
+
+    public float getPageWidth(Page p) {
+        if (p == null) return 1440f;
+        ImageItem bg = getPageBackgroundImage(p);
+        if (bg != null && bg.width > 0) return bg.width;
+        return 1440f;
     }
 
     public float getTotalPagesHeight() {
@@ -1004,9 +1012,6 @@ public class CanvasView extends View {
         float total = 0f;
         for (int i = 0; i < allPages.size(); i++) {
             total += getPageHeight(allPages.get(i));
-            if (i < allPages.size() - 1) {
-                total += VERTICAL_PAGE_GAP;
-            }
         }
         return total;
     }
@@ -1025,10 +1030,10 @@ public class CanvasView extends View {
         float currentY = 0f;
         for (int i = 0; i < allPages.size(); i++) {
             float h = getPageHeight(allPages.get(i));
-            if (canvasY >= currentY && canvasY <= currentY + h + VERTICAL_PAGE_GAP) {
+            if (canvasY >= currentY && canvasY < currentY + h) {
                 return i;
             }
-            currentY += h + VERTICAL_PAGE_GAP;
+            currentY += h;
         }
         return allPages.size() - 1;
     }
@@ -1103,7 +1108,9 @@ public class CanvasView extends View {
 
         // Position vertically: center if shorter than view, or align to top
         float targetPanY;
-        if (pageH * targetScale <= viewH) {
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            targetPanY = 0f;
+        } else if (pageH * targetScale <= viewH) {
             targetPanY = (viewH - pageH * targetScale) * 0.5f;
         } else {
             targetPanY = 0f;
@@ -1926,6 +1933,15 @@ public class CanvasView extends View {
     }
 
     public float getContentHeight() {
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            return getTotalPagesHeight();
+        }
+        if (currentPage != null && !currentPage.isInfinite) {
+            ImageItem bg = getBackgroundImage();
+            if (bg != null && bg.height > 0) return bg.height;
+            return (currentPage.canvasHeight > 0 && currentPage.canvasHeight <= 4096f)
+                    ? currentPage.canvasHeight : getHeight();
+        }
         return Math.max(getHeight(), contentHeight);
     }
 
@@ -2507,8 +2523,8 @@ public class CanvasView extends View {
                         BitmapFactory.decodeFile(img.imagePath, opts);
                         opts.inSampleSize = 1;
                         int maxDim = Math.max(opts.outWidth, opts.outHeight);
-                        // Safe texture limit for modern OpenGL ES devices (supports full 4K / 300 DPI A4)
-                        while (maxDim / opts.inSampleSize > 4096) {
+                        // Safe texture limit for modern OpenGL ES devices (supports full 2K / 300 DPI A4)
+                        while (maxDim / opts.inSampleSize > 2048) {
                             opts.inSampleSize *= 2;
                         }
                         opts.inJustDecodeBounds = false;
@@ -2525,11 +2541,9 @@ public class CanvasView extends View {
             Paint paintToUse = (img.isBackground && isPdfAmoledDarkMode) ? amoledBitmapPaint : bitmapPaint;
             canvas.drawBitmap(bmp, null, img.getBounds(), paintToUse);
         } else {
-            Paint border = new Paint(Paint.ANTI_ALIAS_FLAG);
-            border.setStyle(Paint.Style.STROKE);
-            border.setColor(0x88888888);
-            border.setStrokeWidth(2f);
-            canvas.drawRect(img.getBounds(), border);
+            Paint placeholderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+            placeholderPaint.setColor(isPdfAmoledDarkMode ? 0xFF000000 : 0xFFFFFFFF);
+            canvas.drawRect(img.getBounds(), placeholderPaint);
         }
     }
 
@@ -2603,6 +2617,24 @@ public class CanvasView extends View {
         float max = getMaxScrollY();
         if (viewportOffsetY < 0) viewportOffsetY = 0;
         if (viewportOffsetY > max) viewportOffsetY = max;
+
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            float pageW = 1440f;
+            ImageItem bg = getBackgroundImage();
+            if (bg != null && bg.width > 0) pageW = bg.width;
+            int viewW = getWidth();
+            if (viewW > 0) {
+                if (pageW * scaleFactor <= viewW) {
+                    panOffsetX = (viewW - pageW * scaleFactor) * 0.5f;
+                } else {
+                    float minPanX = viewW - pageW * scaleFactor;
+                    float maxPanX = 0f;
+                    if (panOffsetX < minPanX) panOffsetX = minPanX;
+                    if (panOffsetX > maxPanX) panOffsetX = maxPanX;
+                }
+            }
+            panOffsetY = 0f;
+        }
     }
 
 
@@ -2726,7 +2758,7 @@ public class CanvasView extends View {
         boolean isDarkBackground = isColorDark(pageBackgroundColor);
 
         // 1. Draw Page Background
-        int currentBgColor = (isPdfAmoledDarkMode && getBackgroundImage() != null)
+        int currentBgColor = (isPdfAmoledDarkMode && (getBackgroundImage() != null || isContinuousVerticalScroll))
                 ? 0xFF000000 : pageBackgroundColor;
         canvas.drawColor(currentBgColor);
 
@@ -2756,9 +2788,7 @@ public class CanvasView extends View {
                 if (page == null) continue;
                 float pageTop = getPageTop(pIdx);
                 float pageH = getPageHeight(page);
-                float pageW = viewWidth;
-                ImageItem bg = getPageBackgroundImage(page);
-                if (bg != null && bg.width > 0) pageW = bg.width;
+                float pageW = getPageWidth(page);
 
                 if (pageTop + pageH < visibleViewport.top || pageTop > visibleViewport.bottom) {
                     continue;
@@ -2768,6 +2798,9 @@ public class CanvasView extends View {
                 canvas.translate(0, pageTop);
 
                 int pageColor = (page.backgroundColor != 0) ? page.backgroundColor : pageBackgroundColor;
+                if (isPdfAmoledDarkMode && (getPageBackgroundImage(page) != null || (page.images != null && !page.images.isEmpty()))) {
+                    pageColor = 0xFF000000;
+                }
                 pageCardBgPaint.setColor(pageColor);
                 canvas.drawRect(0, 0, pageW, pageH, pageCardBgPaint);
 
@@ -2819,8 +2852,10 @@ public class CanvasView extends View {
                 canvas.restore();
 
                 if (pIdx < allPages.size() - 1) {
-                    float dividerY = pageTop + pageH + VERTICAL_PAGE_GAP / 2f;
-                    canvas.drawLine(0, dividerY, Math.max(viewWidth, pageW), dividerY, pageDividerPaint);
+                    float dividerY = pageTop + pageH;
+                    pageDividerPaint.setColor(isPdfAmoledDarkMode ? 0xFF262626 : 0xFFE2E8F0);
+                    pageDividerPaint.setStrokeWidth(1f / Math.max(0.5f, scaleFactor));
+                    canvas.drawLine(0, dividerY, pageW, dividerY, pageDividerPaint);
                 }
             }
 
