@@ -349,21 +349,21 @@ public class AppSettings {
         prefs.edit().putString(KEY_SEARCH_ASSIST_TARGET, target != null ? target : SEARCH_TARGET_CIRCLE_TO_SEARCH).apply();
     }
 
-    // PDF Import Mode: Option 1 (Convert to high-quality PNG images) vs Option 2 (Native PDF without conversion)
+    // PDF Import Mode: Native PDF without conversion is the sole, high-performance import standard
     private static final String KEY_PDF_IMPORT_MODE = "pref_pdf_import_mode";
     public static final String PDF_IMPORT_MODE_CONVERT_PNG = "CONVERT_PNG";
     public static final String PDF_IMPORT_MODE_NATIVE_PDF = "NATIVE_PDF";
 
     public String getPdfImportMode() {
-        return prefs.getString(KEY_PDF_IMPORT_MODE, PDF_IMPORT_MODE_CONVERT_PNG);
+        return PDF_IMPORT_MODE_NATIVE_PDF;
     }
 
     public void setPdfImportMode(String mode) {
-        prefs.edit().putString(KEY_PDF_IMPORT_MODE, mode != null ? mode : PDF_IMPORT_MODE_CONVERT_PNG).apply();
+        prefs.edit().putString(KEY_PDF_IMPORT_MODE, PDF_IMPORT_MODE_NATIVE_PDF).apply();
     }
 
     public boolean isNativePdfImport() {
-        return PDF_IMPORT_MODE_NATIVE_PDF.equals(getPdfImportMode());
+        return true;
     }
 
     // Page Navigation / Scroll Mode: No Scroll (Change pages only) vs Smooth Vertical Scroll
