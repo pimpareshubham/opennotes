@@ -19,15 +19,15 @@
         android:layout_height="wrap_content"
         android:layout_alignParentTop="true"
         android:orientation="vertical"
-        android:background="#16161A"
-        android:elevation="6dp">
+        android:background="#D9141624"
+        android:elevation="8dp">
 
         <!-- Row 1: Document Tabs Bar (Frame 25/35: 11 P1, Unnamed note, Unnamed note1, 3 ▾) -->
         <LinearLayout
             android:id="@+id/layoutTabsRow"
             android:layout_width="match_parent"
             android:layout_height="@dimen/editor_tab_row_height"
-            android:background="#121215"
+            android:background="#4D0E101A"
             android:orientation="horizontal"
             android:gravity="center_vertical"
             android:paddingHorizontal="10dp">
@@ -238,6 +238,11 @@
                 android:contentDescription="More Options" />
             </LinearLayout>
         </HorizontalScrollView>
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#2EFFFFFF" />
     </LinearLayout>
 
     <!-- Row 3: Center Floating Instrument Tool Dock (Frame 25/35) -->

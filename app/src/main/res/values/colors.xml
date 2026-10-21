@@ -1,24 +1,35 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Modern StarNote Dark UI Theme Palette -->
-    <color name="primary">#1E1E24</color>
-    <color name="primary_dark">#121214</color>
+    <!-- HyperOS Glassmorphism Design Tokens -->
+    <color name="primary">#1E1E28</color>
+    <color name="primary_dark">#0E1018</color>
     <color name="accent">#38BDF8</color>
     <color name="accent_blue">#3B82F6</color>
     <color name="accent_light">#1E293B</color>
-    <color name="window_background">#121214</color>
-    <color name="editor_bg">#121214</color>
-    <color name="surface">#1E1E24</color>
-    <color name="surface_card">#24242B</color>
-    <color name="surface_elevated">#24242B</color>
-    <color name="surface_variant">#2A2A32</color>
-    <color name="surface_floating">#2E2E38</color>
+    <color name="window_background">#0E111A</color>
+    <color name="editor_bg">#0A0A0E</color>
+
+    <!-- Glass Surfaces (Frosted Obsidian Acrylic) -->
+    <color name="surface">#D91A1C28</color>
+    <color name="surface_card">#E6202232</color>
+    <color name="surface_elevated">#EA222538</color>
+    <color name="surface_variant">#80181A26</color>
+    <color name="surface_floating">#F01D1F2E</color>
+
+    <!-- HyperOS Glass Border & Specular Rims -->
+    <color name="glass_border">#33FFFFFF</color>
+    <color name="glass_border_subtle">#1AFFFFFF</color>
+    <color name="glass_border_highlight">#59FFFFFF</color>
+    <color name="glass_tile_inactive">#26FFFFFF</color>
+    <color name="glass_tile_pressed">#40FFFFFF</color>
+    <color name="glass_glow_cyan">#4D38BDF8</color>
+
     <color name="text_primary">#F8FAFC</color>
     <color name="text_secondary">#94A3B8</color>
     <color name="text_hint">#64748B</color>
     <color name="text_tertiary">#64748B</color>
-    <color name="divider">#33333E</color>
-    <color name="divider_subtle">#22222A</color>
+    <color name="divider">#33FFFFFF</color>
+    <color name="divider_subtle">#1AFFFFFF</color>
 
     <!-- Canvas Paper Colors -->
     <color name="paper_black">#000000</color>

@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Base Deep Interstellar Void -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:angle="315"
+                android:startColor="#090C15"
+                android:centerColor="#101726"
+                android:endColor="#0B0E18"
+                android:type="linear" />
+        </shape>
+    </item>
+    <!-- Top-Right Luminous Deep Cyan / Indigo Ambient Glow -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="700dp"
+                android:centerX="0.85"
+                android:centerY="0.15"
+                android:startColor="#261E3A8A"
+                android:endColor="#00000000" />
+        </shape>
+    </item>
+    <!-- Bottom-Left Deep Oceanic Accent Aura -->
+    <item>
+        <shape android:shape="rectangle">
+            <gradient
+                android:type="radial"
+                android:gradientRadius="600dp"
+                android:centerX="0.15"
+                android:centerY="0.85"
+                android:startColor="#1A0E7490"
+                android:endColor="#00000000" />
+        </shape>
+    </item>
+</layer-list>

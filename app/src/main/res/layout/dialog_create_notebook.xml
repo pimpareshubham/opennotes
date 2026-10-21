@@ -4,14 +4,14 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="@color/surface">
+    android:background="@drawable/shape_dialog_bg">
 
     <!-- Top Header: Cancel | Create note | Create -->
     <RelativeLayout
         android:layout_width="match_parent"
         android:layout_height="52dp"
         android:paddingHorizontal="16dp"
-        android:background="@color/surface_elevated">
+        android:background="@android:color/transparent">
 
         <TextView
             android:id="@+id/btnCancelCreate"

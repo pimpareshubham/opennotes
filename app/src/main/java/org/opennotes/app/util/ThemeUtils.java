@@ -66,6 +66,11 @@ public final class ThemeUtils {
         return Math.round(value * context.getResources().getDisplayMetrics().density);
     }
 
+    public static int dp(Context context, float value) {
+        if (context == null) return Math.round(value);
+        return Math.round(value * context.getResources().getDisplayMetrics().density);
+    }
+
     /**
      * Helper to create a styled AlertDialog from a builder with dynamic button themes.
      */
@@ -96,9 +101,23 @@ public final class ThemeUtils {
             GradientDrawable windowBg = new GradientDrawable();
             windowBg.setShape(GradientDrawable.RECTANGLE);
             windowBg.setCornerRadius(dp(ctx, 24));
-            windowBg.setColor(isDark ? 0xFF24242B : 0xFFFFFFFF);
-            windowBg.setStroke(dp(ctx, 1), isDark ? 0xFF33333E : 0xFFE2E8F0);
+            if (isDark) {
+                windowBg.setColors(new int[] { 0xF526293E, 0xEC1A1C2B });
+                windowBg.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
+                windowBg.setStroke(dp(ctx, 1.2f), 0x48FFFFFF);
+            } else {
+                windowBg.setColor(0xFFFFFFFF);
+                windowBg.setStroke(dp(ctx, 1), 0xFFE2E8F0);
+            }
             dialog.getWindow().setBackgroundDrawable(windowBg);
+
+            // Android 12+ (API 31+) - Hardware compositor blur behind window (SurfaceFlinger 120 FPS zero-overhead)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+                try {
+                    dialog.getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND);
+                    dialog.getWindow().getAttributes().setBlurBehindRadius(dp(ctx, 28));
+                } catch (Throwable ignored) {}
+            }
         }
         dialog.setOnShowListener(d -> applyDialogButtonTheme(dialog, ctx));
         if (dialog.isShowing()) {
@@ -185,7 +204,7 @@ public final class ThemeUtils {
         // Tactile pill background with subtle border and touch ripple
         GradientDrawable shape = new GradientDrawable();
         shape.setShape(GradientDrawable.RECTANGLE);
-        shape.setCornerRadius(dp(ctx, 12));
+        shape.setCornerRadius(dp(ctx, 16));
         shape.setColor(bgColor);
         if (strokeColor != 0) {
             shape.setStroke(dp(ctx, 1), strokeColor);

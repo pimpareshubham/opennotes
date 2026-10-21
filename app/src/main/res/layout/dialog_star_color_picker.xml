@@ -5,7 +5,7 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:padding="16dp"
-    android:background="@color/surface">
+    android:background="@drawable/shape_dialog_bg">
 
     <!-- Header: Title and Live Color Preview -->
     <LinearLayout
