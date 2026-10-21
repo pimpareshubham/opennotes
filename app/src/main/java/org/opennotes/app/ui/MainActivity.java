@@ -129,6 +129,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         FullscreenMode.apply(this);
+        enableHighRefreshRate();
         setContentView(R.layout.activity_main);
 
         dbHelper = NotesDbHelper.getInstance(this);
@@ -1220,5 +1221,36 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         searchDebounceHandler.removeCallbacksAndMessages(null);
         notebookIoExecutor.shutdown();
         super.onDestroy();
+    }
+
+    private void enableHighRefreshRate() {
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            try {
+                android.view.Display display = null;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+                    display = getDisplay();
+                }
+                if (display == null) {
+                    display = getWindowManager().getDefaultDisplay();
+                }
+                if (display != null) {
+                    android.view.Display.Mode[] modes = display.getSupportedModes();
+                    android.view.Display.Mode bestMode = null;
+                    float maxRate = 0f;
+                    for (android.view.Display.Mode mode : modes) {
+                        if (mode.getRefreshRate() > maxRate) {
+                            maxRate = mode.getRefreshRate();
+                            bestMode = mode;
+                        }
+                    }
+                    if (bestMode != null && maxRate >= 90f) {
+                        android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
+                        lp.preferredDisplayModeId = bestMode.getModeId();
+                        lp.preferredRefreshRate = maxRate;
+                        getWindow().setAttributes(lp);
+                    }
+                }
+            } catch (Throwable ignored) {}
+        }
     }
 }

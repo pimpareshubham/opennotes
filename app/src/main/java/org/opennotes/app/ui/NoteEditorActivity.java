@@ -6325,6 +6325,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if (bestMode != null && maxRate >= 90f) {
                         android.view.WindowManager.LayoutParams lp = getWindow().getAttributes();
                         lp.preferredDisplayModeId = bestMode.getModeId();
+                        lp.preferredRefreshRate = maxRate;
                         getWindow().setAttributes(lp);
                     }
                 }

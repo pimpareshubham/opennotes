@@ -19,6 +19,8 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.OpenNotes">
 
+        <meta-data android:name="android.max_aspect" android:value="2.5" />
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
