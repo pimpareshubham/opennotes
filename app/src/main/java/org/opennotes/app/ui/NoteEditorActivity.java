@@ -140,6 +140,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     // Top Tool Dock
     private LinearLayout mainToolDock;
     private ImageView btnUndo, btnRedo;
+    private ImageView btnToolbarCircleToSearch;
     private ImageView toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso;
     private ImageView toolLaser, toolHand;
     private ImageView btnAutoBeautify;
@@ -450,6 +451,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         mainToolDock = findViewById(R.id.mainToolDock);
         btnUndo = findViewById(R.id.btnUndo);
         btnRedo = findViewById(R.id.btnRedo);
+        btnToolbarCircleToSearch = findViewById(R.id.btnToolbarCircleToSearch);
         toolFountain = findViewById(R.id.toolFountain);
         toolPen = findViewById(R.id.toolPen);
         toolHighlighter = findViewById(R.id.toolHighlighter);
@@ -625,6 +627,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         setViewSize(btnUndo, historyButtonSize, historyButtonSize);
         setViewSize(btnRedo, historyButtonSize, historyButtonSize);
         int[] drawingTools = {
+                R.id.btnToolbarCircleToSearch,
                 R.id.toolFountain, R.id.toolPen, R.id.toolEraser, R.id.toolLasso,
                 R.id.toolHighlighter, R.id.toolPencil, R.id.toolShape, R.id.toolText,
                 R.id.toolMedia, R.id.toolLaser, R.id.toolHand, R.id.btnAutoBeautify, R.id.btnTeachHandwriting
@@ -1330,6 +1333,21 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         btnUndo.setOnClickListener(v -> canvasView.undo());
         btnRedo.setOnClickListener(v -> canvasView.redo());
+
+        if (btnToolbarCircleToSearch != null) {
+            btnToolbarCircleToSearch.setOnClickListener(v -> {
+                v.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK);
+                v.animate().scaleX(0.85f).scaleY(0.85f).setDuration(60).withEndAction(() -> {
+                    v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(100).start();
+                }).start();
+                triggerCircleToSearch();
+            });
+            btnToolbarCircleToSearch.setOnLongClickListener(v -> {
+                v.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+                showSearchAssistConfigDialog();
+                return true;
+            });
+        }
 
         // Tools
         toolFountain.setOnClickListener(v -> selectOrToggleTool(DrawingTool.FOUNTAIN, "Fountain Pen Settings"));

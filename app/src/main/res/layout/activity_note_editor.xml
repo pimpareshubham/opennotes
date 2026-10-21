@@ -313,6 +313,18 @@
             android:layout_marginHorizontal="6dp"
             android:background="@color/divider" />
 
+        <!-- Circle to Search (Google Assistant / Google Lens) -->
+        <ImageView
+            android:id="@+id/btnToolbarCircleToSearch"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
+            android:padding="6dp"
+            android:layout_marginEnd="3dp"
+            android:src="@drawable/ic_google"
+            android:background="?selectableItemBackgroundBorderless"
+            android:contentDescription="Circle to Search"
+            android:tooltipText="Circle to Search (Google Assistant / Google Lens)" />
+
         <!-- Fountain Pen -->
         <ImageView
             android:id="@+id/toolFountain"
