@@ -5636,10 +5636,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     appSettings.setDefaultPageBgColor(newColor);
                 }
                 boolean applyToAll = checkAllPages.isChecked();
-                saveExecutor.execute(() -> dbHelper.updateNotebookDefaultBgColor(notebookId, newColor, applyToAll));
+                executeSaveTask(() -> dbHelper.updateNotebookDefaultBgColor(notebookId, newColor, applyToAll));
             } else if (checkAllPages.isChecked()) {
                 int defaultColor = currentNotebook != null ? currentNotebook.defaultBgColor : -1;
-                saveExecutor.execute(() -> dbHelper.updateNotebookDefaultBgColor(notebookId, defaultColor, true));
+                executeSaveTask(() -> dbHelper.updateNotebookDefaultBgColor(notebookId, defaultColor, true));
             }
 
             if (checkAllPages.isChecked() && pages != null) {
@@ -5892,7 +5892,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             loadingFonts.setTextColor(0xFF94A3B8);
             loadingFonts.setTextSize(12);
             layoutCustomFontList.addView(loadingFonts);
-            fontIoExecutor.execute(() -> {
+            executeFontIoTask(() -> {
                 List<TypefaceManager.CustomFontInfo> foundFonts =
                         TypefaceManager.getCustomFonts(getApplicationContext());
                 runOnUiThread(() -> {
@@ -5909,7 +5909,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (uri == null) return;
         Toast.makeText(this, "Importing font…", Toast.LENGTH_SHORT).show();
         Context applicationContext = getApplicationContext();
-        fontIoExecutor.execute(() -> {
+        executeFontIoTask(() -> {
             String fontName = TypefaceManager.importCustomFont(applicationContext, uri);
             String errorDetails = TypefaceManager.getLastFontImportError();
             runOnUiThread(() -> {
@@ -6532,7 +6532,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if ((p.isModified || p.id == 0) && p.isContentLoaded) {
                         p.isModified = false;
                         final Page snapshot = p.createSnapshot();
-                        saveExecutor.execute(() -> dbHelper.savePage(snapshot));
+                        executeSaveTask(() -> dbHelper.savePage(snapshot));
                     }
                 }
             }
@@ -6544,7 +6544,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if ((currentPage.isModified || currentPage.id == 0) && currentPage.isContentLoaded) {
                 currentPage.isModified = false;
                 final Page snapshot = currentPage.createSnapshot();
-                saveExecutor.execute(() -> dbHelper.savePage(snapshot));
+                executeSaveTask(() -> dbHelper.savePage(snapshot));
             }
         }
     }
@@ -6600,7 +6600,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         ThemeUtils.styleDialog(dialog, this);
         dialog.show();
 
-        saveExecutor.execute(() -> {
+        executeSaveTask(() -> {
             try {
                 long newNotebookId = PdfImporter.importPdf(this, uri, null, (current, total) -> {
                     runOnUiThread(() -> {
@@ -6654,7 +6654,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         ThemeUtils.styleDialog(dialog, this);
         dialog.show();
 
-        saveExecutor.execute(() -> {
+        executeSaveTask(() -> {
             try {
                 int addedCount = PdfImporter.appendPdfToNotebook(this, notebookId, uri, (current, total) -> {
                     runOnUiThread(() -> {
@@ -6692,9 +6692,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private final Handler viewStateDebounceHandler = new Handler(Looper.getMainLooper());
-    private final Runnable viewStateSaveRunnable = this::saveNotebookViewState;
+    private final Runnable viewStateSaveRunnable = () -> {
+        if (!isFinishing() && !isDestroyed()) {
+            saveNotebookViewState();
+        }
+    };
 
     private void saveNotebookViewStateDebounced() {
+        if (isFinishing() || isDestroyed()) return;
         viewStateDebounceHandler.removeCallbacks(viewStateSaveRunnable);
         viewStateDebounceHandler.postDelayed(viewStateSaveRunnable, 400);
     }
@@ -6748,6 +6753,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     @Override
     protected void onDestroy() {
+        viewStateDebounceHandler.removeCallbacksAndMessages(null);
+        saveDebounceHandler.removeCallbacksAndMessages(null);
+        resetZoomHandler.removeCallbacksAndMessages(null);
         saveCurrentPage();
         saveNotebookViewState();
         saveNotebookConfig();
@@ -6764,9 +6772,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (audioMemoPlayer != null) {
             try { audioMemoPlayer.release(); audioMemoPlayer = null; } catch (Exception ignored) {}
         }
-        saveDebounceHandler.removeCallbacksAndMessages(null);
-        resetZoomHandler.removeCallbacksAndMessages(null);
-        viewStateDebounceHandler.removeCallbacksAndMessages(null);
         try {
             saveExecutor.shutdown();
         } catch (Exception ignored) {}
