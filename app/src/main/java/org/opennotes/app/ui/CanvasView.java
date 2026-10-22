@@ -1557,34 +1557,31 @@ public class CanvasView extends View {
     public void resetZoom(float targetZoomPercent) {
         float startScale = Math.max(0.01f, scaleFactor);
         float targetScale = Math.max(0.10f, Math.min(16.0f, targetZoomPercent / 100f));
+        if (Math.abs(targetScale - startScale) < 0.005f) {
+            return;
+        }
+
         int viewW = getWidth();
         int viewH = getHeight();
+        float focusX = viewW > 0 ? (viewW * 0.5f) : 0f;
+        float focusY = viewH > 0 ? (viewH * 0.5f) : 0f;
 
-        float targetPanX;
+        float canvasFocusX = (focusX - panOffsetX) / startScale;
+        float canvasFocusY = (focusY - panOffsetY) / startScale + viewportOffsetY;
+
+        float targetPanX = focusX - canvasFocusX * targetScale;
         float targetPanY;
         float targetViewportOffsetY;
 
         if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
-            Page activePage = (activePageIndex >= 0 && activePageIndex < allPages.size())
-                    ? allPages.get(activePageIndex)
-                    : currentPage;
-            float pageW = activePage != null ? getPageWidth(activePage) : (viewW > 0 ? viewW : 1440f);
-            targetPanX = (viewW > 0) ? (viewW - pageW * targetScale) * 0.5f : 0f;
-            targetPanY = 0f;
-            float pageTop = (activePageIndex >= 0) ? getPageTop(activePageIndex) : 0f;
-            targetViewportOffsetY = pageTop;
+            float unconstrainedPanY = focusY - (canvasFocusY - viewportOffsetY) * targetScale;
+            float effectiveScrollY = viewportOffsetY - (unconstrainedPanY / targetScale);
             float maxScrollAtTarget = Math.max(0f, getTotalPagesHeight() - (viewH > 0 ? (viewH / targetScale) : 0f));
-            targetViewportOffsetY = Math.max(0f, Math.min(targetViewportOffsetY, maxScrollAtTarget));
+            targetViewportOffsetY = Math.max(0f, Math.min(maxScrollAtTarget, effectiveScrollY));
+            targetPanY = 0f;
         } else {
-            float pageW = (currentPage != null) ? getPageWidth(currentPage) : (viewW > 0 ? viewW : 1440f);
-            float pageH = (currentPage != null && currentPage.canvasHeight > 0) ? currentPage.canvasHeight : (viewH > 0 ? viewH : 2036f);
-            targetPanX = (viewW > 0) ? (viewW - pageW * targetScale) * 0.5f : 0f;
-            if (viewH > 0 && pageH * targetScale <= viewH) {
-                targetPanY = (viewH - pageH * targetScale) * 0.5f;
-            } else {
-                targetPanY = 0f;
-            }
-            targetViewportOffsetY = 0f;
+            targetPanY = focusY - (canvasFocusY - viewportOffsetY) * targetScale;
+            targetViewportOffsetY = viewportOffsetY;
         }
 
         if (activeZoomAnimator != null && activeZoomAnimator.isRunning()) {
