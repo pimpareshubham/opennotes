@@ -1247,6 +1247,11 @@ public class CanvasView extends View {
         if (newIdx >= 0 && newIdx < allPages.size() && newIdx != activePageIndex) {
             activePageIndex = newIdx;
             currentPage = allPages.get(newIdx);
+            if (currentPage != null && !currentPage.isContentLoaded) {
+                try {
+                    org.opennotes.app.db.NotesDbHelper.getInstance(getContext()).ensurePageLoaded(currentPage);
+                } catch (Throwable ignored) {}
+            }
             prefetchAdjacentPages(newIdx);
             if (activePageChangeListener != null) {
                 activePageChangeListener.onActivePageChanged(activePageIndex);
@@ -3168,7 +3173,7 @@ public class CanvasView extends View {
             }
         }
         if (w > 0 && h > 0) {
-            if (needsInitialFit || oldw == 0 || oldh == 0) {
+            if (needsInitialFit) {
                 needsInitialFit = false;
                 if (getBackgroundImage() != null) {
                     fitPageToAvailableSpace(false);
@@ -6140,9 +6145,19 @@ public class CanvasView extends View {
                     currentPage = allPages.get(pIdx);
                     activeStrokePageTop = getPageTop(pIdx);
                     activeStrokePage = currentPage;
+                    if (currentPage != null && !currentPage.isContentLoaded) {
+                        try {
+                            org.opennotes.app.db.NotesDbHelper.getInstance(getContext()).ensurePageLoaded(currentPage);
+                        } catch (Throwable ignored) {}
+                    }
                 } else {
                     activeStrokePageTop = 0f;
                     activeStrokePage = currentPage;
+                    if (currentPage != null && !currentPage.isContentLoaded) {
+                        try {
+                            org.opennotes.app.db.NotesDbHelper.getInstance(getContext()).ensurePageLoaded(currentPage);
+                        } catch (Throwable ignored) {}
+                    }
                 }
                 float localDownY = canvasY - activeStrokePageTop;
 
@@ -7118,7 +7133,9 @@ public class CanvasView extends View {
     }
 
     private void notifyChange() {
-        if (currentPage != null) currentPage.markContentChanged();
+        Page commitPage = (activeStrokePage != null) ? activeStrokePage : currentPage;
+        if (commitPage != null) commitPage.markContentChanged();
+        if (currentPage != null && currentPage != commitPage) currentPage.markContentChanged();
         syncAccessibilityActions();
         if (changeListener != null) {
             changeListener.onCanvasChanged();

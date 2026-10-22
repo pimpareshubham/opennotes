@@ -791,15 +791,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void loadNotebookData() {
-        // 1. Instantaneous 0ms load if cached in memory!
-        List<Page> cachedPages = dbHelper.getCachedPages(notebookId);
-        Notebook cachedNb = dbHelper.getCachedNotebook(notebookId);
-        if (cachedPages != null && !cachedPages.isEmpty() && cachedNb != null) {
-            applyLoadedNotebook(cachedNb, cachedPages);
-            return;
-        }
-
-        // 2. High-speed progressive background load
+        // High-speed progressive background load
         loadExecutor.execute(() -> {
             try {
                 Notebook loadedNotebook = dbHelper.getNotebook(notebookId);
@@ -895,8 +887,22 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             final float targetPanX = savedPanX;
             final float targetPanY = savedPanY;
             final float targetScrollY = savedScrollY;
-            // Restore viewport immediately with 0 delay for instantaneous responsiveness
-            canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
+            final int restoredPageNum = currentPageIndex + 1;
+            final int totalPagesCount = resultPages.size();
+
+            canvasView.post(() -> {
+                if (isFinishing() || isDestroyed()) return;
+                // Smoothly animate/glide into the restored reading position
+                if (canvasView.getWidth() > 0 && canvasView.getHeight() > 0) {
+                    canvasView.smoothAnimateViewport(targetZoom, targetPanX, targetPanY, targetScrollY, 420, null);
+                } else {
+                    canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
+                }
+
+                if (restoredPageNum > 1 || targetScrollY > 50) {
+                    Toast.makeText(NoteEditorActivity.this, "📖 Resumed reading at Page " + restoredPageNum + " of " + totalPagesCount, Toast.LENGTH_SHORT).show();
+                }
+            });
         }
         renderDocumentTabs();
         canvasView.setEnabled(true);
@@ -2239,6 +2245,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     @Override
     public void finish() {
+        saveCurrentPage();
         super.finish();
         overridePendingTransition(R.anim.activity_close_enter, R.anim.activity_close_exit);
     }
@@ -6394,24 +6401,46 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void triggerRealtimeAutoSave() {
         saveDebounceHandler.removeCallbacksAndMessages(null);
         saveDebounceHandler.postDelayed(() -> {
-            if (currentPage == null || isFinishing() || isDestroyed()) return;
-            if (currentPage.isInfinite) {
-                currentPage.canvasHeight = canvasView.getContentHeight();
+            if (isFinishing() || isDestroyed()) return;
+            if (pages != null && !pages.isEmpty()) {
+                for (Page p : pages) {
+                    if (p != null) {
+                        if (p.isInfinite && p == currentPage && canvasView != null) {
+                            p.canvasHeight = canvasView.getContentHeight();
+                        }
+                        final Page snapshot = p.createSnapshot();
+                        saveExecutor.execute(() -> dbHelper.savePage(snapshot));
+                    }
+                }
+            } else if (currentPage != null) {
+                if (currentPage.isInfinite && canvasView != null) {
+                    currentPage.canvasHeight = canvasView.getContentHeight();
+                }
+                final Page snapshot = currentPage.createSnapshot();
+                saveExecutor.execute(() -> dbHelper.savePage(snapshot));
             }
-            final Page snapshot = currentPage.createSnapshot();
-            saveExecutor.execute(() -> dbHelper.savePage(snapshot));
         }, 600);
     }
 
     private void saveCurrentPage() {
         saveNotebookViewState();
-        if (currentPage != null) {
-            saveDebounceHandler.removeCallbacksAndMessages(null);
-            if (currentPage.isInfinite) {
+        saveNotebookConfig();
+        saveDebounceHandler.removeCallbacksAndMessages(null);
+        if (pages != null && !pages.isEmpty()) {
+            for (Page p : pages) {
+                if (p != null) {
+                    if (p.isInfinite && p == currentPage && canvasView != null) {
+                        p.canvasHeight = canvasView.getContentHeight();
+                    }
+                    final Page snapshot = p.createSnapshot();
+                    saveExecutor.execute(() -> dbHelper.savePage(snapshot));
+                }
+            }
+        } else if (currentPage != null) {
+            if (currentPage.isInfinite && canvasView != null) {
                 currentPage.canvasHeight = canvasView.getContentHeight();
             }
             final Page snapshot = currentPage.createSnapshot();
-            dbHelper.updateCachedPage(snapshot);
             saveExecutor.execute(() -> dbHelper.savePage(snapshot));
         }
     }

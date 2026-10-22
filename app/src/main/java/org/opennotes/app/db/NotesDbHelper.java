@@ -106,7 +106,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     private static NotesDbHelper instance;
     private final Context appContext;
     private final List<Notebook> cachedNotebooks = new java.util.concurrent.CopyOnWriteArrayList<>();
-    private final Map<Long, List<Page>> notebookPagesCache = new ConcurrentHashMap<>();
     private final Map<Long, Notebook> notebookCache = new ConcurrentHashMap<>();
     private final ExecutorService preloadExecutor = Executors.newFixedThreadPool(2, new ThreadFactory() {
         private final AtomicInteger count = new AtomicInteger(1);
@@ -140,31 +139,8 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         return new ArrayList<>(cachedNotebooks);
     }
 
-    public List<Page> getCachedPages(long notebookId) {
-        List<Page> cached = notebookPagesCache.get(notebookId);
-        if (cached != null && !cached.isEmpty()) {
-            return cached;
-        }
-        return null;
-    }
-
     public Notebook getCachedNotebook(long notebookId) {
         return notebookCache.get(notebookId);
-    }
-
-    public void updateCachedPage(Page page) {
-        if (page == null) return;
-        List<Page> cached = notebookPagesCache.get(page.notebookId);
-        if (cached != null) {
-            synchronized (cached) {
-                for (int i = 0; i < cached.size(); i++) {
-                    if (cached.get(i).id == page.id || cached.get(i).pageIndex == page.pageIndex) {
-                        cached.set(i, page);
-                        break;
-                    }
-                }
-            }
-        }
     }
 
     public synchronized void closeDatabase() {
@@ -172,7 +148,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             close();
         } catch (Exception ignored) {}
         cachedNotebooks.clear();
-        notebookPagesCache.clear();
         notebookCache.clear();
         instance = null;
     }
@@ -496,14 +471,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             pcv.put(COL_PAGE_BG_COLOR, bgColor);
             pcv.put(COL_PAGE_UPDATED_AT, System.currentTimeMillis());
             db.update(TABLE_PAGES, pcv, COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
-            List<Page> cachedPages = notebookPagesCache.get(notebookId);
-            if (cachedPages != null) {
-                synchronized (cachedPages) {
-                    for (Page p : cachedPages) {
-                        p.backgroundColor = bgColor;
-                    }
-                }
-            }
         }
     }
 
@@ -526,7 +493,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         }
         db.delete(TABLE_PAGES, COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
         db.delete(TABLE_NOTEBOOKS, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
-        notebookPagesCache.remove(notebookId);
         notebookCache.remove(notebookId);
         NotebookConfigManager.clearConfig(appContext, notebookId);
         NotebookViewStateManager.clearState(appContext, notebookId);
@@ -848,20 +814,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         long id = db.insert(TABLE_PAGES, null, cv);
         page.id = id;
         page.isContentLoaded = true;
-
-        List<Page> cached = notebookPagesCache.get(page.notebookId);
-        if (cached != null) {
-            synchronized (cached) {
-                if (page.pageIndex >= cached.size()) {
-                    cached.add(page);
-                } else {
-                    cached.add(page.pageIndex, page);
-                    for (int i = page.pageIndex + 1; i < cached.size(); i++) {
-                        cached.get(i).pageIndex = i;
-                    }
-                }
-            }
-        }
         return id;
     }
 
@@ -891,18 +843,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             insertPage(page);
         }
 
-        List<Page> cached = notebookPagesCache.get(page.notebookId);
-        if (cached != null) {
-            synchronized (cached) {
-                for (int i = 0; i < cached.size(); i++) {
-                    if (cached.get(i).id == page.id || cached.get(i).pageIndex == page.pageIndex) {
-                        cached.set(i, page.createSnapshot());
-                        break;
-                    }
-                }
-            }
-        }
-
         // Also touch notebook updatedAt
         ContentValues nbCv = new ContentValues();
         nbCv.put(COL_NB_UPDATED_AT, System.currentTimeMillis());
@@ -915,16 +855,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     }
 
     public synchronized Page getPage(long notebookId, int pageIndex) {
-        List<Page> cached = notebookPagesCache.get(notebookId);
-        if (cached != null) {
-            synchronized (cached) {
-                if (pageIndex >= 0 && pageIndex < cached.size()) {
-                    Page p = cached.get(pageIndex);
-                    ensurePageLoaded(p);
-                    return p;
-                }
-            }
-        }
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
         Page page = null;
@@ -952,13 +882,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
      * 3. Retains all pages in memory cache so subsequent opens are instantaneous (0ms).
      */
     public synchronized List<Page> getPagesForNotebookFast(long notebookId, int initialActivePageIndex) {
-        List<Page> cached = notebookPagesCache.get(notebookId);
-        if (cached != null && !cached.isEmpty()) {
-            int targetIdx = Math.max(0, Math.min(initialActivePageIndex, cached.size() - 1));
-            ensurePageLoaded(cached.get(targetIdx));
-            return cached;
-        }
-
         List<Page> list = new ArrayList<>();
         SQLiteDatabase db = getReadableDatabase();
         Cursor c = null;
@@ -1011,7 +934,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             ensurePageLoaded(list.get(0));
         }
 
-        notebookPagesCache.put(notebookId, list);
         return list;
     }
 
@@ -1050,6 +972,13 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         if (page == null || page.isContentLoaded) return;
         synchronized (page) {
             if (page.isContentLoaded) return;
+            boolean hasInMemoryContent = (page.strokes != null && !page.strokes.isEmpty())
+                    || (page.shapes != null && !page.shapes.isEmpty())
+                    || (page.texts != null && !page.texts.isEmpty());
+            if (hasInMemoryContent) {
+                page.isContentLoaded = true;
+                return;
+            }
             SQLiteDatabase db = getReadableDatabase();
             Cursor c = null;
             try {
@@ -1088,13 +1017,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     }
 
     public synchronized List<Page> getPagesForNotebook(long notebookId) {
-        List<Page> cached = notebookPagesCache.get(notebookId);
-        if (cached != null && !cached.isEmpty()) {
-            for (Page p : cached) {
-                ensurePageLoaded(p);
-            }
-            return cached;
-        }
         List<Page> list = getPagesForNotebookFast(notebookId, 0);
         for (Page p : list) {
             ensurePageLoaded(p);
@@ -1122,18 +1044,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         db.delete(TABLE_PAGES,
                 COL_PAGE_NB_ID + "=? AND " + COL_PAGE_INDEX + "=?",
                 new String[]{String.valueOf(notebookId), String.valueOf(pageIndex)});
-
-        List<Page> cached = notebookPagesCache.get(notebookId);
-        if (cached != null) {
-            synchronized (cached) {
-                if (pageIndex >= 0 && pageIndex < cached.size()) {
-                    cached.remove(pageIndex);
-                    for (int i = pageIndex; i < cached.size(); i++) {
-                        cached.get(i).pageIndex = i;
-                    }
-                }
-            }
-        }
 
         // Re-index remaining pages
         Cursor c = db.query(TABLE_PAGES, new String[]{COL_PAGE_ID, COL_PAGE_INDEX},
