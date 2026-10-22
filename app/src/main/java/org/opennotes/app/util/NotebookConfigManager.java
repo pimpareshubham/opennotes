@@ -53,6 +53,7 @@ public final class NotebookConfigManager {
     private static final String KEY_AUTO_BEAUTIFY = "auto_beautify_";
     private static final String KEY_LASSO_MODE = "lasso_mode_";
     private static final String KEY_LASER_MODE = "laser_mode_";
+    private static final String KEY_DEFAULT_RESET_ZOOM = "default_reset_zoom_";
     private static final String KEY_TOOL_WIDTH_PREFIX = "tw_";
     private static final String KEY_TOOL_COLOR_PREFIX = "tc_";
 
@@ -74,6 +75,7 @@ public final class NotebookConfigManager {
         public Boolean autoBeautifyEnabled = null;
         public CanvasView.LassoMode lassoMode = null;
         public CanvasView.LaserMode laserMode = null;
+        public Integer defaultResetZoom = null;
 
         public final Map<DrawingTool, Float> toolWidths = new HashMap<>();
         public final Map<DrawingTool, Integer> toolColors = new HashMap<>();
@@ -190,6 +192,9 @@ public final class NotebookConfigManager {
                     try { config.laserMode = CanvasView.LaserMode.valueOf(lzm); } catch (Throwable ignored) {}
                 }
             }
+            if (sp.contains(KEY_DEFAULT_RESET_ZOOM + notebookId)) {
+                config.defaultResetZoom = sp.getInt(KEY_DEFAULT_RESET_ZOOM + notebookId, 100);
+            }
 
             // Restore tool-specific widths and colors
             for (DrawingTool t : DrawingTool.values()) {
@@ -266,6 +271,9 @@ public final class NotebookConfigManager {
             }
             if (config.laserMode != null) {
                 editor.putString(KEY_LASER_MODE + notebookId, config.laserMode.name());
+            }
+            if (config.defaultResetZoom != null && config.defaultResetZoom >= 10) {
+                editor.putInt(KEY_DEFAULT_RESET_ZOOM + notebookId, config.defaultResetZoom);
             }
 
             for (Map.Entry<DrawingTool, Float> entry : config.toolWidths.entrySet()) {

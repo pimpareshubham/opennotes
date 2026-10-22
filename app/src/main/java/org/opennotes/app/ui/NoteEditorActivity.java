@@ -1408,6 +1408,27 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnRedo.setAlpha(canvasView.canRedo() ? 1.0f : 0.35f);
     }
 
+    private int getFavoriteResetZoom() {
+        if (notebookId > 0) {
+            NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, notebookId);
+            if (config != null && config.defaultResetZoom != null && config.defaultResetZoom >= 10) {
+                return config.defaultResetZoom;
+            }
+        }
+        return ZoomFavoritesManager.getDefaultResetZoom(this);
+    }
+
+    private void setFavoriteResetZoom(int zoomPercent) {
+        if (zoomPercent < 10 || zoomPercent > 2000) return;
+        ZoomFavoritesManager.setDefaultResetZoom(this, zoomPercent);
+        if (notebookId > 0) {
+            NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, notebookId);
+            if (config == null) config = new NotebookConfigManager.NotebookConfig();
+            config.defaultResetZoom = zoomPercent;
+            NotebookConfigManager.saveConfig(this, notebookId, config);
+        }
+    }
+
     private void toggleFavoriteCurrentZoom() {
         if (canvasView == null || btnFavorite == null) return;
         int currentZoom = Math.round(canvasView.getZoomPercent());
@@ -1418,11 +1439,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             Toast.makeText(this, "Zoom " + currentZoom + "% removed from favorites", Toast.LENGTH_SHORT).show();
         } else {
             ZoomFavoritesManager.addFavorite(this, currentZoom);
+            setFavoriteResetZoom(currentZoom);
             updateFavoriteZoomIcon(currentZoom);
             btnFavorite.animate().scaleX(1.35f).scaleY(1.35f).setDuration(120)
                     .withEndAction(() -> btnFavorite.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start())
                     .start();
-            Toast.makeText(this, "Zoom " + currentZoom + "% added to favorites ★", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "Zoom " + currentZoom + "% favorited & set as reset target ★", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -1757,11 +1779,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         canvasView.fitPageToAvailableSpace(true);
                         Toast.makeText(this, "Aligned to page fit", Toast.LENGTH_SHORT).show();
                     } else {
-                        int targetResetZoom = ZoomFavoritesManager.getDefaultResetZoom(this);
+                        int targetResetZoom = getFavoriteResetZoom();
                         if (canvasView != null) {
                             canvasView.resetZoom(targetResetZoom);
                         }
-                        Toast.makeText(this, "Zoom reset to " + targetResetZoom + "%", Toast.LENGTH_SHORT).show();
+                        Toast.makeText(this, "Zoom reset to " + targetResetZoom + "% ★", Toast.LENGTH_SHORT).show();
                     }
                 }, 300L);
             }
@@ -2291,6 +2313,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             config.autoBeautifyEnabled = canvasView.isAutoBeautifyEnabled();
             config.lassoMode = canvasView.getLassoMode();
             config.laserMode = canvasView.getLaserMode();
+            config.defaultResetZoom = getFavoriteResetZoom();
 
             NotebookConfigManager.saveConfig(this, notebookId, config);
         } catch (Throwable t) {
@@ -2468,6 +2491,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
         if (config.laserMode != null) {
             canvasView.setLaserMode(config.laserMode);
+        }
+        if (config.defaultResetZoom != null && config.defaultResetZoom >= 10) {
+            ZoomFavoritesManager.setDefaultResetZoom(this, config.defaultResetZoom);
         }
     }
 
@@ -3002,7 +3028,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
         Collections.sort(sortedOptions);
 
-        int currentReset = ZoomFavoritesManager.getDefaultResetZoom(this);
+        int currentReset = getFavoriteResetZoom();
 
         ModernOptionsSelectorDialog.Builder builder = new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Reset Zoom Target")
@@ -3019,7 +3045,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
             final int chosenZoom = zoom;
             builder.addOption(zoom, "★", zoom + "% Zoom", desc, isCurrent, () -> {
-                ZoomFavoritesManager.setDefaultResetZoom(this, chosenZoom);
+                setFavoriteResetZoom(chosenZoom);
                 canvasView.resetZoom(chosenZoom);
                 Toast.makeText(this, "Reset zoom set to " + chosenZoom + "% ★", Toast.LENGTH_SHORT).show();
             });
@@ -3059,6 +3085,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 if (layoutFavoritesList == null) return;
                 layoutFavoritesList.removeAllViews();
                 List<Integer> favorites = ZoomFavoritesManager.getFavoriteZoomLevels(NoteEditorActivity.this);
+                int currentReset = getFavoriteResetZoom();
                 if (favorites.isEmpty()) {
                     if (textNoFavoritesHint != null) textNoFavoritesHint.setVisibility(View.VISIBLE);
                 } else {
@@ -3072,21 +3099,30 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         ImageButton btnDeleteFavoriteZoom = itemView.findViewById(R.id.btnDeleteFavoriteZoom);
 
                         textZoomPercent.setText(favZoom + "%");
-                        if (favZoom == currentZoom) {
+                        if (favZoom == currentReset) {
+                            badgeCurrentZoom.setText(favZoom == currentZoom ? "Current ★ Reset" : "★ Reset Target");
+                            badgeCurrentZoom.setVisibility(View.VISIBLE);
+                        } else if (favZoom == currentZoom) {
+                            badgeCurrentZoom.setText("Current");
                             badgeCurrentZoom.setVisibility(View.VISIBLE);
                         } else {
                             badgeCurrentZoom.setVisibility(View.GONE);
                         }
 
-                        // Clicking favorite item sets the zoom
+                        // Clicking favorite item sets the zoom AND sets it as the reset zoom target
                         itemView.setOnClickListener(v -> {
+                            setFavoriteResetZoom(favZoom);
                             canvasView.setZoom(favZoom);
+                            Toast.makeText(NoteEditorActivity.this, "Zoom set to " + favZoom + "% ★ (Reset Target)", Toast.LENGTH_SHORT).show();
                             dialog.dismiss();
                         });
 
                         // Delete option to remove level from favorites
                         btnDeleteFavoriteZoom.setOnClickListener(v -> {
                             ZoomFavoritesManager.removeFavorite(NoteEditorActivity.this, favZoom);
+                            if (getFavoriteResetZoom() == favZoom) {
+                                setFavoriteResetZoom(100);
+                            }
                             Toast.makeText(NoteEditorActivity.this, "Zoom " + favZoom + "% removed from favorites", Toast.LENGTH_SHORT).show();
                             updateFavoriteZoomIcon(Math.round(canvasView.getZoomPercent()));
                             run(); // Re-populate favorites list
@@ -3115,7 +3151,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
             btnAddCurrentToFavorites.setOnClickListener(v -> {
                 ZoomFavoritesManager.addFavorite(this, currentZoom);
-                Toast.makeText(this, "Zoom " + currentZoom + "% added to favorites ★", Toast.LENGTH_SHORT).show();
+                setFavoriteResetZoom(currentZoom);
+                Toast.makeText(this, "Zoom " + currentZoom + "% added to favorites & set as reset target ★", Toast.LENGTH_SHORT).show();
                 updateFavoriteZoomIcon(currentZoom);
                 btnAddCurrentToFavorites.setText("★ Current Zoom Favorited");
                 btnAddCurrentToFavorites.setEnabled(false);
@@ -3143,7 +3180,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 }
 
                 presetItem.setOnClickListener(v -> {
+                    setFavoriteResetZoom(preset);
                     canvasView.setZoom(preset);
+                    Toast.makeText(NoteEditorActivity.this, "Zoom set to " + preset + "% ★ (Reset Target)", Toast.LENGTH_SHORT).show();
                     dialog.dismiss();
                 });
 
@@ -3152,16 +3191,19 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         if (btnResetZoomDialog != null) {
+            int target = getFavoriteResetZoom();
+            if (btnResetZoomDialog instanceof com.google.android.material.button.MaterialButton) {
+                ((com.google.android.material.button.MaterialButton) btnResetZoomDialog).setText("Reset (" + target + "%)");
+            }
             btnResetZoomDialog.setOnClickListener(v -> {
                 if (canvasView != null && canvasView.isPdfDocument()) {
                     canvasView.fitPageToAvailableSpace(true);
                     Toast.makeText(this, "Aligned to page fit", Toast.LENGTH_SHORT).show();
                 } else {
-                    int target = ZoomFavoritesManager.getDefaultResetZoom(this);
                     if (canvasView != null) {
                         canvasView.resetZoom(target);
                     }
-                    Toast.makeText(this, "Zoom reset to " + target + "%", Toast.LENGTH_SHORT).show();
+                    Toast.makeText(this, "Zoom reset to " + target + "% ★", Toast.LENGTH_SHORT).show();
                 }
                 dialog.dismiss();
             });
