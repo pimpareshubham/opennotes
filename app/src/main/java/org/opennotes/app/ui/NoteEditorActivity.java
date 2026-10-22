@@ -49,6 +49,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 import org.opennotes.app.util.ZoomFavoritesManager;
 import org.opennotes.app.util.NotebookViewStateManager;
+import org.opennotes.app.util.NotebookConfigManager;
 import org.opennotes.app.importer.PdfImporter;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
 
@@ -392,7 +393,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         loadNotebookData();
         setupListeners();
         setupToolPropertyCard();
-        restoreUserSettings();
+        restoreNotebookConfig(notebookId);
         updateFavoriteIcon();
 
         // Silent background pre-download of handwriting models for seamless offline recognition
@@ -824,6 +825,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     }
 
                     currentPageIndex = Math.max(0, Math.min(savedPage, resultPages.size() - 1));
+                    restoreNotebookConfig(notebookId);
                     loadCurrentPage();
 
                     if (shouldRestoreView) {
@@ -966,6 +968,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (targetNotebookId == notebookId) return;
         saveCurrentPage();
         saveNotebookViewState();
+        saveNotebookConfig();
         notebookId = targetNotebookId;
         hasRestoredEditorState = false;
         currentPageIndex = 0;
@@ -974,6 +977,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void closeTab(long targetNotebookId) {
         saveNotebookViewState();
+        saveNotebookConfig();
         synchronized (openNotebookIds) {
             if (openNotebookIds.size() <= 1) {
                 saveCurrentPage();
@@ -1323,11 +1327,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private void loadCurrentPage() {
         if (currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
         currentPage = pages.get(currentPageIndex);
-        boolean isContinuous = appSettings != null && appSettings.isContinuousVerticalScroll();
-        if (appSettings != null) {
-            canvasView.setPdfAmoledDarkMode(appSettings.isPdfAmoledDarkMode());
-            canvasView.setContinuousVerticalScroll(isContinuous);
-        }
+        boolean isContinuous = canvasView != null && canvasView.isContinuousVerticalScroll();
         if (isContinuous && pages.size() > 1) {
             canvasView.setPages(pages, currentPageIndex);
         } else {
@@ -1338,7 +1338,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void updatePageNavUi() {
-        boolean isContinuous = appSettings != null && appSettings.isContinuousVerticalScroll();
+        boolean isContinuous = canvasView != null && canvasView.isContinuousVerticalScroll();
         textPageCounter.setText((currentPageIndex + 1) + " / " + pages.size() + (isContinuous ? " ↕" : ""));
         btnPrevPage.setEnabled(currentPageIndex > 0);
         btnPrevPage.setAlpha(currentPageIndex > 0 ? 1.0f : 0.35f);
@@ -1348,7 +1348,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (btnPdfAmoledToggle != null) {
             boolean hasBg = canvasView != null && canvasView.getBackgroundImage() != null;
             btnPdfAmoledToggle.setVisibility(hasBg ? View.VISIBLE : View.GONE);
-            boolean amoledActive = appSettings != null && appSettings.isPdfAmoledDarkMode();
+            boolean amoledActive = canvasView != null ? canvasView.isPdfAmoledDarkMode() : (appSettings != null && appSettings.isPdfAmoledDarkMode());
             btnPdfAmoledToggle.setColorFilter(amoledActive ? 0xFF38BDF8 : 0xFF94A3B8);
         }
     }
@@ -1443,11 +1443,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if (isDoubleClick) {
                 showEraserOptionsDialog();
             } else {
+                DrawingTool prevTool = canvasView.getTool();
+                if (prevTool != null) {
+                    saveCurrentToolWidthAndColor(prevTool);
+                }
                 canvasView.setTool(DrawingTool.ERASER_STROKE);
                 updateToolUi(DrawingTool.ERASER_STROKE);
                 if (appSettings != null) appSettings.setLastTool(DrawingTool.ERASER_STROKE);
                 boolean onlyH = canvasView.isEraseOnlyHighlighter();
                 toolEraser.setColorFilter(onlyH ? 0xFFF59E0B : 0xFF38BDF8);
+                saveNotebookConfig();
             }
         });
         toolEraser.setOnLongClickListener(v -> {
@@ -1463,11 +1468,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if (isDoubleClick) {
                 showLassoOptionsDialog();
             } else {
+                DrawingTool prevTool = canvasView.getTool();
+                if (prevTool != null) {
+                    saveCurrentToolWidthAndColor(prevTool);
+                }
                 canvasView.setTool(DrawingTool.LASSO);
                 updateToolUi(DrawingTool.LASSO);
                 if (appSettings != null) appSettings.setLastTool(DrawingTool.LASSO);
                 boolean isRect = canvasView.getLassoMode() == CanvasView.LassoMode.RECTANGLE;
                 toolLasso.setColorFilter(isRect ? 0xFF10B981 : 0xFF38BDF8);
+                saveNotebookConfig();
             }
         });
         toolLasso.setOnLongClickListener(v -> {
@@ -1488,6 +1498,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 canvasView.setFingerMoveCanvasEnabled(nextState);
                 if (appSettings != null) appSettings.setFingerMoveCanvas(nextState);
                 updateHandToolUi(nextState);
+                saveNotebookConfig();
                 if (nextState) {
                     Toast.makeText(this, "🖐️ Move Canvas with Finger: ON\n(Stylus draws with pen, finger moves canvas)", Toast.LENGTH_SHORT).show();
                 } else {
@@ -1499,6 +1510,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 boolean nextStylusOnly = !canvasView.isStylusOnly();
                 canvasView.setStylusOnly(nextStylusOnly);
                 if (appSettings != null) appSettings.setStylusOnly(nextStylusOnly);
+                saveNotebookConfig();
                 Toast.makeText(this, nextStylusOnly
                         ? "🖐️ Palm Rejection ON (Stylus-only drawing active)"
                         : "Touch & Stylus drawing enabled", Toast.LENGTH_SHORT).show();
@@ -1522,6 +1534,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     appSettings.setAutoConvertTextEnabled(newState);
                 }
                 updateAutoBeautifyToolbarIcon(newState);
+                saveNotebookConfig();
                 String lang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
                 String langDisplay = "AUTO".equalsIgnoreCase(lang)
                         ? "Auto-Detect: Marathi, English, Hindi, Digits & Symbols"
@@ -1558,9 +1571,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         });
         toolText.setOnClickListener(v -> {
             closeToolPropertiesCard();
+            DrawingTool prevTool = canvasView.getTool();
+            if (prevTool != null) {
+                saveCurrentToolWidthAndColor(prevTool);
+            }
             canvasView.setTool(DrawingTool.TEXT);
             updateToolUi(DrawingTool.TEXT);
             if (appSettings != null) appSettings.setLastTool(DrawingTool.TEXT);
+            saveNotebookConfig();
             Toast.makeText(this, "Tap anywhere on canvas to type text", Toast.LENGTH_SHORT).show();
         });
         toolMedia.setOnClickListener(v -> {
@@ -1669,6 +1687,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             boolean next = !canvasView.isViewportLocked();
             canvasView.setViewportLocked(next);
             updateViewportLockIcon();
+            saveNotebookConfig();
             Toast.makeText(this, next ? "Viewport Locked 🔒" : "Viewport Unlocked", Toast.LENGTH_SHORT).show();
         });
         updateViewportLockIcon();
@@ -1876,6 +1895,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         boolean laserTool = canvasView.getTool() == DrawingTool.LASER;
         if (layoutPressureSensitivity != null) {
             layoutPressureSensitivity.setVisibility(laserTool ? View.GONE : View.VISIBLE);
+            if (!laserTool && canvasView != null) {
+                float pressure = canvasView.getPressureSensitivity();
+                if (seekPressureSensitivity != null) seekPressureSensitivity.setProgress(Math.round(pressure * 100f));
+                if (textPressureValue != null) textPressureValue.setText(Math.round(pressure * 100f) + "%");
+            }
         }
         if (layoutStabilization != null) layoutStabilization.setVisibility(View.VISIBLE);
         if (layoutStraightLine != null) {
@@ -1899,6 +1923,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         canvasView.setLaserFadeDurationMs(selectedDurationMs);
                         textStabilizationValue.setText(String.format(Locale.US, "%.1f s", selectedDurationMs / 1000f));
                         if (appSettings != null) appSettings.setLaserDurationMs(selectedDurationMs);
+                        saveNotebookConfig();
                     }
                     @Override public void onStartTrackingTouch(SeekBar seekBar) {}
                     @Override public void onStopTrackingTouch(SeekBar seekBar) {}
@@ -1916,6 +1941,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         canvasView.setStrokeStabilization(value);
                         textStabilizationValue.setText(progress + "%");
                         if (appSettings != null) appSettings.setStabilization(value);
+                        saveNotebookConfig();
                     }
                     @Override public void onStartTrackingTouch(SeekBar seekBar) {}
                     @Override public void onStopTrackingTouch(SeekBar seekBar) {}
@@ -1955,6 +1981,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 switchStraightLine.setChecked(false);
             }
         } else {
+            if (canvasView != null) {
+                float currentW = canvasView.getStrokeWidth();
+                if (seekStrokeThickness != null) seekStrokeThickness.setProgress(Math.round(currentW));
+                if (textThicknessValue != null) textThicknessValue.setText(String.format(Locale.US, "%.1f mm", currentW * 0.3f));
+                updateNibButtonsForWidth(currentW);
+            }
             if (btnNibFine != null) {
                 btnNibFine.setText("Fine");
                 btnNibFine.setOnClickListener(v -> {
@@ -1963,6 +1995,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if (textThicknessValue != null) textThicknessValue.setText("0.9 mm");
                     updateNibButtons(btnNibFine);
                     if (appSettings != null) appSettings.setStrokeWidth(3.0f);
+                    saveNotebookConfig();
                 });
             }
             if (btnNibMedium != null) {
@@ -1973,6 +2006,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if (textThicknessValue != null) textThicknessValue.setText("1.8 mm");
                     updateNibButtons(btnNibMedium);
                     if (appSettings != null) appSettings.setStrokeWidth(6.0f);
+                    saveNotebookConfig();
                 });
             }
             if (btnNibBold != null) {
@@ -1984,6 +2018,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if (textThicknessValue != null) textThicknessValue.setText("3.6 mm");
                     updateNibButtons(btnNibBold);
                     if (appSettings != null) appSettings.setStrokeWidth(12.0f);
+                    saveNotebookConfig();
                 });
             }
             if (switchStraightLine != null) {
@@ -1998,11 +2033,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 switchStraightLine.setOnCheckedChangeListener((btn, isChecked) -> {
                     if (canvasView.getTool() == DrawingTool.HIGHLIGHTER) {
                         canvasView.setStraightHighlighterEnabled(isChecked);
+                        saveNotebookConfig();
                         Toast.makeText(this, isChecked ? "Straight Highlighter Lock: ON (0° / 90°)" : "Straight Highlighter Lock: OFF", Toast.LENGTH_SHORT).show();
                     } else {
                         canvasView.setStraightLineAssist(isChecked);
                         if (btnRuler != null) btnRuler.setColorFilter(isChecked ? 0xFF38BDF8 : 0xFF94A3B8);
                         if (appSettings != null) appSettings.setStraightLineAssist(isChecked);
+                        saveNotebookConfig();
                     }
                 });
             }
@@ -2035,11 +2072,18 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 }
             }
         } else {
+            DrawingTool prevTool = canvasView.getTool();
+            if (prevTool != null) {
+                saveCurrentToolWidthAndColor(prevTool);
+            }
             canvasView.setTool(tool);
             updateToolUi(tool);
             if (appSettings != null) {
                 appSettings.setLastTool(tool);
             }
+            restoreToolWidthAndColor(tool);
+            saveNotebookConfig();
+
             if (isQuickDoubleClick) {
                 // Double-clicked to switch and open settings directly
                 openToolPropertiesCard(title);
@@ -2155,6 +2199,203 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         super.onBackPressed();
     }
 
+    private void saveNotebookConfig() {
+        if (notebookId <= 0 || canvasView == null) return;
+        try {
+            NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, notebookId);
+            if (config == null) {
+                config = new NotebookConfigManager.NotebookConfig();
+            }
+            DrawingTool curTool = canvasView.getTool();
+            config.tool = curTool;
+            float strokeW = (curTool == DrawingTool.LASER) ? canvasView.getLaserStrokeWidth() : canvasView.getStrokeWidth();
+            config.strokeWidth = strokeW;
+            if (curTool != null) {
+                config.setToolWidth(curTool, strokeW);
+                config.setToolColor(curTool, canvasView.getColor());
+            }
+            config.inkColor = canvasView.getColor();
+            config.pressureSensitivity = canvasView.getPressureSensitivity();
+            config.stabilization = canvasView.getStrokeStabilization();
+            config.straightLineAssist = canvasView.isStraightLineAssist();
+            config.straightHighlighterLock = canvasView.isStraightHighlighterEnabled();
+            config.eraseOnlyHighlighter = canvasView.isEraseOnlyHighlighter();
+            config.stylusOnly = canvasView.isStylusOnly();
+            config.fingerMoveCanvas = canvasView.isFingerMoveCanvasEnabled();
+            config.pdfAmoledDarkMode = canvasView.isPdfAmoledDarkMode();
+            config.continuousVerticalScroll = canvasView.isContinuousVerticalScroll();
+            config.viewportLocked = canvasView.isViewportLocked();
+            config.laserDurationMs = canvasView.getLaserFadeDurationMs();
+            config.autoBeautifyEnabled = canvasView.isAutoBeautifyEnabled();
+
+            NotebookConfigManager.saveConfig(this, notebookId, config);
+        } catch (Throwable t) {
+            Log.w("NoteEditorActivity", "Failed to save notebook config", t);
+        }
+    }
+
+    private void saveCurrentToolWidthAndColor(DrawingTool tool) {
+        if (notebookId <= 0 || canvasView == null || tool == null) return;
+        try {
+            NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, notebookId);
+            if (config == null) {
+                config = new NotebookConfigManager.NotebookConfig();
+            }
+            float width = (tool == DrawingTool.LASER) ? canvasView.getLaserStrokeWidth() : canvasView.getStrokeWidth();
+            config.setToolWidth(tool, width);
+            config.setToolColor(tool, canvasView.getColor());
+            NotebookConfigManager.saveConfig(this, notebookId, config);
+        } catch (Throwable ignored) {}
+    }
+
+    private void restoreToolWidthAndColor(DrawingTool tool) {
+        if (notebookId <= 0 || canvasView == null || tool == null) return;
+        NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, notebookId);
+        if (config != null) {
+            if (config.toolWidths.containsKey(tool)) {
+                float savedWidth = config.getToolWidth(tool);
+                if (savedWidth > 0f) {
+                    if (tool == DrawingTool.LASER) {
+                        canvasView.setLaserStrokeWidth(savedWidth);
+                    } else {
+                        canvasView.setStrokeWidth(savedWidth);
+                    }
+                    if (seekStrokeThickness != null) seekStrokeThickness.setProgress(Math.round(savedWidth));
+                    if (textThicknessValue != null) textThicknessValue.setText(String.format(Locale.US, "%.1f mm", savedWidth * 0.3f));
+                    updateNibButtonsForWidth(savedWidth);
+                }
+            }
+            if (config.toolColors.containsKey(tool)) {
+                int savedColor = config.getToolColor(tool);
+                canvasView.setColor(savedColor);
+                updateColorPreviewInternal(savedColor);
+            }
+        }
+    }
+
+    private void updateNibButtonsForWidth(float width) {
+        if (btnNibFine == null || btnNibMedium == null || btnNibBold == null) return;
+        if (Math.abs(width - 3.0f) < 0.5f) {
+            updateNibButtons(btnNibFine);
+        } else if (Math.abs(width - 6.0f) < 0.5f) {
+            updateNibButtons(btnNibMedium);
+        } else if (Math.abs(width - 12.0f) < 0.5f) {
+            updateNibButtons(btnNibBold);
+        } else {
+            btnNibFine.setBackgroundResource(R.drawable.bg_floating_pill);
+            btnNibFine.setTextColor(0xFF94A3B8);
+            btnNibMedium.setBackgroundResource(R.drawable.bg_floating_pill);
+            btnNibMedium.setTextColor(0xFF94A3B8);
+            btnNibBold.setBackgroundResource(R.drawable.bg_floating_pill);
+            btnNibBold.setTextColor(0xFF94A3B8);
+        }
+    }
+
+    private void restoreNotebookConfig(long targetNotebookId) {
+        if (targetNotebookId <= 0 || canvasView == null) return;
+        NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, targetNotebookId);
+        if (config == null) {
+            restoreUserSettings();
+            saveNotebookConfig();
+            return;
+        }
+
+        DrawingTool savedTool = config.tool;
+        if (savedTool == null || savedTool == DrawingTool.HAND) {
+            savedTool = (appSettings != null) ? appSettings.getLastTool() : DrawingTool.FOUNTAIN;
+        }
+        if (savedTool == DrawingTool.HAND) savedTool = DrawingTool.FOUNTAIN;
+        canvasView.setTool(savedTool);
+        updateToolUi(savedTool);
+
+        float savedWidth = config.getToolWidth(savedTool);
+        if (savedWidth <= 0f) {
+            savedWidth = (appSettings != null) ? appSettings.getStrokeWidth() : 3.0f;
+        }
+        if (savedTool == DrawingTool.LASER) {
+            canvasView.setLaserStrokeWidth(savedWidth);
+        } else {
+            canvasView.setStrokeWidth(savedWidth);
+        }
+        if (seekStrokeThickness != null) seekStrokeThickness.setProgress(Math.round(savedWidth));
+        if (textThicknessValue != null) textThicknessValue.setText(String.format(Locale.US, "%.1f mm", savedWidth * 0.3f));
+        updateNibButtonsForWidth(savedWidth);
+
+        int savedColor = config.getToolColor(savedTool);
+        if (savedColor == Integer.MIN_VALUE) {
+            savedColor = (appSettings != null) ? appSettings.getInkColor() : 0xFFFFFFFF;
+        }
+        canvasView.setColor(savedColor);
+        updateColorPreviewInternal(savedColor);
+
+        float savedPressure = (config.pressureSensitivity >= 0f) ? config.pressureSensitivity : (appSettings != null ? appSettings.getPressureSensitivity() : 0.5f);
+        canvasView.setPressureSensitivity(savedPressure);
+        if (seekPressureSensitivity != null) seekPressureSensitivity.setProgress(Math.round(savedPressure * 100f));
+        if (textPressureValue != null) textPressureValue.setText(Math.round(savedPressure * 100f) + "%");
+
+        long savedLaserDur = (config.laserDurationMs != null) ? config.laserDurationMs : (appSettings != null ? appSettings.getLaserDurationMs() : 1500L);
+        canvasView.setLaserFadeDurationMs(savedLaserDur);
+
+        float savedStab = (config.stabilization >= 0f) ? config.stabilization : (appSettings != null ? appSettings.getStabilization() : 0.3f);
+        canvasView.setStrokeStabilization(savedStab);
+        if (seekStabilization != null) seekStabilization.setProgress(Math.round(savedStab * 100f));
+        if (textStabilizationValue != null) textStabilizationValue.setText(Math.round(savedStab * 100f) + "%");
+
+        boolean savedStraightLine = (config.straightLineAssist != null) ? config.straightLineAssist : (appSettings != null && appSettings.isStraightLineAssist());
+        canvasView.setStraightLineAssist(savedStraightLine);
+        if (switchStraightLine != null && savedTool != DrawingTool.HIGHLIGHTER) switchStraightLine.setChecked(savedStraightLine);
+        if (btnRuler != null) btnRuler.setColorFilter(savedStraightLine ? 0xFF38BDF8 : 0xFF94A3B8);
+
+        if (config.straightHighlighterLock != null) {
+            canvasView.setStraightHighlighterEnabled(config.straightHighlighterLock);
+            if (switchStraightLine != null && savedTool == DrawingTool.HIGHLIGHTER) {
+                switchStraightLine.setChecked(config.straightHighlighterLock);
+            }
+        }
+
+        if (config.eraseOnlyHighlighter != null) {
+            canvasView.setEraseOnlyHighlighter(config.eraseOnlyHighlighter);
+            if (toolEraser != null) {
+                toolEraser.setColorFilter(config.eraseOnlyHighlighter ? 0xFFF59E0B : 0xFF38BDF8);
+            }
+        }
+
+        boolean savedStylusOnly = (config.stylusOnly != null) ? config.stylusOnly : (appSettings != null && appSettings.isStylusOnly());
+        canvasView.setStylusOnly(savedStylusOnly);
+
+        boolean savedFingerMove = (config.fingerMoveCanvas != null) ? config.fingerMoveCanvas : (appSettings != null && appSettings.isFingerMoveCanvas());
+        canvasView.setFingerMoveCanvasEnabled(savedFingerMove);
+        updateHandToolUi(savedFingerMove);
+
+        boolean amoledDark = (config.pdfAmoledDarkMode != null) ? config.pdfAmoledDarkMode : (appSettings != null && appSettings.isPdfAmoledDarkMode());
+        canvasView.setPdfAmoledDarkMode(amoledDark);
+        if (btnPdfAmoledToggle != null) {
+            btnPdfAmoledToggle.setColorFilter(amoledDark ? 0xFF38BDF8 : 0xFF94A3B8);
+        }
+
+        boolean continuous = (config.continuousVerticalScroll != null) ? config.continuousVerticalScroll : (appSettings != null && appSettings.isContinuousVerticalScroll());
+        canvasView.setContinuousVerticalScroll(continuous);
+
+        if (config.viewportLocked != null) {
+            canvasView.setViewportLocked(config.viewportLocked);
+            updateViewportLockIcon();
+        }
+
+        boolean savedBeautify = (config.autoBeautifyEnabled != null) ? config.autoBeautifyEnabled : (appSettings != null && appSettings.isAutoBeautifyEnabled());
+        String savedLang = appSettings != null ? appSettings.getBeautifyLanguage() : "MARATHI";
+        String savedFont = appSettings != null ? appSettings.getBeautifyFont() : "";
+        boolean savedShirorekha = appSettings != null && appSettings.isShirorekhaSnapEnabled();
+        float savedSmoothing = appSettings != null ? appSettings.getBeautifySmoothing() : 0.5f;
+
+        canvasView.setAutoBeautifyEnabled(savedBeautify);
+        canvasView.setBeautifyLanguage(savedLang);
+        canvasView.setBeautifyFontKey(savedFont);
+        canvasView.setShirorekhaSnapEnabled(savedShirorekha);
+        canvasView.setBeautifySmoothing(savedSmoothing);
+        canvasView.setAutoConvertTextEnabled(savedBeautify && (appSettings != null && appSettings.isAutoConvertTextEnabled()));
+        updateAutoBeautifyToolbarIcon(savedBeautify);
+    }
+
     private void restoreUserSettings() {
         if (appSettings == null) return;
 
@@ -2169,11 +2410,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         canvasView.setStrokeWidth(savedWidth);
         if (seekStrokeThickness != null) seekStrokeThickness.setProgress(Math.round(savedWidth));
         if (textThicknessValue != null) textThicknessValue.setText(String.format(Locale.US, "%.1f mm", savedWidth * 0.3f));
+        updateNibButtonsForWidth(savedWidth);
 
         // Restore Ink Color
         int savedColor = appSettings.getInkColor();
         canvasView.setColor(savedColor);
-        updateColorPreview(savedColor);
+        updateColorPreviewInternal(savedColor);
 
         // Restore Pressure Dynamics
         float savedPressure = appSettings.getPressureSensitivity();
@@ -2238,6 +2480,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             textThicknessValue.setText("0.9 mm");
             updateNibButtons(btnNibFine);
             if (appSettings != null) appSettings.setStrokeWidth(3.0f);
+            saveNotebookConfig();
         });
         btnNibMedium.setOnClickListener(v -> {
             canvasView.setStrokeWidth(6.0f);
@@ -2245,6 +2488,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             textThicknessValue.setText("1.8 mm");
             updateNibButtons(btnNibMedium);
             if (appSettings != null) appSettings.setStrokeWidth(6.0f);
+            saveNotebookConfig();
         });
         btnNibBold.setOnClickListener(v -> {
             canvasView.setStrokeWidth(12.0f);
@@ -2252,6 +2496,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             textThicknessValue.setText("3.6 mm");
             updateNibButtons(btnNibBold);
             if (appSettings != null) appSettings.setStrokeWidth(12.0f);
+            saveNotebookConfig();
         });
 
         seekStrokeThickness.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
@@ -2266,6 +2511,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         if (appSettings != null) appSettings.setStrokeWidth(width);
                     }
                     textThicknessValue.setText(String.format(Locale.US, "%.1f mm", width * 0.3f));
+                    updateNibButtonsForWidth(width);
+                    saveNotebookConfig();
                 }
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
@@ -2280,6 +2527,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     canvasView.setPressureSensitivity(val);
                     textPressureValue.setText(progress + "%");
                     if (appSettings != null) appSettings.setPressureSensitivity(val);
+                    saveNotebookConfig();
                 }
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
@@ -2294,6 +2542,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     canvasView.setStrokeStabilization(val);
                     textStabilizationValue.setText(progress + "%");
                     if (appSettings != null) appSettings.setStabilization(val);
+                    saveNotebookConfig();
                 }
             }
             @Override public void onStartTrackingTouch(SeekBar seekBar) {}
@@ -2305,6 +2554,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 canvasView.setStraightLineAssist(isChecked);
                 if (btnRuler != null) btnRuler.setColorFilter(isChecked ? 0xFF38BDF8 : 0xFF94A3B8);
                 if (appSettings != null) appSettings.setStraightLineAssist(isChecked);
+                saveNotebookConfig();
             });
         }
 
@@ -2510,12 +2760,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         !onlyHighlighter, () -> {
                             canvasView.setEraseOnlyHighlighter(false);
                             toolEraser.setColorFilter(0xFF38BDF8);
+                            saveNotebookConfig();
                         })
                 .addOption(2, "🖍️", "Highlighter Eraser",
                         "Highlighter only • Preserves your pen ink and text",
                         onlyHighlighter, () -> {
                             canvasView.setEraseOnlyHighlighter(true);
                             toolEraser.setColorFilter(0xFFF59E0B);
+                            saveNotebookConfig();
                         })
                 .addDestructiveOption(3, "🗑️", "Clear Entire Page",
                         "Remove all ink drawings and handwriting on this page",
@@ -2636,6 +2888,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void updateColorPreview(int color) {
+        updateColorPreviewInternal(color);
+        saveNotebookConfig();
+    }
+
+    private void updateColorPreviewInternal(int color) {
         GradientDrawable gd = new GradientDrawable();
         gd.setShape(GradientDrawable.OVAL);
         gd.setColor(color);
@@ -3692,9 +3949,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             final int idx = i;
             boolean isCurType = (canvasView.getTool() == DrawingTool.SHAPE && canvasView.getShapeType() == types[i]);
             builder.addOption(i, symbols[i], shapes[i], "Draw precision " + shapes[i].toLowerCase(Locale.US), isCurType, () -> {
+                DrawingTool prevTool = canvasView.getTool();
+                if (prevTool != null) {
+                    saveCurrentToolWidthAndColor(prevTool);
+                }
                 canvasView.setShapeType(types[idx]);
                 canvasView.setTool(DrawingTool.SHAPE);
                 updateToolUi(DrawingTool.SHAPE);
+                saveNotebookConfig();
                 Toast.makeText(this, "Draw " + shapes[idx] + " (" + fillStyleName + ")", Toast.LENGTH_SHORT).show();
             });
         }
@@ -3742,6 +4004,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     canvasView.setStraightLineAssist(false);
                     if (switchStraightLine != null) switchStraightLine.setChecked(false);
                     if (btnRuler != null) btnRuler.setColorFilter(0xFF94A3B8);
+                    saveNotebookConfig();
                     Toast.makeText(this, "Ruler Guide Disabled", Toast.LENGTH_SHORT).show();
                 })
                 .show();
@@ -3751,6 +4014,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         canvasView.setStraightLineAssist(true);
         if (switchStraightLine != null) switchStraightLine.setChecked(true);
         if (btnRuler != null) btnRuler.setColorFilter(0xFF38BDF8);
+        saveNotebookConfig();
         Toast.makeText(this, "Ruler Angle Snap: " + angleLabel, Toast.LENGTH_SHORT).show();
     }
 
@@ -3944,13 +4208,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         com.google.android.material.button.MaterialButton btnOverviewAddPage = dialogView.findViewById(R.id.btnOverviewAddPage);
         rv.setLayoutManager(new GridLayoutManager(this, 3));
 
-        boolean isContinuous = appSettings != null && appSettings.isContinuousVerticalScroll();
+        boolean isContinuous = canvasView != null && canvasView.isContinuousVerticalScroll();
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setView(dialogView)
                 .setTitle("Pages (" + pages.size() + ")")
                 .setPositiveButton(isContinuous ? "Mode: ↕ Vertical Scroll" : "Mode: ↔ No Scroll (Page Turn)", (d, w) -> {
-                    boolean next = !appSettings.isContinuousVerticalScroll();
-                    appSettings.setContinuousVerticalScroll(next);
+                    boolean next = !isContinuous;
+                    if (appSettings != null) appSettings.setContinuousVerticalScroll(next);
                     canvasView.setContinuousVerticalScroll(next);
                     if (next && pages.size() > 1) {
                         canvasView.setPages(pages, currentPageIndex);
@@ -3958,6 +4222,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         canvasView.setPage(currentPage);
                     }
                     updatePageNavUi();
+                    saveNotebookConfig();
                     Toast.makeText(this, next ? "Smooth Vertical Scroll enabled" : "No Scroll: Change Pages Only enabled", Toast.LENGTH_SHORT).show();
                     showPageOverviewDialog();
                 })
@@ -4623,11 +4888,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void togglePdfAmoledDarkMode() {
-        if (appSettings == null || canvasView == null) return;
-        boolean next = !appSettings.isPdfAmoledDarkMode();
-        appSettings.setPdfAmoledDarkMode(next);
+        if (canvasView == null) return;
+        boolean next = !canvasView.isPdfAmoledDarkMode();
+        if (appSettings != null) {
+            appSettings.setPdfAmoledDarkMode(next);
+        }
         canvasView.setPdfAmoledDarkMode(next);
         updatePageNavUi();
+        saveNotebookConfig();
         if (btnPdfAmoledToggle != null) {
             btnPdfAmoledToggle.animate().scaleX(1.35f).scaleY(1.35f).setDuration(120)
                     .withEndAction(() -> btnPdfAmoledToggle.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start())
@@ -4946,6 +5214,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void saveNotebookViewState() {
         if (currentNotebook == null || notebookId <= 0) return;
+        saveNotebookConfig();
         final int pageIdx = currentPageIndex;
         final float scrollY = canvasView != null ? canvasView.getViewportOffsetY() : 0f;
         final float zoom = canvasView != null ? canvasView.getZoomPercent() : 100f;
@@ -4968,13 +5237,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void showSwipeGestureOptionsDialog() {
         if (appSettings == null) return;
-        boolean isContinuous = appSettings.isContinuousVerticalScroll();
+        boolean isContinuous = canvasView != null ? canvasView.isContinuousVerticalScroll() : appSettings.isContinuousVerticalScroll();
         boolean isEnabled = appSettings.isSwipePageEnabled();
         boolean isTwoFinger = appSettings.isSwipeTwoFingerEnabled();
         boolean isSingleFinger = appSettings.isSwipeSingleFingerEnabled();
         boolean isEdge = appSettings.isSwipeEdgeEnabled();
         String sensitivity = appSettings.getSwipeSensitivity();
-        boolean isAmoled = appSettings.isPdfAmoledDarkMode();
+        boolean isAmoled = canvasView != null ? canvasView.isPdfAmoledDarkMode() : appSettings.isPdfAmoledDarkMode();
 
         new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Page Navigation & Swipe Gestures")
@@ -4984,8 +5253,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         isContinuous ? "Smooth Continuous Vertical Scroll (Tap for No Scroll / Change Pages Only)"
                                      : "No Scroll / Change Pages Only (Tap for Smooth Vertical Scroll)",
                         isContinuous, () -> {
-                            boolean next = !appSettings.isContinuousVerticalScroll();
-                            appSettings.setContinuousVerticalScroll(next);
+                            boolean next = !isContinuous;
+                            if (appSettings != null) appSettings.setContinuousVerticalScroll(next);
                             canvasView.setContinuousVerticalScroll(next);
                             if (next && pages.size() > 1) {
                                 canvasView.setPages(pages, currentPageIndex);
@@ -4993,6 +5262,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                                 canvasView.setPage(currentPage);
                             }
                             updatePageNavUi();
+                            saveNotebookConfig();
                             Toast.makeText(this, next ? "Smooth Vertical Scroll enabled" : "No Scroll: Change Pages Only enabled", Toast.LENGTH_SHORT).show();
                             showSwipeGestureOptionsDialog();
                         })
@@ -6269,6 +6539,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
         saveCurrentPage();
         saveNotebookViewState();
+        saveNotebookConfig();
     }
 
     @Override
@@ -6281,6 +6552,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     @Override
     protected void onDestroy() {
         saveNotebookViewState();
+        saveNotebookConfig();
         super.onDestroy();
         if (isFinishing()) {
             synchronized (openNotebookIds) {

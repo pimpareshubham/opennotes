@@ -21,6 +21,9 @@ import java.util.List;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
+import org.opennotes.app.util.NotebookConfigManager;
+import org.opennotes.app.util.NotebookViewStateManager;
+
 public class NotesDbHelper extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "opennotes.db";
     private static final int DATABASE_VERSION = 5;
@@ -437,6 +440,8 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         }
         db.delete(TABLE_PAGES, COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
         db.delete(TABLE_NOTEBOOKS, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+        NotebookConfigManager.clearConfig(appContext, notebookId);
+        NotebookViewStateManager.clearState(appContext, notebookId);
         invalidateCachedNotebooksAsync();
     }
 
