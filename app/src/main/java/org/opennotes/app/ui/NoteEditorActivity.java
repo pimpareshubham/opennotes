@@ -888,14 +888,17 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             final float targetPanX = savedPanX;
             final float targetPanY = savedPanY;
             final float targetScrollY = savedScrollY;
-            final int restoredPageNum = currentPageIndex + 1;
-            final int totalPagesCount = resultPages.size();
 
-            canvasView.post(() -> {
-                if (isFinishing() || isDestroyed()) return;
-                // Instantly place viewport into the restored position for immediate zero-lag readiness
+            if (canvasView != null && canvasView.getBackgroundImage() == null) {
+                // For normal notes: restore immediately before frame 1 to eliminate the sudden jerk/jump
                 canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
-            });
+            } else if (canvasView != null) {
+                // For imported PDFs: keep post() to allow fitPageToAvailableSpace to measure and fit cleanly
+                canvasView.post(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
+                });
+            }
         }
         renderDocumentTabs();
         canvasView.setEnabled(true);
@@ -6411,7 +6414,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         float curH = canvasView.getContentHeight();
                         p.setCanvasHeight(curH);
                     }
-                    if (p.isModified || p.id == 0) {
+                    if ((p.isModified || p.id == 0) && p.isContentLoaded) {
                         p.isModified = false;
                         final Page snapshot = p.createSnapshot();
                         saveExecutor.execute(() -> dbHelper.savePage(snapshot));
@@ -6423,7 +6426,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 float curH = canvasView.getContentHeight();
                 currentPage.setCanvasHeight(curH);
             }
-            if (currentPage.isModified || currentPage.id == 0) {
+            if ((currentPage.isModified || currentPage.id == 0) && currentPage.isContentLoaded) {
                 currentPage.isModified = false;
                 final Page snapshot = currentPage.createSnapshot();
                 saveExecutor.execute(() -> dbHelper.savePage(snapshot));

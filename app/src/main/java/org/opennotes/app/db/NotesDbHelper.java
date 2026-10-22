@@ -10,6 +10,13 @@ import android.util.Log;
 import org.opennotes.app.model.Notebook;
 import org.opennotes.app.model.Page;
 import org.opennotes.app.model.PaperTemplate;
+import org.opennotes.app.model.ImageItem;
+import org.opennotes.app.util.PdfPageRenderer;
+
+import android.graphics.pdf.PdfRenderer;
+import android.os.ParcelFileDescriptor;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -817,39 +824,51 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         return id;
     }
 
-    public synchronized void updatePage(Page page) {
+    public void updatePage(Page page) {
         savePage(page);
     }
 
-    public synchronized void savePage(Page page) {
-        SQLiteDatabase db = getWritableDatabase();
-        ContentValues cv = new ContentValues();
-        cv.put(COL_PAGE_TEMPLATE, page.template.name());
-        cv.put(COL_PAGE_BG_COLOR, page.backgroundColor);
-        cv.put(COL_PAGE_IS_INFINITE, page.isInfinite ? 1 : 0);
-        cv.put(COL_PAGE_CANVAS_HEIGHT, page.canvasHeight);
-        long pageKey = page.id != 0 ? page.id : (page.notebookId * 10000L + page.pageIndex);
-        cv.put(COL_PAGE_STROKES, writeLargeDataToFile("strokes", pageKey, page.strokesToJson()));
-        cv.put(COL_PAGE_SHAPES, page.shapesToJson());
-        cv.put(COL_PAGE_TEXTS, page.textsToJson());
-        cv.put(COL_PAGE_IMAGES, writeLargeDataToFile("images", pageKey, page.imagesToJson()));
-        cv.put(COL_PAGE_UPDATED_AT, System.currentTimeMillis());
-
-        int rows = db.update(TABLE_PAGES, cv,
-                COL_PAGE_NB_ID + "=? AND " + COL_PAGE_INDEX + "=?",
-                new String[]{String.valueOf(page.notebookId), String.valueOf(page.pageIndex)});
-
-        if (rows == 0) {
-            insertPage(page);
+    public void savePage(Page page) {
+        if (page == null) return;
+        if (!page.isContentLoaded) {
+            // NEVER save an unhydrated shell page to the database!
+            return;
         }
+        long pageKey = page.id != 0 ? page.id : (page.notebookId * 10000L + page.pageIndex);
+        String strokesData = writeLargeDataToFile("strokes", pageKey, page.strokesToJson());
+        String shapesData = page.shapesToJson();
+        String textsData = page.textsToJson();
+        String imagesData = writeLargeDataToFile("images", pageKey, page.imagesToJson());
 
-        // Also touch notebook updatedAt
-        ContentValues nbCv = new ContentValues();
-        nbCv.put(COL_NB_UPDATED_AT, System.currentTimeMillis());
-        db.update(TABLE_NOTEBOOKS, nbCv, COL_NB_ID + "=?", new String[]{String.valueOf(page.notebookId)});
-        Notebook cachedNb = notebookCache.get(page.notebookId);
-        if (cachedNb != null) {
-            cachedNb.updatedAt = System.currentTimeMillis();
+        synchronized (this) {
+            SQLiteDatabase db = getWritableDatabase();
+            ContentValues cv = new ContentValues();
+            cv.put(COL_PAGE_TEMPLATE, page.template.name());
+            cv.put(COL_PAGE_BG_COLOR, page.backgroundColor);
+            cv.put(COL_PAGE_IS_INFINITE, page.isInfinite ? 1 : 0);
+            cv.put(COL_PAGE_CANVAS_HEIGHT, page.canvasHeight);
+            cv.put(COL_PAGE_STROKES, strokesData);
+            cv.put(COL_PAGE_SHAPES, shapesData);
+            cv.put(COL_PAGE_TEXTS, textsData);
+            cv.put(COL_PAGE_IMAGES, imagesData);
+            cv.put(COL_PAGE_UPDATED_AT, System.currentTimeMillis());
+
+            int rows = db.update(TABLE_PAGES, cv,
+                    COL_PAGE_NB_ID + "=? AND " + COL_PAGE_INDEX + "=?",
+                    new String[]{String.valueOf(page.notebookId), String.valueOf(page.pageIndex)});
+
+            if (rows == 0) {
+                insertPage(page);
+            }
+
+            // Also touch notebook updatedAt
+            ContentValues nbCv = new ContentValues();
+            nbCv.put(COL_NB_UPDATED_AT, System.currentTimeMillis());
+            db.update(TABLE_NOTEBOOKS, nbCv, COL_NB_ID + "=?", new String[]{String.valueOf(page.notebookId)});
+            Notebook cachedNb = notebookCache.get(page.notebookId);
+            if (cachedNb != null) {
+                cachedNb.updatedAt = System.currentTimeMillis();
+            }
         }
     }
 
@@ -880,9 +899,110 @@ public class NotesDbHelper extends SQLiteOpenHelper {
      * 2. Immediately loads strokes/shapes/images for the active page and page 0.
      * 3. Retains all pages in memory cache so subsequent opens are instantaneous (0ms).
      */
+    public void healPdfPagesIfNeeded(long notebookId, SQLiteDatabase db) {
+        if (db == null || notebookId <= 0) return;
+        Cursor c = null;
+        String pdfRefSample = null;
+        try {
+            c = db.rawQuery("SELECT " + COL_PAGE_IMAGES + " FROM " + TABLE_PAGES
+                    + " WHERE " + COL_PAGE_NB_ID + "=? AND " + COL_PAGE_IMAGES + " LIKE '%#page=%' LIMIT 1",
+                    new String[]{String.valueOf(notebookId)});
+            if (c != null && c.moveToFirst()) {
+                pdfRefSample = c.getString(0);
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (c != null) c.close();
+        }
+
+        if (pdfRefSample == null) return;
+        String resolvedSample = readLargeDataFromFile(pdfRefSample);
+        String pdfFilePath = null;
+        try {
+            int pageSepIdx = resolvedSample.indexOf(PdfPageRenderer.PAGE_SEPARATOR);
+            if (pageSepIdx != -1) {
+                int pathStart = resolvedSample.lastIndexOf("\"", pageSepIdx);
+                if (pathStart == -1) pathStart = resolvedSample.lastIndexOf(":", pageSepIdx);
+                pdfFilePath = resolvedSample.substring(pathStart + 1, pageSepIdx);
+            }
+        } catch (Throwable ignored) {}
+
+        if (pdfFilePath == null || pdfFilePath.isEmpty()) return;
+        File pdfFile = new File(pdfFilePath);
+        if (!pdfFile.exists()) return;
+
+        Cursor pagesCursor = null;
+        List<Long[]> brokenPages = new ArrayList<>();
+        try {
+            pagesCursor = db.rawQuery("SELECT " + COL_PAGE_ID + ", " + COL_PAGE_INDEX + ", " + COL_PAGE_IMAGES
+                    + " FROM " + TABLE_PAGES + " WHERE " + COL_PAGE_NB_ID + "=?",
+                    new String[]{String.valueOf(notebookId)});
+            if (pagesCursor != null) {
+                while (pagesCursor.moveToNext()) {
+                    long pId = pagesCursor.getLong(0);
+                    long pIdx = pagesCursor.getLong(1);
+                    String imgData = pagesCursor.getString(2);
+                    boolean isBroken = imgData == null || imgData.isEmpty() || "[]".equals(imgData);
+                    if (!isBroken) {
+                        String decompressed = readLargeDataFromFile(imgData);
+                        if (decompressed == null || decompressed.trim().isEmpty() || "[]".equals(decompressed.trim())) {
+                            isBroken = true;
+                        } else if (!decompressed.contains(PdfPageRenderer.PAGE_SEPARATOR)) {
+                            isBroken = true;
+                        }
+                    }
+                    if (isBroken) {
+                        brokenPages.add(new Long[]{pId, pIdx});
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (pagesCursor != null) pagesCursor.close();
+        }
+
+        if (brokenPages.isEmpty()) return;
+
+        try (ParcelFileDescriptor pfd = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY);
+             PdfRenderer renderer = new PdfRenderer(pfd)) {
+            int totalPdfPages = renderer.getPageCount();
+            float standardCanvasWidth = 1440f;
+            for (Long[] item : brokenPages) {
+                long pageId = item[0];
+                int pageIdx = item[1].intValue();
+                if (pageIdx >= 0 && pageIdx < totalPdfPages) {
+                    PdfRenderer.Page pdfP = renderer.openPage(pageIdx);
+                    int origW = pdfP.getWidth();
+                    int origH = pdfP.getHeight();
+                    pdfP.close();
+                    if (origW <= 0) origW = 595;
+                    if (origH <= 0) origH = 842;
+                    float canvasHeight = standardCanvasWidth * ((float) origH / (float) origW);
+
+                    String pageRef = PdfPageRenderer.buildReference(pdfFile.getAbsolutePath(), pageIdx);
+                    ImageItem bgImage = new ImageItem(pageRef, 0f, 0f, standardCanvasWidth, canvasHeight, null, true);
+
+                    JSONArray arr = new JSONArray();
+                    arr.put(bgImage.toJson());
+                    String json = arr.toString();
+                    String stored = writeLargeDataToFile("images", pageId, json);
+
+                    ContentValues cv = new ContentValues();
+                    cv.put(COL_PAGE_IMAGES, stored);
+                    cv.put(COL_PAGE_CANVAS_HEIGHT, canvasHeight);
+                    db.update(TABLE_PAGES, cv, COL_PAGE_ID + "=?", new String[]{String.valueOf(pageId)});
+                }
+            }
+            Log.i("NotesDbHelper", "Successfully healed " + brokenPages.size() + " PDF pages for notebook " + notebookId);
+        } catch (Throwable t) {
+            Log.w("NotesDbHelper", "Error healing PDF pages: " + t.getMessage(), t);
+        }
+    }
+
     public synchronized List<Page> getPagesForNotebookFast(long notebookId, int initialActivePageIndex) {
-        List<Page> list = new ArrayList<>();
         SQLiteDatabase db = getReadableDatabase();
+        healPdfPagesIfNeeded(notebookId, db);
+        List<Page> list = new ArrayList<>();
         Cursor c = null;
         try {
             c = db.query(TABLE_PAGES, SAFE_PAGE_SHELL_COLUMNS,
@@ -1013,6 +1133,24 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 rawImages = readColumnChunked(db, page.id, COL_PAGE_IMAGES);
             }
             page.imagesFromJson(readLargeDataFromFile(rawImages));
+        }
+
+        if (page.images.isEmpty() && db != null) {
+            healPdfPagesIfNeeded(page.notebookId, db);
+            Cursor rc = null;
+            try {
+                rc = db.query(TABLE_PAGES, new String[]{COL_PAGE_IMAGES, COL_PAGE_CANVAS_HEIGHT},
+                        COL_PAGE_ID + "=?", new String[]{String.valueOf(page.id)}, null, null, null);
+                if (rc != null && rc.moveToFirst()) {
+                    String healedImages = rc.getString(0);
+                    page.imagesFromJson(readLargeDataFromFile(healedImages));
+                    float h = rc.getFloat(1);
+                    if (h > 0) page.canvasHeight = h;
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                if (rc != null) rc.close();
+            }
         }
     }
 
