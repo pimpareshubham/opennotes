@@ -187,12 +187,10 @@ public class PdfExporter {
                     if (Math.abs(t.rotationAngle) > 0.5f) {
                         canvas.save();
                         canvas.rotate(t.rotationAngle, t.x, t.y);
-                        TextSpacingCompat.drawText(canvas, t.text, t.x, t.y, tp,
-                                t.wordSpacingEm * t.fontSize);
+                        TextSpacingCompat.drawTextItem(canvas, t, tp);
                         canvas.restore();
                     } else {
-                        TextSpacingCompat.drawText(canvas, t.text, t.x, t.y, tp,
-                                t.wordSpacingEm * t.fontSize);
+                        TextSpacingCompat.drawTextItem(canvas, t, tp);
                     }
                 }
             }

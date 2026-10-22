@@ -50,6 +50,36 @@ public final class TextSpacingCompat {
         }
     }
 
+    public static void drawTextItem(Canvas canvas, org.opennotes.app.model.TextItem item, Paint paint) {
+        if (canvas == null || item == null || item.text == null || item.text.isEmpty() || paint == null) return;
+        boolean hasNewlines = item.text.indexOf('\n') >= 0;
+        boolean hasBoxWidth = item.boxWidth > 0f;
+        if (!hasNewlines && !hasBoxWidth) {
+            drawText(canvas, item.text, item.x, item.y, paint, item.wordSpacingEm * item.fontSize);
+            return;
+        }
+
+        android.text.TextPaint tp = (paint instanceof android.text.TextPaint)
+                ? (android.text.TextPaint) paint : new android.text.TextPaint(paint);
+        int targetW = hasBoxWidth ? Math.max(20, (int) Math.ceil(item.boxWidth)) : 20000;
+        android.text.StaticLayout layout;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            layout = android.text.StaticLayout.Builder.obtain(item.text, 0, item.text.length(), tp, targetW)
+                    .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                    .setLineSpacing(0f, 1.2f)
+                    .setIncludePad(false)
+                    .build();
+        } else {
+            layout = new android.text.StaticLayout(item.text, tp, targetW,
+                    android.text.Layout.Alignment.ALIGN_NORMAL, 1.2f, 0f, false);
+        }
+        int baseline0 = layout.getLineCount() > 0 ? layout.getLineBaseline(0) : Math.round(item.fontSize);
+        canvas.save();
+        canvas.translate(item.x, item.y - baseline0);
+        layout.draw(canvas);
+        canvas.restore();
+    }
+
     private static int countSpaces(String text) {
         int count = 0;
         for (int i = 0; i < text.length(); i++) if (text.charAt(i) == ' ') count++;

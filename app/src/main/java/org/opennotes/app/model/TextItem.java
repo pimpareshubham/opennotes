@@ -19,6 +19,9 @@ public class TextItem {
     public String spacingGroupId;
     public int spacingOrder;
 
+    /** Constrained box width in pixels for multi-line word wrapping. If <= 0, text is measured without forced wrapping. */
+    public float boxWidth = 0f;
+
     public TextItem(String text, float x, float y, int color, float fontSize) {
         this(text, x, y, color, fontSize, "KALAM", 0f);
     }
@@ -34,6 +37,12 @@ public class TextItem {
     public TextItem(String text, float x, float y, int color, float fontSize, String fontKey,
                     float rotationAngle, float letterSpacingEm, float wordSpacingEm,
                     String spacingGroupId, int spacingOrder) {
+        this(text, x, y, color, fontSize, fontKey, rotationAngle, letterSpacingEm, wordSpacingEm, spacingGroupId, spacingOrder, 0f);
+    }
+
+    public TextItem(String text, float x, float y, int color, float fontSize, String fontKey,
+                    float rotationAngle, float letterSpacingEm, float wordSpacingEm,
+                    String spacingGroupId, int spacingOrder, float boxWidth) {
         this.text = text;
         this.x = x;
         this.y = y;
@@ -45,6 +54,7 @@ public class TextItem {
         this.wordSpacingEm = wordSpacingEm;
         this.spacingGroupId = spacingGroupId;
         this.spacingOrder = spacingOrder;
+        this.boxWidth = boxWidth;
     }
 
     private transient android.graphics.RectF cachedBounds;
@@ -54,21 +64,72 @@ public class TextItem {
         cachedBounds = null;
     }
 
+    public float getEffectiveBoxWidth() {
+        if (boxWidth > 0f) return boxWidth;
+        android.graphics.RectF b = getBounds();
+        return Math.max(60f, b.width() - 8f);
+    }
+
     public android.graphics.RectF getBounds() {
         if (cachedBounds == null) {
-            float width;
-            synchronized (MEASURE_PAINT) {
-                MEASURE_PAINT.setTextSize(fontSize);
-                if (android.os.Build.VERSION.SDK_INT >= 21) {
-                    MEASURE_PAINT.setLetterSpacing(letterSpacingEm);
-                    if (android.os.Build.VERSION.SDK_INT >= 29) {
-                        MEASURE_PAINT.setWordSpacing(wordSpacingEm * fontSize);
-                    }
-                }
-                width = TextSpacingCompat.measureText(MEASURE_PAINT, text,
-                        wordSpacingEm * fontSize);
+            if (text == null || text.isEmpty()) {
+                cachedBounds = new android.graphics.RectF(x, y, x, y);
+                return cachedBounds;
             }
-            android.graphics.RectF unrotated = new android.graphics.RectF(x - 4f, y - fontSize - 4f, x + width + 4f, y + 6f);
+            boolean hasNewlines = text.indexOf('\n') >= 0;
+            boolean hasBoxWidth = boxWidth > 0f;
+
+            android.graphics.RectF unrotated;
+            if (!hasNewlines && !hasBoxWidth) {
+                float width;
+                synchronized (MEASURE_PAINT) {
+                    MEASURE_PAINT.setTextSize(fontSize);
+                    if (android.os.Build.VERSION.SDK_INT >= 21) {
+                        MEASURE_PAINT.setLetterSpacing(letterSpacingEm);
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            MEASURE_PAINT.setWordSpacing(wordSpacingEm * fontSize);
+                        }
+                    }
+                    width = TextSpacingCompat.measureText(MEASURE_PAINT, text,
+                            wordSpacingEm * fontSize);
+                }
+                unrotated = new android.graphics.RectF(x - 4f, y - fontSize - 4f, x + width + 4f, y + 6f);
+            } else {
+                android.text.TextPaint tp;
+                synchronized (MEASURE_PAINT) {
+                    MEASURE_PAINT.setTextSize(fontSize);
+                    if (android.os.Build.VERSION.SDK_INT >= 21) {
+                        MEASURE_PAINT.setLetterSpacing(letterSpacingEm);
+                        if (android.os.Build.VERSION.SDK_INT >= 29) {
+                            MEASURE_PAINT.setWordSpacing(wordSpacingEm * fontSize);
+                        }
+                    }
+                    tp = new android.text.TextPaint(MEASURE_PAINT);
+                }
+                int targetW = hasBoxWidth ? Math.max(20, (int) Math.ceil(boxWidth)) : 20000;
+                android.text.StaticLayout layout;
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    layout = android.text.StaticLayout.Builder.obtain(text, 0, text.length(), tp, targetW)
+                            .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                            .setLineSpacing(0f, 1.2f)
+                            .setIncludePad(false)
+                            .build();
+                } else {
+                    layout = new android.text.StaticLayout(text, tp, targetW,
+                            android.text.Layout.Alignment.ALIGN_NORMAL, 1.2f, 0f, false);
+                }
+                float maxLineWidth = 0f;
+                int lineCount = layout.getLineCount();
+                for (int i = 0; i < lineCount; i++) {
+                    maxLineWidth = Math.max(maxLineWidth, layout.getLineWidth(i));
+                }
+                float totalW = hasBoxWidth ? Math.max(boxWidth, maxLineWidth) : maxLineWidth;
+                float totalH = layout.getHeight();
+                int baseline0 = lineCount > 0 ? layout.getLineBaseline(0) : Math.round(fontSize);
+                float topY = y - baseline0;
+                unrotated = new android.graphics.RectF(x - 4f, topY - 4f, x + totalW + 4f, topY + totalH + 4f);
+            }
+
             if (Math.abs(rotationAngle) < 0.5f) {
                 cachedBounds = unrotated;
             } else {
@@ -94,6 +155,7 @@ public class TextItem {
         obj.put("wordSpacingEm", (double) wordSpacingEm);
         if (spacingGroupId != null && !spacingGroupId.isEmpty()) obj.put("spacingGroupId", spacingGroupId);
         obj.put("spacingOrder", spacingOrder);
+        if (boxWidth > 0f) obj.put("boxWidth", (double) boxWidth);
         return obj;
     }
 
@@ -109,7 +171,8 @@ public class TextItem {
         float wordSpacing = (float) obj.optDouble("wordSpacingEm", 0.0);
         String group = obj.optString("spacingGroupId", null);
         int order = obj.optInt("spacingOrder", 0);
+        float bWidth = (float) obj.optDouble("boxWidth", 0.0);
         return new TextItem(text, x, y, color, size, font, rotation,
-                letterSpacing, wordSpacing, group, order);
+                letterSpacing, wordSpacing, group, order, bWidth);
     }
 }
