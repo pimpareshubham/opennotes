@@ -149,6 +149,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private TextView textNotebookTitle;
     private LinearLayout activeDocTab;
     private ImageView btnCloseDocTab, btnNewTab;
+    private boolean isExitingSaved = false;
 
     // Top Tool Dock
     private LinearLayout mainToolDock;
@@ -892,16 +893,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
             canvasView.post(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                // Smoothly animate/glide into the restored reading position
-                if (canvasView.getWidth() > 0 && canvasView.getHeight() > 0) {
-                    canvasView.smoothAnimateViewport(targetZoom, targetPanX, targetPanY, targetScrollY, 420, null);
-                } else {
-                    canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
-                }
-
-                if (restoredPageNum > 1 || targetScrollY > 50) {
-                    Toast.makeText(NoteEditorActivity.this, "📖 Resumed reading at Page " + restoredPageNum + " of " + totalPagesCount, Toast.LENGTH_SHORT).show();
-                }
+                // Instantly place viewport into the restored position for immediate zero-lag readiness
+                canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
             });
         }
         renderDocumentTabs();
@@ -910,7 +903,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void renderDocumentTabs() {
         if (layoutDocumentTabs == null) return;
-        saveExecutor.execute(() -> {
+        loadExecutor.execute(() -> {
             try {
                 List<Notebook> loadedNotebooks = new ArrayList<>();
                 List<Long> toRemove = new ArrayList<>();
@@ -2238,14 +2231,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             hideLongPressPastePopup();
             return;
         }
-        saveCurrentPage();
         super.onBackPressed();
         overridePendingTransition(R.anim.activity_close_enter, R.anim.activity_close_exit);
     }
 
     @Override
     public void finish() {
-        saveCurrentPage();
+        if (!isExitingSaved) {
+            isExitingSaved = true;
+            saveCurrentPage();
+        }
         super.finish();
         overridePendingTransition(R.anim.activity_close_enter, R.anim.activity_close_exit);
     }
@@ -5265,7 +5260,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void saveNotebookViewState() {
         if (currentNotebook == null || notebookId <= 0) return;
-        saveNotebookConfig();
         final int pageIdx = currentPageIndex;
         final float scrollY = canvasView != null ? canvasView.getViewportOffsetY() : 0f;
         final float zoom = canvasView != null ? canvasView.getZoomPercent() : 100f;
@@ -6402,23 +6396,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         saveDebounceHandler.removeCallbacksAndMessages(null);
         saveDebounceHandler.postDelayed(() -> {
             if (isFinishing() || isDestroyed()) return;
-            if (pages != null && !pages.isEmpty()) {
-                for (Page p : pages) {
-                    if (p != null) {
-                        if (p.isInfinite && p == currentPage && canvasView != null) {
-                            p.canvasHeight = canvasView.getContentHeight();
-                        }
-                        final Page snapshot = p.createSnapshot();
-                        saveExecutor.execute(() -> dbHelper.savePage(snapshot));
-                    }
-                }
-            } else if (currentPage != null) {
-                if (currentPage.isInfinite && canvasView != null) {
-                    currentPage.canvasHeight = canvasView.getContentHeight();
-                }
-                final Page snapshot = currentPage.createSnapshot();
-                saveExecutor.execute(() -> dbHelper.savePage(snapshot));
-            }
+            saveCurrentPage();
         }, 600);
     }
 
@@ -6430,18 +6408,26 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             for (Page p : pages) {
                 if (p != null) {
                     if (p.isInfinite && p == currentPage && canvasView != null) {
-                        p.canvasHeight = canvasView.getContentHeight();
+                        float curH = canvasView.getContentHeight();
+                        p.setCanvasHeight(curH);
                     }
-                    final Page snapshot = p.createSnapshot();
-                    saveExecutor.execute(() -> dbHelper.savePage(snapshot));
+                    if (p.isModified || p.id == 0) {
+                        p.isModified = false;
+                        final Page snapshot = p.createSnapshot();
+                        saveExecutor.execute(() -> dbHelper.savePage(snapshot));
+                    }
                 }
             }
         } else if (currentPage != null) {
             if (currentPage.isInfinite && canvasView != null) {
-                currentPage.canvasHeight = canvasView.getContentHeight();
+                float curH = canvasView.getContentHeight();
+                currentPage.setCanvasHeight(curH);
             }
-            final Page snapshot = currentPage.createSnapshot();
-            saveExecutor.execute(() -> dbHelper.savePage(snapshot));
+            if (currentPage.isModified || currentPage.id == 0) {
+                currentPage.isModified = false;
+                final Page snapshot = currentPage.createSnapshot();
+                saveExecutor.execute(() -> dbHelper.savePage(snapshot));
+            }
         }
     }
 
@@ -6611,9 +6597,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (voicePlayer != null) {
             try { voicePlayer.release(); voicePlayer = null; } catch (Exception ignored) {}
         }
-        saveCurrentPage();
-        saveNotebookViewState();
-        saveNotebookConfig();
+        if (!isFinishing() && !isExitingSaved) {
+            saveCurrentPage();
+        }
     }
 
     @Override
@@ -6625,8 +6611,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     @Override
     protected void onDestroy() {
-        saveNotebookViewState();
-        saveNotebookConfig();
         super.onDestroy();
         if (isFinishing()) {
             synchronized (openNotebookIds) {
@@ -6642,7 +6626,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
         saveDebounceHandler.removeCallbacksAndMessages(null);
         resetZoomHandler.removeCallbacksAndMessages(null);
-        saveCurrentPage();
+        if (!isExitingSaved) {
+            isExitingSaved = true;
+            saveCurrentPage();
+        }
         try {
             saveExecutor.shutdown();
         } catch (Exception ignored) {}

@@ -26,6 +26,8 @@ public class Page {
     public long contentRevision;
     /** Fast loading flag: true if strokes, shapes, texts, and images are loaded from disk/db. */
     public volatile boolean isContentLoaded = true;
+    /** Dirty tracking flag: true if page content, height, or properties were modified since load/save. */
+    public volatile boolean isModified = false;
     private transient PageWritingContext cachedWritingContext;
     private transient long cachedWritingContextRevision = -1L;
 
@@ -48,6 +50,7 @@ public class Page {
         this.createdAt = System.currentTimeMillis();
         this.updatedAt = this.createdAt;
         this.isContentLoaded = true;
+        this.isModified = false;
     }
 
     public synchronized Page createSnapshot() {
@@ -58,6 +61,7 @@ public class Page {
         snapshot.updatedAt = this.updatedAt;
         snapshot.contentRevision = this.contentRevision;
         snapshot.isContentLoaded = this.isContentLoaded;
+        snapshot.isModified = false;
         synchronized (this.strokes) {
             snapshot.strokes = new ArrayList<>(this.strokes);
         }
@@ -74,10 +78,18 @@ public class Page {
     }
 
     public synchronized void markContentChanged() {
+        isModified = true;
         contentRevision++;
         updatedAt = System.currentTimeMillis();
         cachedWritingContext = null;
         cachedWritingContextRevision = -1L;
+    }
+
+    public synchronized void setCanvasHeight(float height) {
+        if (Math.abs(this.canvasHeight - height) > 1f) {
+            this.canvasHeight = height;
+            this.isModified = true;
+        }
     }
 
     /** All content bounds are derived from current page items, never a fixed paper size. */

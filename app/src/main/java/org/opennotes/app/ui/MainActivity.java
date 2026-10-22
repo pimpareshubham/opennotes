@@ -286,6 +286,12 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     protected void onResume() {
         super.onResume();
         FullscreenMode.apply(this);
+        List<Notebook> cached = dbHelper.getCachedNotebooks();
+        if (cached != null && !cached.isEmpty() && adapter != null) {
+            adapter.updateData(cached, false);
+            if (emptyStateView != null) emptyStateView.setVisibility(View.GONE);
+            if (recyclerView != null) recyclerView.setVisibility(View.VISIBLE);
+        }
         loadNotebooks();
     }
 

@@ -5573,6 +5573,23 @@ public class CanvasView extends View {
                 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0;
 
+        // Check if finger is interacting with lasso selection or handles
+        boolean isLassoActiveGesture = isResizingSelection || isRotatingSelection || isMovingSelection;
+        boolean isLassoHandleTouch = false;
+        if (currentTool == DrawingTool.LASSO && !hasStylusPointer) {
+            if (isLassoActiveGesture) {
+                isLassoHandleTouch = true;
+            } else if (hasLassoSelection && selectionBounds != null && !selectionBounds.isEmpty()) {
+                float rawDownX = event.getX(0);
+                float rawDownY = event.getY(0);
+                float cDownX = (rawDownX - panOffsetX) / scaleFactor;
+                float cDownY = (rawDownY - panOffsetY) / scaleFactor + viewportOffsetY;
+                if (isTouchingLassoHandleOrSelection(cDownX, cDownY)) {
+                    isLassoHandleTouch = true;
+                }
+            }
+        }
+
         // Multi-touch two-finger zoom/pan gesture handling & release suppression
         if (isTwoFingerInteracting) {
             if (action == MotionEvent.ACTION_MOVE && pointerCount < 2) {
@@ -5592,7 +5609,7 @@ public class CanvasView extends View {
             }
         }
 
-        if (!hasStylusPointer && !isWithinStylusCooldown && !isPalm && pointerCount >= 2) {
+        if (!hasStylusPointer && !isWithinStylusCooldown && !isPalm && pointerCount >= 2 && !isLassoActiveGesture && !isLassoHandleTouch) {
             isTwoFingerInteracting = true;
             handPanDragging = false;
             removeCallbacks(longPressPasteRunnable);
@@ -5622,7 +5639,7 @@ public class CanvasView extends View {
         // 0. Single-Finger & Multi-Finger Canvas Move Gesture Mode
         // When enabled, fingers only move & zoom the canvas. Stylus always draws with the active pen/tool!
         boolean fingerMoveActive = isFingerMoveCanvasEnabled || (currentTool == DrawingTool.HAND);
-        if (fingerMoveActive && !hasStylusPointer) {
+        if (fingerMoveActive && !hasStylusPointer && !isLassoHandleTouch) {
             if (isPalm) return true;
 
             if (getParent() != null) {
@@ -5765,13 +5782,13 @@ public class CanvasView extends View {
         }
 
         // Reject accidental palm touches when not using stylus
-        if (!hasStylusPointer && isPalm) {
+        if (!hasStylusPointer && isPalm && !isLassoHandleTouch) {
             return true;
         }
 
-        // Stylus-only mode rejects all finger drawing, but allows a real
-        // two-finger navigation gesture when the stylus is not in contact and outside cooldown.
-        if (isStylusOnly && !hasStylusPointer) {
+        // Stylus-only mode rejects all finger drawing, but allows finger lasso manipulation / resizing
+        // and two-finger navigation gesture when the stylus is not in contact and outside cooldown.
+        if (isStylusOnly && !hasStylusPointer && !isLassoHandleTouch && currentTool != DrawingTool.LASSO) {
             if (pointerCount >= 2 && !isWithinStylusCooldown && !isPalm) {
                 if (activeStroke != null) {
                     cancelInProgressGesture();
@@ -6055,12 +6072,13 @@ public class CanvasView extends View {
                         float stalkLength = 46f / Math.max(0.5f, scaleFactor);
                         float rotKnobX = selectionBounds.right + stalkLength;
                         float rotKnobY = selectionBounds.centerY();
-                        float hitRadius = 50f / Math.max(0.5f, scaleFactor);
+                        float hitRadius = Math.max(54f / Math.max(0.5f, scaleFactor), dp(36f) / scaleFactor);
                         float hdx = canvasX - rotKnobX;
                         float hdy = canvasY - rotKnobY;
                         if (hdx * hdx + hdy * hdy <= hitRadius * hitRadius) {
                             activeLassoHandle = LassoHandle.ROTATE;
                             isRotatingSelection = true;
+                            activeInputPointerId = event.getPointerId(inputPointerIndex);
                             rotationCenterX = selectionBounds.centerX();
                             rotationCenterY = selectionBounds.centerY();
                             lastRotationTouchAngle = (float) Math.toDegrees(Math.atan2(canvasY - rotationCenterY, canvasX - rotationCenterX));
@@ -6072,7 +6090,7 @@ public class CanvasView extends View {
                         }
 
                         // Check 4 Corner Handles for Resizing (StarNote 4 corners)
-                        float cornerHitRadius = 46f / Math.max(0.5f, scaleFactor);
+                        float cornerHitRadius = Math.max(54f / Math.max(0.5f, scaleFactor), dp(36f) / scaleFactor);
                         float cornerHitSq = cornerHitRadius * cornerHitRadius;
 
                         // Top-Left (Anchor is Bottom-Right)
@@ -6082,6 +6100,7 @@ public class CanvasView extends View {
                             float anchorX = selectionBounds.right;
                             float anchorY = selectionBounds.bottom;
                             float initDist = (float) Math.hypot(canvasX - anchorX, canvasY - anchorY);
+                            activeInputPointerId = event.getPointerId(inputPointerIndex);
                             beginLiveResizing(LassoHandle.TOP_LEFT, anchorX, anchorY, initDist);
                             try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
                             return true;
@@ -6094,6 +6113,7 @@ public class CanvasView extends View {
                             float anchorX = selectionBounds.left;
                             float anchorY = selectionBounds.bottom;
                             float initDist = (float) Math.hypot(canvasX - anchorX, canvasY - anchorY);
+                            activeInputPointerId = event.getPointerId(inputPointerIndex);
                             beginLiveResizing(LassoHandle.TOP_RIGHT, anchorX, anchorY, initDist);
                             try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
                             return true;
@@ -6106,6 +6126,7 @@ public class CanvasView extends View {
                             float anchorX = selectionBounds.right;
                             float anchorY = selectionBounds.top;
                             float initDist = (float) Math.hypot(canvasX - anchorX, canvasY - anchorY);
+                            activeInputPointerId = event.getPointerId(inputPointerIndex);
                             beginLiveResizing(LassoHandle.BOTTOM_LEFT, anchorX, anchorY, initDist);
                             try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
                             return true;
@@ -6118,6 +6139,7 @@ public class CanvasView extends View {
                             float anchorX = selectionBounds.left;
                             float anchorY = selectionBounds.top;
                             float initDist = (float) Math.hypot(canvasX - anchorX, canvasY - anchorY);
+                            activeInputPointerId = event.getPointerId(inputPointerIndex);
                             beginLiveResizing(LassoHandle.BOTTOM_RIGHT, anchorX, anchorY, initDist);
                             try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
                             return true;
@@ -6125,7 +6147,7 @@ public class CanvasView extends View {
 
                         // Check Left and Right side pill handles for width resizing / reflowing text
                         if (hasSelectedText()) {
-                            float sideHitRadius = 46f / Math.max(0.5f, scaleFactor);
+                            float sideHitRadius = Math.max(54f / Math.max(0.5f, scaleFactor), dp(36f) / scaleFactor);
                             float sideHitSq = sideHitRadius * sideHitRadius;
                             float midY = selectionBounds.centerY();
 
@@ -6136,6 +6158,7 @@ public class CanvasView extends View {
                                 float anchorX = selectionBounds.right;
                                 float anchorY = midY;
                                 float initDist = Math.max(10f, Math.abs(canvasX - anchorX));
+                                activeInputPointerId = event.getPointerId(inputPointerIndex);
                                 beginLiveResizing(LassoHandle.MIDDLE_LEFT, anchorX, anchorY, initDist);
                                 try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
                                 return true;
@@ -6148,6 +6171,7 @@ public class CanvasView extends View {
                                 float anchorX = selectionBounds.left;
                                 float anchorY = midY;
                                 float initDist = Math.max(10f, Math.abs(canvasX - anchorX));
+                                activeInputPointerId = event.getPointerId(inputPointerIndex);
                                 beginLiveResizing(LassoHandle.MIDDLE_RIGHT, anchorX, anchorY, initDist);
                                 try { performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); } catch (Exception ignored) {}
                                 return true;
@@ -6157,6 +6181,7 @@ public class CanvasView extends View {
 
                     if (hasLassoSelection && selectionBounds.contains(canvasX, canvasY)) {
                         isMovingSelection = true;
+                        activeInputPointerId = event.getPointerId(inputPointerIndex);
                         lassoMoveStartX = canvasX;
                         lassoMoveStartY = canvasY;
                         selectionMoveDx = 0f;
@@ -6225,8 +6250,10 @@ public class CanvasView extends View {
                     if (isRotatingSelection) {
                         isRotatingSelection = false;
                         activeLassoHandle = LassoHandle.NONE;
+                        activeInputPointerId = -1;
                         finishLiveRotation();
                     } else if (isResizingSelection) {
+                        activeInputPointerId = -1;
                         finishLiveResizing();
                     } else if (isMovingSelection) {
                         float finalDx = canvasX - lassoMoveStartX;
@@ -6238,6 +6265,7 @@ public class CanvasView extends View {
                             selectionBounds.offset(finalDx, finalDy);
                         }
                         isMovingSelection = false;
+                        activeInputPointerId = -1;
                         finishSelectionMove();
                         notifyChange();
                         notifyLassoSelection();
@@ -6996,6 +7024,44 @@ public class CanvasView extends View {
                     || toolType == MotionEvent.TOOL_TYPE_ERASER) return i;
         }
         return -1;
+    }
+
+    public boolean isTouchingLassoHandleOrSelection(float touchCanvasX, float touchCanvasY) {
+        if (!hasLassoSelection || selectionBounds == null || selectionBounds.isEmpty()) return false;
+        float hitRadius = Math.max(54f / Math.max(0.5f, scaleFactor), dp(36f) / scaleFactor);
+        float hitSq = hitRadius * hitRadius;
+
+        // 1. Rotation knob
+        float stalkLength = 46f / Math.max(0.5f, scaleFactor);
+        float rotKnobX = selectionBounds.right + stalkLength;
+        float rotKnobY = selectionBounds.centerY();
+        float hdx = touchCanvasX - rotKnobX;
+        float hdy = touchCanvasY - rotKnobY;
+        if (hdx * hdx + hdy * hdy <= hitSq) return true;
+
+        // 2. 4 Corners (Top-Left, Top-Right, Bottom-Left, Bottom-Right)
+        if (pointDistSq(touchCanvasX, touchCanvasY, selectionBounds.left, selectionBounds.top) <= hitSq) return true;
+        if (pointDistSq(touchCanvasX, touchCanvasY, selectionBounds.right, selectionBounds.top) <= hitSq) return true;
+        if (pointDistSq(touchCanvasX, touchCanvasY, selectionBounds.left, selectionBounds.bottom) <= hitSq) return true;
+        if (pointDistSq(touchCanvasX, touchCanvasY, selectionBounds.right, selectionBounds.bottom) <= hitSq) return true;
+
+        // 3. Side pill handles (if text box)
+        if (hasSelectedText()) {
+            float midY = selectionBounds.centerY();
+            if (pointDistSq(touchCanvasX, touchCanvasY, selectionBounds.left, midY) <= hitSq) return true;
+            if (pointDistSq(touchCanvasX, touchCanvasY, selectionBounds.right, midY) <= hitSq) return true;
+        }
+
+        // 4. Inside selection bounds (for move)
+        if (selectionBounds.contains(touchCanvasX, touchCanvasY)) return true;
+
+        return false;
+    }
+
+    private static float pointDistSq(float x1, float y1, float x2, float y2) {
+        float dx = x1 - x2;
+        float dy = y1 - y2;
+        return dx * dx + dy * dy;
     }
 
     private boolean isPalmTouch(MotionEvent event) {

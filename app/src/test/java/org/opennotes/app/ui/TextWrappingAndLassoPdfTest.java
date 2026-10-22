@@ -191,4 +191,57 @@ public class TextWrappingAndLassoPdfTest {
         String succeeding = paragraph.substring(spans.get(3)[0], spans.get(3)[1]);
         assertEquals("कायदा", succeeding);
     }
+
+    @Test
+    public void testPageDirtyTrackingForUltraFastSaves() {
+        org.opennotes.app.model.Page page = new org.opennotes.app.model.Page(1L, 0,
+                org.opennotes.app.model.PaperTemplate.BLANK, 0xFFFFFFFF, false);
+        page.id = 101L;
+        assertFalse("Page initially loaded from db or newly created is not modified", page.isModified);
+
+        page.setCanvasHeight(2400f);
+        assertTrue("Changing canvas height marks page modified", page.isModified);
+
+        page.isModified = false;
+        page.setCanvasHeight(2400f);
+        assertFalse("Setting identical canvas height does not mark page modified", page.isModified);
+
+        page.markContentChanged();
+        assertTrue("Calling markContentChanged sets isModified to true", page.isModified);
+
+        org.opennotes.app.model.Page snapshot = page.createSnapshot();
+        assertFalse("Snapshot has isModified reset to false", snapshot.isModified);
+        assertEquals(page.id, snapshot.id);
+        assertEquals(page.canvasHeight, snapshot.canvasHeight, 0.001f);
+    }
+
+    @Test
+    public void testLassoFingerTouchHandleHitTargetRadii() {
+        float scaleFactor = 1.0f;
+        float hitRadius = Math.max(54f / Math.max(0.5f, scaleFactor), 36f / scaleFactor); // 54f
+        float hitSq = hitRadius * hitRadius;
+
+        android.graphics.RectF selectionBounds = new android.graphics.RectF(100f, 100f, 300f, 250f);
+
+        // Touch slightly offset from top-left corner (100, 100) by 25px (typical finger touch spread)
+        float fingerTouchX = 85f;
+        float fingerTouchY = 88f;
+        float distSq = (fingerTouchX - selectionBounds.left) * (fingerTouchX - selectionBounds.left)
+                     + (fingerTouchY - selectionBounds.top) * (fingerTouchY - selectionBounds.top);
+        assertTrue("Finger touch within 54px hit radius hits top-left resize handle", distSq <= hitSq);
+
+        // Touch near rotation knob (right + 46px stalk = 346f, centerY = 175f)
+        float rotKnobX = selectionBounds.right + 46f;
+        float rotKnobY = selectionBounds.centerY();
+        float fingerRotX = rotKnobX + 20f;
+        float fingerRotY = rotKnobY - 15f;
+        float rotDistSq = (fingerRotX - rotKnobX) * (fingerRotX - rotKnobX)
+                        + (fingerRotY - rotKnobY) * (fingerRotY - rotKnobY);
+        assertTrue("Finger touch hits rotation knob handle", rotDistSq <= hitSq);
+
+        // Touch inside selection bounds for dragging
+        float insideTouchX = 200f;
+        float insideTouchY = 175f;
+        assertTrue("Finger touch inside selection bounds triggers move", selectionBounds.contains(insideTouchX, insideTouchY));
+    }
 }

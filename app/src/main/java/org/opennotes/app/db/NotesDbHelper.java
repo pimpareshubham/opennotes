@@ -851,7 +851,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         if (cachedNb != null) {
             cachedNb.updatedAt = System.currentTimeMillis();
         }
-        invalidateCachedNotebooksAsync();
     }
 
     public synchronized Page getPage(long notebookId, int pageIndex) {
@@ -993,6 +992,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 if (c != null) c.close();
             }
             page.isContentLoaded = true;
+            page.isModified = false;
         }
     }
 
@@ -1105,6 +1105,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
 
         loadPageContentFromCursor(page, c, db);
         page.isContentLoaded = true;
+        page.isModified = false;
         return page;
     }
 }
