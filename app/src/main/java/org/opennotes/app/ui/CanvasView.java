@@ -52,6 +52,7 @@ import org.opennotes.app.ai.PageWritingContext;
 import org.opennotes.app.util.PdfPageRenderer;
 import org.opennotes.app.util.SelectionClipboard;
 import org.opennotes.app.util.TextSpacingCompat;
+import org.opennotes.app.util.ZoomFavoritesManager;
 
 import java.io.File;
 import java.util.ArrayDeque;
@@ -1045,6 +1046,29 @@ public class CanvasView extends View {
         return null;
     }
 
+    /**
+     * Returns true if the canvas contains an imported PDF document or page.
+     */
+    public boolean isPdfDocument() {
+        if (allPages != null && !allPages.isEmpty()) {
+            for (Page p : allPages) {
+                if (isPdfPage(p)) return true;
+            }
+        }
+        return isPdfPage(currentPage);
+    }
+
+    public boolean isPdfPage(@Nullable Page p) {
+        if (p != null && p.images != null) {
+            for (ImageItem img : p.images) {
+                if (img != null && img.isBackground) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public void setOnActivePageChangeListener(OnActivePageChangeListener listener) {
         this.activePageChangeListener = listener;
     }
@@ -1464,10 +1488,11 @@ public class CanvasView extends View {
     }
 
     public void resetZoom() {
-        if (getBackgroundImage() != null || (isContinuousVerticalScroll && allPages != null && !allPages.isEmpty())) {
+        if (isPdfDocument()) {
             fitPageToAvailableSpace(true);
         } else {
-            resetZoom(100f);
+            int targetResetZoom = ZoomFavoritesManager.getDefaultResetZoom(getContext());
+            resetZoom(targetResetZoom);
         }
     }
 

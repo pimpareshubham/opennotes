@@ -1684,12 +1684,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 resetZoomHandler.removeCallbacksAndMessages(null);
                 resetZoomHandler.postDelayed(() -> {
                     if (isFinishing() || isDestroyed()) return;
-                    if (canvasView.getBackgroundImage() != null || (canvasView.isContinuousVerticalScroll() && pages != null && !pages.isEmpty())) {
+                    if (canvasView != null && canvasView.isPdfDocument()) {
                         canvasView.fitPageToAvailableSpace(true);
                         Toast.makeText(this, "Aligned to page fit", Toast.LENGTH_SHORT).show();
                     } else {
                         int targetResetZoom = ZoomFavoritesManager.getDefaultResetZoom(this);
-                        canvasView.resetZoom(targetResetZoom);
+                        if (canvasView != null) {
+                            canvasView.resetZoom(targetResetZoom);
+                        }
                         Toast.makeText(this, "Zoom reset to " + targetResetZoom + "%", Toast.LENGTH_SHORT).show();
                     }
                 }, 300L);
@@ -2819,11 +2821,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         if (btnResetZoomDialog != null) {
             btnResetZoomDialog.setOnClickListener(v -> {
-                if (canvasView.getBackgroundImage() != null || (canvasView.isContinuousVerticalScroll() && pages != null && !pages.isEmpty())) {
+                if (canvasView != null && canvasView.isPdfDocument()) {
                     canvasView.fitPageToAvailableSpace(true);
+                    Toast.makeText(this, "Aligned to page fit", Toast.LENGTH_SHORT).show();
                 } else {
                     int target = ZoomFavoritesManager.getDefaultResetZoom(this);
-                    canvasView.resetZoom(target);
+                    if (canvasView != null) {
+                        canvasView.resetZoom(target);
+                    }
+                    Toast.makeText(this, "Zoom reset to " + target + "%", Toast.LENGTH_SHORT).show();
                 }
                 dialog.dismiss();
             });
