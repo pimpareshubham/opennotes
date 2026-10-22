@@ -296,6 +296,7 @@ public class CanvasView extends View {
     private float panStartY = 0f;
     private float panInitialOffsetY = 0f;
     private float twoFingerStartX = 0f, twoFingerStartY = 0f;
+    private float lastFocusX = 0f, lastFocusY = 0f;
     private float initialPanOffsetX = 0f, initialPanOffsetY = 0f;
     private float twoFingerStartX0, twoFingerStartY0, twoFingerStartX1, twoFingerStartY1;
     private float twoFingerStartSpan;
@@ -637,30 +638,24 @@ public class CanvasView extends View {
         scaleDetector = new ScaleGestureDetector(getContext(), new ScaleGestureDetector.SimpleOnScaleGestureListener() {
             @Override
             public boolean onScaleBegin(ScaleGestureDetector detector) {
-                if (detector.getCurrentSpan() < dp(35f)) return false;
-                scaleGestureStartSpan = detector.getCurrentSpan();
-                scaleGestureConfirmed = false;
-                twoFingerScaleOccurred = false;
+                scaleGestureConfirmed = true;
+                twoFingerScaleOccurred = true;
+                lastFocusX = detector.getFocusX();
+                lastFocusY = detector.getFocusY();
                 return true;
             }
 
             @Override
             public boolean onScale(ScaleGestureDetector detector) {
                 if (isViewportLocked) return true;
-                if (!scaleGestureConfirmed) {
-                    float intentionalSpanChange = dp(10f);
-                    if (Math.abs(detector.getCurrentSpan() - scaleGestureStartSpan)
-                            < intentionalSpanChange) return true;
-                    scaleGestureConfirmed = true;
-                    twoFingerScaleOccurred = true;
-                    manualTwoFingerPanConfirmed = false;
-                }
                 twoFingerScaleOccurred = true;
+                scaleGestureConfirmed = true;
+
                 float factor = detector.getScaleFactor();
-                float targetScale = scaleFactor * factor;
-                // Clamp between 10% and 1600% for expansive infinite canvas overview
-                zoomAround(Math.max(0.10f, Math.min(16.0f, targetScale)),
-                        detector.getFocusX(), detector.getFocusY());
+                float currentFocusX = detector.getFocusX();
+                float currentFocusY = detector.getFocusY();
+
+                applyTwoFingerTransform(factor, currentFocusX, currentFocusY);
 
                 invalidate();
                 notifyZoomChange();
@@ -908,6 +903,11 @@ public class CanvasView extends View {
     }
 
     public void setPage(Page page) {
+        if (page != null && !page.isContentLoaded) {
+            try {
+                org.opennotes.app.db.NotesDbHelper.getInstance(getContext()).ensurePageLoaded(page);
+            } catch (Throwable ignored) {}
+        }
         this.currentPage = page;
         strokeSpatialIndexDirty = true;
         if (page != null) {
@@ -1452,6 +1452,21 @@ public class CanvasView extends View {
         notifyChange();
     }
 
+    /**
+     * Instantly sets the paper template, background color, and infinite mode before database loading
+     * finishes, guaranteeing zero black/blank flash on screen during activity startup.
+     */
+    public void setInitialPreviewState(PaperTemplate template, int bgColor, boolean isInfinite) {
+        if (template != null) {
+            this.paperTemplate = template;
+        }
+        if (bgColor != 0 && bgColor != -1) {
+            this.pageBackgroundColor = bgColor;
+        }
+        this.isInfinite = isInfinite;
+        invalidate();
+    }
+
     public boolean isInfinite() {
         return isInfinite;
     }
@@ -1572,25 +1587,37 @@ public class CanvasView extends View {
         anim.start();
     }
 
+    private void applyTwoFingerTransform(float factor, float currentFocusX, float currentFocusY) {
+        float oldScale = Math.max(0.01f, scaleFactor);
+        float newScale = Math.max(0.10f, Math.min(16.0f, oldScale * factor));
+
+        float canvasX = (lastFocusX - panOffsetX) / oldScale;
+        float canvasY = (lastFocusY - panOffsetY) / oldScale + viewportOffsetY;
+
+        scaleFactor = newScale;
+        panOffsetX = currentFocusX - canvasX * newScale;
+        panOffsetY = currentFocusY - (canvasY - viewportOffsetY) * newScale;
+
+        lastFocusX = currentFocusX;
+        lastFocusY = currentFocusY;
+    }
+
     /** Keep the canvas point under the requested screen focus fixed while changing zoom. */
     private void zoomAround(float targetScale, float focusX, float focusY) {
         float oldScale = Math.max(0.01f, scaleFactor);
         float newScale = Math.max(0.10f, Math.min(16.0f, targetScale));
+        float canvasFocusX = (focusX - panOffsetX) / oldScale;
+        float canvasFocusY = (focusY - panOffsetY) / oldScale + viewportOffsetY;
+
+        scaleFactor = newScale;
+        panOffsetX = focusX - canvasFocusX * newScale;
+        panOffsetY = focusY - (canvasFocusY - viewportOffsetY) * newScale;
 
         if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
-            float canvasFocusX = (focusX - panOffsetX) / oldScale;
-            float canvasFocusY = (focusY - 0f) / oldScale + viewportOffsetY;
-
-            scaleFactor = newScale;
-
-            // In continuous scroll, Y positioning is strictly driven by viewportOffsetY, with panOffsetY = 0f.
-            // Anchor canvasFocusY precisely under focusY at the new scale so there are zero vertical jumps.
-            float targetViewportY = canvasFocusY - (focusY / newScale);
+            float effectiveScrollY = viewportOffsetY - (panOffsetY / newScale);
             float maxScroll = getMaxScrollY();
-            viewportOffsetY = Math.max(0f, Math.min(maxScroll, targetViewportY));
+            viewportOffsetY = Math.max(0f, Math.min(maxScroll, effectiveScrollY));
             panOffsetY = 0f;
-
-            // Center horizontally if page fits within view width; otherwise clamp to edges smoothly.
             float pageW = 1440f;
             ImageItem bg = getBackgroundImage();
             if (bg != null && bg.width > 0) pageW = bg.width;
@@ -1599,20 +1626,11 @@ public class CanvasView extends View {
                 if (pageW * newScale <= viewW) {
                     panOffsetX = (viewW - pageW * newScale) * 0.5f;
                 } else {
-                    float targetPanX = focusX - canvasFocusX * newScale;
                     float minPanX = viewW - pageW * newScale;
                     float maxPanX = 0f;
-                    panOffsetX = Math.max(minPanX, Math.min(maxPanX, targetPanX));
+                    panOffsetX = Math.max(minPanX, Math.min(maxPanX, panOffsetX));
                 }
-            } else {
-                panOffsetX = focusX - canvasFocusX * newScale;
             }
-        } else {
-            float canvasFocusX = (focusX - panOffsetX) / oldScale;
-            float canvasFocusY = (focusY - panOffsetY) / oldScale + viewportOffsetY;
-            scaleFactor = newScale;
-            panOffsetX = focusX - canvasFocusX * newScale;
-            panOffsetY = focusY - (canvasFocusY - viewportOffsetY) * newScale;
         }
     }
 
@@ -3230,6 +3248,11 @@ public class CanvasView extends View {
             for (int pIdx = startIdx; pIdx <= endIdx; pIdx++) {
                 Page page = allPages.get(pIdx);
                 if (page == null) continue;
+                if (!page.isContentLoaded) {
+                    try {
+                        org.opennotes.app.db.NotesDbHelper.getInstance(getContext()).ensurePageLoaded(page);
+                    } catch (Throwable ignored) {}
+                }
                 float pageTop = getPageTop(pIdx);
                 float pageH = getPageHeight(page);
                 float pageW = getPageWidth(page);
@@ -6619,6 +6642,8 @@ public class CanvasView extends View {
                     twoFingerStartY1 = event.getY(1);
                     twoFingerStartX = (twoFingerStartX0 + twoFingerStartX1) / 2f;
                     twoFingerStartY = (twoFingerStartY0 + twoFingerStartY1) / 2f;
+                    lastFocusX = twoFingerStartX;
+                    lastFocusY = twoFingerStartY;
                     twoFingerStartSpan = (float) Math.hypot(
                             twoFingerStartX1 - twoFingerStartX0,
                             twoFingerStartY1 - twoFingerStartY0);
@@ -6627,112 +6652,45 @@ public class CanvasView extends View {
                     if (isTwoFingerSearchGestureEnabled) {
                         postDelayed(twoFingerSearchRunnable, 600L);
                     }
-                    if (twoFingerStartSpan < dp(35f)) {
-                        manualTwoFingerPanConfirmed = false;
-                        break;
-                    }
-                    manualTwoFingerPanConfirmed = false;
-                    initialPanOffsetX = panOffsetX;
-                    initialPanOffsetY = panOffsetY;
-                    initialViewportOffsetY = viewportOffsetY;
-                    if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
-                        if (!scroller.isFinished()) scroller.abortAnimation();
-                        if (velocityTracker == null) {
-                            velocityTracker = VelocityTracker.obtain();
-                        } else {
-                            velocityTracker.clear();
-                        }
-                        velocityTracker.addMovement(event);
+                    if (scroller != null && !scroller.isFinished()) {
+                        scroller.abortAnimation();
                     }
                 }
                 break;
             case MotionEvent.ACTION_MOVE:
-                if (event.getPointerCount() >= 2 && !scaleGestureConfirmed && !twoFingerScaleOccurred) {
-                    float currentX0 = event.getX(0);
-                    float currentY0 = event.getY(0);
-                    float currentX1 = event.getX(1);
-                    float currentY1 = event.getY(1);
-                    float currentCenterX = (currentX0 + currentX1) / 2f;
-                    float currentCenterY = (currentY0 + currentY1) / 2f;
-                    float currentSpan = (float) Math.hypot(currentX1 - currentX0, currentY1 - currentY0);
-                    float gestureSlop = dp(8f);
-
-                    // If distance between fingers is changing, the user is pinching to zoom - don't treat as pan!
-                    if (Math.abs(currentSpan - twoFingerStartSpan) > gestureSlop) {
-                        break;
-                    }
-
-                    float moveX0 = currentX0 - twoFingerStartX0;
-                    float moveY0 = currentY0 - twoFingerStartY0;
-                    float moveX1 = currentX1 - twoFingerStartX1;
-                    float moveY1 = currentY1 - twoFingerStartY1;
-                    float moveLength0 = (float) Math.hypot(moveX0, moveY0);
-                    float moveLength1 = (float) Math.hypot(moveX1, moveY1);
-                    if (moveLength0 > dp(10f) || moveLength1 > dp(10f)) {
+                if (event.getPointerCount() >= 2) {
+                    float currentCenterX = (event.getX(0) + event.getX(1)) / 2f;
+                    float currentCenterY = (event.getY(0) + event.getY(1)) / 2f;
+                    if (Math.hypot(currentCenterX - twoFingerStartX, currentCenterY - twoFingerStartY) > dp(10f)) {
                         removeCallbacks(twoFingerSearchRunnable);
                     }
-
-                    if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
-                        if (!manualTwoFingerPanConfirmed) {
-                            boolean movingTogether = (moveLength0 >= gestureSlop && moveLength1 >= gestureSlop);
-                            if (!movingTogether) break;
-                            manualTwoFingerPanConfirmed = true;
-                        }
-                        if (velocityTracker != null) {
-                            velocityTracker.addMovement(event);
-                        }
-                        float dy = (currentCenterY - twoFingerStartY) / scaleFactor;
-                        viewportOffsetY = initialViewportOffsetY - dy;
-                        clampViewport();
-                        checkAndUpdateActivePage();
-                        invalidate();
-                        notifyLassoSelection();
-                        break;
-                    }
-
-                    if (!manualTwoFingerPanConfirmed) {
-                        float directionAgreement = moveLength0 < 0.001f || moveLength1 < 0.001f
-                                 ? -1f : (moveX0 * moveX1 + moveY0 * moveY1)
-                                 / (moveLength0 * moveLength1);
-                        boolean stableSpan = Math.abs(currentSpan - twoFingerStartSpan)
-                                <= gestureSlop;
-                        manualTwoFingerPanConfirmed = stableSpan
-                                && moveLength0 >= gestureSlop && moveLength1 >= gestureSlop
-                                && directionAgreement >= 0.65f;
-                    }
-                    if (!manualTwoFingerPanConfirmed) break;
-                    panOffsetX = initialPanOffsetX + (currentCenterX - twoFingerStartX);
-                    panOffsetY = initialPanOffsetY + (currentCenterY - twoFingerStartY);
-                    invalidate();
-                    notifyLassoSelection();
+                    // scaleDetector.onTouchEvent(event) already seamlessly handles simultaneous pinch zoom
+                    // and pan translation via applyTwoFingerTransform with zero lag, zero jerks, and zero jumps.
                 }
                 break;
             case MotionEvent.ACTION_POINTER_UP:
             case MotionEvent.ACTION_UP:
                 removeCallbacks(twoFingerSearchRunnable);
-                if (twoFingerScaleOccurred) {
-                    // Pinch zoom just ended: smoothly clamp viewport without flinging or resetting scale/page
-                    clampViewport();
-                    checkAndUpdateActivePage();
-                    invalidate();
-                    notifyZoomChange();
-                    if (velocityTracker != null) {
-                        velocityTracker.recycle();
-                        velocityTracker = null;
-                    }
-                } else if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
-                    if (velocityTracker != null) {
-                        velocityTracker.computeCurrentVelocity(1000);
-                        float vy = velocityTracker.getYVelocity() / scaleFactor;
-                        if (Math.abs(vy) > 100f) {
-                            setInputFrameRatePreference(true);
-                            scroller.fling(0, (int) viewportOffsetY, 0, (int) -vy, 0, 0, 0, (int) getMaxScrollY());
-                            postInvalidateOnAnimation();
+                if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                    float effectiveScrollY = viewportOffsetY - (panOffsetY / scaleFactor);
+                    float maxScroll = getMaxScrollY();
+                    viewportOffsetY = Math.max(0f, Math.min(maxScroll, effectiveScrollY));
+                    panOffsetY = 0f;
+                    float pageW = 1440f;
+                    ImageItem bg = getBackgroundImage();
+                    if (bg != null && bg.width > 0) pageW = bg.width;
+                    int viewW = getWidth();
+                    if (viewW > 0) {
+                        if (pageW * scaleFactor <= viewW) {
+                            panOffsetX = (viewW - pageW * scaleFactor) * 0.5f;
+                        } else {
+                            float minPanX = viewW - pageW * scaleFactor;
+                            float maxPanX = 0f;
+                            panOffsetX = Math.max(minPanX, Math.min(maxPanX, panOffsetX));
                         }
-                        velocityTracker.recycle();
-                        velocityTracker = null;
                     }
-                } else if (!isContinuousVerticalScroll && isSwipePageEnabled && isSwipeTwoFingerEnabled && !scaleGestureConfirmed && !twoFingerScaleOccurred && event.getPointerCount() >= 2) {
+                }
+                if (!isContinuousVerticalScroll && isSwipePageEnabled && isSwipeTwoFingerEnabled && !twoFingerScaleOccurred && event.getPointerCount() >= 2) {
                     float currentCenterX = (event.getX(0) + event.getX(1)) / 2f;
                     float currentCenterY = (event.getY(0) + event.getY(1)) / 2f;
                     float dx = currentCenterX - twoFingerStartX;
@@ -6746,8 +6704,16 @@ public class CanvasView extends View {
                         }
                     }
                 }
+                checkAndUpdateActivePage();
+                invalidate();
+                notifyZoomChange();
+                if (velocityTracker != null) {
+                    velocityTracker.recycle();
+                    velocityTracker = null;
+                }
                 manualTwoFingerPanConfirmed = false;
                 twoFingerScaleOccurred = false;
+                scaleGestureConfirmed = false;
                 break;
         }
     }

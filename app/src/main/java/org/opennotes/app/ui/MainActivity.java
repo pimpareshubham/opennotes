@@ -619,14 +619,20 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         if (adapter != null) {
             for (Notebook nb : adapter.getNotebooks()) {
                 if (nb != null && nb.id == notebookId) {
+                    if (nb.title != null) {
+                        intent.putExtra("notebook_title", nb.title);
+                    }
                     if (nb.defaultTemplate != null) {
                         intent.putExtra("template", nb.defaultTemplate.name());
                     }
+                    intent.putExtra("bg_color", nb.defaultBgColor);
+                    intent.putExtra("is_infinite", nb.defaultIsInfinite);
                     break;
                 }
             }
         }
         startActivity(intent);
+        overridePendingTransition(R.anim.activity_open_enter, R.anim.activity_open_exit);
     }
 
     private void openPdfPicker() {

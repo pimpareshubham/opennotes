@@ -100,6 +100,8 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class NoteEditorActivity extends AppCompatActivity implements CanvasView.OnCanvasChangeListener {
 
@@ -107,6 +109,15 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private AppSettings appSettings;
     private final ExecutorService saveExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService fontIoExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService loadExecutor = Executors.newFixedThreadPool(2, new ThreadFactory() {
+        private final AtomicInteger count = new AtomicInteger(1);
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, "NoteEditorLoader-" + count.getAndIncrement());
+            t.setPriority(Thread.MAX_PRIORITY - 1);
+            return t;
+        }
+    });
     private final Handler saveDebounceHandler = new Handler(Looper.getMainLooper());
 
     private long notebookId;
@@ -381,13 +392,17 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         bindViews();
-        if (getIntent().hasExtra("template")) {
-            String passedTpl = getIntent().getStringExtra("template");
-            if (passedTpl != null && canvasView != null) {
-                try {
-                    canvasView.setPaperTemplate(PaperTemplate.fromString(passedTpl));
-                } catch (Throwable ignored) {}
-            }
+        String passedTitle = getIntent().getStringExtra("notebook_title");
+        if (passedTitle != null && textNotebookTitle != null) {
+            textNotebookTitle.setText(passedTitle);
+        }
+        String passedTpl = getIntent().getStringExtra("template");
+        int passedBgColor = getIntent().getIntExtra("bg_color", -1);
+        boolean passedIsInfinite = getIntent().getBooleanExtra("is_infinite", false);
+        if (canvasView != null) {
+            PaperTemplate tpl = passedTpl != null ? PaperTemplate.fromString(passedTpl) : PaperTemplate.BLANK;
+            int bg = (passedBgColor != -1 && passedBgColor != 0) ? passedBgColor : 0xFF121214;
+            canvasView.setInitialPreviewState(tpl, bg, passedIsInfinite);
         }
         applyResponsiveEditorLayout();
         loadNotebookData();
@@ -396,22 +411,25 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         restoreNotebookConfig(notebookId);
         updateFavoriteIcon();
 
-        // Silent background pre-download of handwriting models for seamless offline recognition
-        HandwritingRecognitionEngine.isModelDownloaded("ENGLISH", downloaded -> {
-            if (!downloaded) {
-                HandwritingRecognitionEngine.downloadModel("ENGLISH", null);
-            }
-        });
-        HandwritingRecognitionEngine.isModelDownloaded("MARATHI", downloaded -> {
-            if (!downloaded) {
-                HandwritingRecognitionEngine.downloadModel("MARATHI", null);
-            }
-        });
-        HandwritingRecognitionEngine.isModelDownloaded("HINDI", downloaded -> {
-            if (!downloaded) {
-                HandwritingRecognitionEngine.downloadModel("HINDI", null);
-            }
-        });
+        // Defer background handwriting model checks by 2500ms so startup has 100% CPU/IO
+        new Handler(Looper.getMainLooper()).postDelayed(() -> {
+            if (isFinishing() || isDestroyed()) return;
+            HandwritingRecognitionEngine.isModelDownloaded("ENGLISH", downloaded -> {
+                if (!downloaded) {
+                    HandwritingRecognitionEngine.downloadModel("ENGLISH", null);
+                }
+            });
+            HandwritingRecognitionEngine.isModelDownloaded("MARATHI", downloaded -> {
+                if (!downloaded) {
+                    HandwritingRecognitionEngine.downloadModel("MARATHI", null);
+                }
+            });
+            HandwritingRecognitionEngine.isModelDownloaded("HINDI", downloaded -> {
+                if (!downloaded) {
+                    HandwritingRecognitionEngine.downloadModel("HINDI", null);
+                }
+            });
+        }, 2500);
     }
 
     @Override
@@ -757,115 +775,131 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         view.setLayoutParams(params);
     }
 
+    private int getInitialTargetPageIndex(long nbId, Notebook nb) {
+        if (hasRestoredEditorState) {
+            return restoredPageIndex;
+        }
+        NotebookViewStateManager.ViewState vs =
+                NotebookViewStateManager.loadState(this, nbId);
+        if (vs != null) {
+            return vs.pageIndex;
+        }
+        if (nb != null && nb.lastPageIndex > 0) {
+            return nb.lastPageIndex;
+        }
+        return 0;
+    }
+
     private void loadNotebookData() {
-        canvasView.setEnabled(false);
-        saveExecutor.execute(() -> {
+        // 1. Instantaneous 0ms load if cached in memory!
+        List<Page> cachedPages = dbHelper.getCachedPages(notebookId);
+        Notebook cachedNb = dbHelper.getCachedNotebook(notebookId);
+        if (cachedPages != null && !cachedPages.isEmpty() && cachedNb != null) {
+            applyLoadedNotebook(cachedNb, cachedPages);
+            return;
+        }
+
+        // 2. High-speed progressive background load
+        loadExecutor.execute(() -> {
             try {
                 Notebook loadedNotebook = dbHelper.getNotebook(notebookId);
                 if (loadedNotebook == null) {
                     runOnUiThread(this::finish);
                     return;
                 }
-                List<Page> loadedPages = dbHelper.getPagesForNotebook(notebookId);
+                int targetPage = getInitialTargetPageIndex(notebookId, loadedNotebook);
+                List<Page> loadedPages = dbHelper.getPagesForNotebookFast(notebookId, targetPage);
                 if (loadedPages.isEmpty()) {
                     Page firstPage = new Page(notebookId, 0, loadedNotebook.defaultTemplate,
                             loadedNotebook.defaultBgColor, loadedNotebook.defaultIsInfinite);
                     dbHelper.insertPage(firstPage);
-                    loadedPages = dbHelper.getPagesForNotebook(notebookId);
+                    loadedPages = dbHelper.getPagesForNotebookFast(notebookId, 0);
                 }
-                List<Page> resultPages = loadedPages;
+                final List<Page> resultPages = loadedPages;
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
-                    currentNotebook = loadedNotebook;
-                    pages = resultPages;
-                    if (textNotebookTitle != null) {
-                        textNotebookTitle.setText(currentNotebook.title);
-                    }
-                    updateFavoriteIcon();
-
-                    int savedPage = 0;
-                    float savedScrollY = 0f;
-                    float savedZoom = 100f;
-                    float savedPanX = 0f;
-                    float savedPanY = 0f;
-                    boolean shouldRestoreView = false;
-
-                    if (hasRestoredEditorState) {
-                        savedPage = restoredPageIndex;
-                        savedScrollY = restoredScrollY;
-                        savedZoom = restoredZoom;
-                        savedPanX = restoredPanX;
-                        savedPanY = restoredPanY;
-                        shouldRestoreView = true;
-                        hasRestoredEditorState = false;
-                    } else {
-                        // Check high-speed ViewState cache first
-                        NotebookViewStateManager.ViewState vs =
-                                NotebookViewStateManager.loadState(NoteEditorActivity.this, notebookId);
-                        if (vs != null) {
-                            savedPage = vs.pageIndex;
-                            savedScrollY = vs.scrollY;
-                            savedZoom = vs.zoomPercent;
-                            savedPanX = vs.panX;
-                            savedPanY = vs.panY;
-                            shouldRestoreView = true;
-                        } else if (loadedNotebook.lastPageIndex > 0
-                                || loadedNotebook.lastScrollY > 0
-                                || Math.abs(loadedNotebook.lastZoomPercent - 100f) > 0.01f
-                                || Math.abs(loadedNotebook.lastPanX) > 0.01f
-                                || Math.abs(loadedNotebook.lastPanY) > 0.01f) {
-                            // Fallback to SQLite loaded notebook fields
-                            savedPage = loadedNotebook.lastPageIndex;
-                            savedScrollY = loadedNotebook.lastScrollY;
-                            savedZoom = loadedNotebook.lastZoomPercent > 0 ? loadedNotebook.lastZoomPercent : 100f;
-                            savedPanX = loadedNotebook.lastPanX;
-                            savedPanY = loadedNotebook.lastPanY;
-                            shouldRestoreView = true;
+                    applyLoadedNotebook(loadedNotebook, resultPages);
+                    dbHelper.preloadRemainingPagesAsync(notebookId, resultPages, targetPage, () -> {
+                        if (!isFinishing() && !isDestroyed() && canvasView != null) {
+                            canvasView.postInvalidate();
                         }
-                    }
-
-                    currentPageIndex = Math.max(0, Math.min(savedPage, resultPages.size() - 1));
-                    restoreNotebookConfig(notebookId);
-                    loadCurrentPage();
-
-                    if (shouldRestoreView) {
-                        final float targetZoom = savedZoom > 0 ? savedZoom : 100f;
-                        final float targetPanX = savedPanX;
-                        final float targetPanY = savedPanY;
-                        final float targetScrollY = savedScrollY;
-                        final int restoredPageNum = currentPageIndex + 1;
-                        final int totalPagesCount = resultPages.size();
-
-                        canvasView.post(() -> {
-                            if (isFinishing() || isDestroyed()) return;
-                            // Smoothly animate/glide into the restored reading position
-                            if (canvasView.getWidth() > 0 && canvasView.getHeight() > 0) {
-                                canvasView.smoothAnimateViewport(targetZoom, targetPanX, targetPanY, targetScrollY, 420, null);
-                            } else {
-                                canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
-                            }
-
-                            if (restoredPageNum > 1 || targetScrollY > 50) {
-                                Toast.makeText(NoteEditorActivity.this, "📖 Resumed reading at Page " + restoredPageNum + " of " + totalPagesCount, Toast.LENGTH_SHORT).show();
-                            }
-                        });
-                    }
-                    renderDocumentTabs();
-                    canvasView.setEnabled(true);
+                    });
                 });
             } catch (Throwable t) {
                 android.util.Log.e("NoteEditorActivity", "Failed to load notebook data", t);
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
                     new androidx.appcompat.app.AlertDialog.Builder(this)
-                            .setTitle("Error Opening Notebook")
-                            .setMessage("Failed to load notebook:\n" + t.getClass().getSimpleName() + ": " + t.getMessage())
+                            .setTitle("Unable to open note")
+                            .setMessage("There was an error loading the notebook data.")
                             .setPositiveButton("OK", (dialog, which) -> finish())
-                            .setCancelable(false)
                             .show();
                 });
             }
         });
+    }
+
+    private void applyLoadedNotebook(Notebook loadedNotebook, List<Page> resultPages) {
+        currentNotebook = loadedNotebook;
+        pages = resultPages;
+        if (textNotebookTitle != null) {
+            textNotebookTitle.setText(currentNotebook.title);
+        }
+        updateFavoriteIcon();
+
+        int savedPage = 0;
+        float savedScrollY = 0f;
+        float savedZoom = 100f;
+        float savedPanX = 0f;
+        float savedPanY = 0f;
+        boolean shouldRestoreView = false;
+
+        if (hasRestoredEditorState) {
+            savedPage = restoredPageIndex;
+            savedScrollY = restoredScrollY;
+            savedZoom = restoredZoom;
+            savedPanX = restoredPanX;
+            savedPanY = restoredPanY;
+            shouldRestoreView = true;
+            hasRestoredEditorState = false;
+        } else {
+            NotebookViewStateManager.ViewState vs =
+                    NotebookViewStateManager.loadState(NoteEditorActivity.this, notebookId);
+            if (vs != null) {
+                savedPage = vs.pageIndex;
+                savedScrollY = vs.scrollY;
+                savedZoom = vs.zoomPercent;
+                savedPanX = vs.panX;
+                savedPanY = vs.panY;
+                shouldRestoreView = true;
+            } else if (loadedNotebook.lastPageIndex > 0
+                    || loadedNotebook.lastScrollY > 0
+                    || Math.abs(loadedNotebook.lastZoomPercent - 100f) > 0.01f
+                    || Math.abs(loadedNotebook.lastPanX) > 0.01f
+                    || Math.abs(loadedNotebook.lastPanY) > 0.01f) {
+                savedPage = loadedNotebook.lastPageIndex;
+                savedScrollY = loadedNotebook.lastScrollY;
+                savedZoom = loadedNotebook.lastZoomPercent > 0 ? loadedNotebook.lastZoomPercent : 100f;
+                savedPanX = loadedNotebook.lastPanX;
+                savedPanY = loadedNotebook.lastPanY;
+                shouldRestoreView = true;
+            }
+        }
+
+        currentPageIndex = Math.max(0, Math.min(savedPage, resultPages.size() - 1));
+        restoreNotebookConfig(notebookId);
+        loadCurrentPage();
+
+        if (shouldRestoreView) {
+            final float targetZoom = savedZoom > 0 ? savedZoom : 100f;
+            final float targetPanX = savedPanX;
+            final float targetPanY = savedPanY;
+            final float targetScrollY = savedScrollY;
+            // Restore viewport immediately with 0 delay for instantaneous responsiveness
+            canvasView.restoreViewport(targetZoom, targetPanX, targetPanY, targetScrollY);
+        }
+        renderDocumentTabs();
+        canvasView.setEnabled(true);
     }
 
     private void renderDocumentTabs() {
@@ -1325,8 +1359,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void loadCurrentPage() {
-        if (currentPageIndex < 0 || currentPageIndex >= pages.size()) return;
+        if (currentPageIndex < 0 || pages == null || currentPageIndex >= pages.size()) return;
         currentPage = pages.get(currentPageIndex);
+        if (currentPage != null && !currentPage.isContentLoaded) {
+            dbHelper.ensurePageLoaded(currentPage);
+        }
         boolean isContinuous = canvasView != null && canvasView.isContinuousVerticalScroll();
         if (isContinuous && pages.size() > 1) {
             canvasView.setPages(pages, currentPageIndex);
@@ -2197,6 +2234,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
         saveCurrentPage();
         super.onBackPressed();
+        overridePendingTransition(R.anim.activity_close_enter, R.anim.activity_close_exit);
+    }
+
+    @Override
+    public void finish() {
+        super.finish();
+        overridePendingTransition(R.anim.activity_close_enter, R.anim.activity_close_exit);
     }
 
     private void saveNotebookConfig() {
@@ -6367,6 +6411,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 currentPage.canvasHeight = canvasView.getContentHeight();
             }
             final Page snapshot = currentPage.createSnapshot();
+            dbHelper.updateCachedPage(snapshot);
             saveExecutor.execute(() -> dbHelper.savePage(snapshot));
         }
     }
@@ -6571,6 +6616,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         saveCurrentPage();
         try {
             saveExecutor.shutdown();
+        } catch (Exception ignored) {}
+        try {
+            loadExecutor.shutdownNow();
         } catch (Exception ignored) {}
         try {
             fontIoExecutor.shutdownNow();

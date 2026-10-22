@@ -24,6 +24,8 @@ public class Page {
     public long updatedAt;
     /** Revision for derived full-page geometry and writing context. */
     public long contentRevision;
+    /** Fast loading flag: true if strokes, shapes, texts, and images are loaded from disk/db. */
+    public volatile boolean isContentLoaded = true;
     private transient PageWritingContext cachedWritingContext;
     private transient long cachedWritingContextRevision = -1L;
 
@@ -45,6 +47,7 @@ public class Page {
         this.images = new ArrayList<>();
         this.createdAt = System.currentTimeMillis();
         this.updatedAt = this.createdAt;
+        this.isContentLoaded = true;
     }
 
     public synchronized Page createSnapshot() {
@@ -54,6 +57,7 @@ public class Page {
         snapshot.createdAt = this.createdAt;
         snapshot.updatedAt = this.updatedAt;
         snapshot.contentRevision = this.contentRevision;
+        snapshot.isContentLoaded = this.isContentLoaded;
         synchronized (this.strokes) {
             snapshot.strokes = new ArrayList<>(this.strokes);
         }

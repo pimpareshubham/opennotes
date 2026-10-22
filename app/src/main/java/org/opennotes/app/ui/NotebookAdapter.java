@@ -10,7 +10,9 @@ import android.widget.ImageView;
 import android.widget.TextView;
 
 import androidx.annotation.NonNull;
+import androidx.recyclerview.widget.DiffUtil;
 import androidx.recyclerview.widget.RecyclerView;
+import android.view.HapticFeedbackConstants;
 
 import com.google.android.material.card.MaterialCardView;
 
@@ -66,8 +68,12 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                 && this.isSearching == isSearching && isDataIdentical(this.notebooks, newNotebooks)) {
             return;
         }
+        final List<Notebook> oldList = this.notebooks != null ? new ArrayList<>(this.notebooks) : new ArrayList<>();
+        final List<Notebook> newList = newNotebooks != null ? new ArrayList<>(newNotebooks) : new ArrayList<>();
+        final boolean oldSearching = this.isSearching;
         this.notebooks = newNotebooks;
         this.isSearching = isSearching;
+
         // Clean up selected IDs that no longer exist
         if (isSelectionMode && notebooks != null) {
             Set<Long> validIds = new HashSet<>();
@@ -78,8 +84,61 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             if (listener != null) {
                 listener.onSelectionModeChanged(true, selectedNotebookIds.size());
             }
+            notifyDataSetChanged();
+            return;
         }
-        notifyDataSetChanged();
+
+        if (oldSearching != isSearching || oldList.isEmpty()) {
+            notifyDataSetChanged();
+            return;
+        }
+
+        DiffUtil.DiffResult diffResult = DiffUtil.calculateDiff(new DiffUtil.Callback() {
+            @Override
+            public int getOldListSize() {
+                return oldSearching ? oldList.size() : oldList.size() + 1;
+            }
+
+            @Override
+            public int getNewListSize() {
+                return isSearching ? newList.size() : newList.size() + 1;
+            }
+
+            @Override
+            public boolean areItemsTheSame(int oldItemPosition, int newItemPosition) {
+                if (!oldSearching && oldItemPosition == 0 && !isSearching && newItemPosition == 0) {
+                    return true;
+                }
+                int oldIdx = oldSearching ? oldItemPosition : oldItemPosition - 1;
+                int newIdx = isSearching ? newItemPosition : newItemPosition - 1;
+                if (oldIdx < 0 || newIdx < 0 || oldIdx >= oldList.size() || newIdx >= newList.size()) {
+                    return false;
+                }
+                return oldList.get(oldIdx).id == newList.get(newIdx).id;
+            }
+
+            @Override
+            public boolean areContentsTheSame(int oldItemPosition, int newItemPosition) {
+                if (!oldSearching && oldItemPosition == 0 && !isSearching && newItemPosition == 0) {
+                    return true;
+                }
+                int oldIdx = oldSearching ? oldItemPosition : oldItemPosition - 1;
+                int newIdx = isSearching ? newItemPosition : newItemPosition - 1;
+                if (oldIdx < 0 || newIdx < 0 || oldIdx >= oldList.size() || newIdx >= newList.size()) {
+                    return false;
+                }
+                Notebook o = oldList.get(oldIdx);
+                Notebook n = newList.get(newIdx);
+                return o.id == n.id
+                        && o.updatedAt == n.updatedAt
+                        && o.pageCount == n.pageCount
+                        && o.isFavorite == n.isFavorite
+                        && o.coverColor == n.coverColor
+                        && java.util.Objects.equals(o.title, n.title)
+                        && java.util.Objects.equals(o.folder, n.folder);
+            }
+        });
+        diffResult.dispatchUpdatesTo(this);
     }
 
     private boolean isDataIdentical(List<Notebook> a, List<Notebook> b) {
@@ -205,11 +264,8 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             } else {
                 holder.itemView.setAlpha(1.0f);
                 holder.itemView.setOnClickListener(v -> {
-                    v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(80)
-                            .withEndAction(() -> {
-                                v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start();
-                                if (listener != null) listener.onCreateNewNotebookClick();
-                            }).start();
+                    v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                    if (listener != null) listener.onCreateNewNotebookClick();
                 });
             }
             return;
@@ -266,11 +322,8 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             holder.btnMore.setVisibility(View.VISIBLE);
 
             holder.itemView.setOnClickListener(v -> {
-                v.animate().scaleX(0.97f).scaleY(0.97f).setDuration(80)
-                        .withEndAction(() -> {
-                            v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(80).start();
-                            if (listener != null) listener.onNotebookClick(nb);
-                        }).start();
+                v.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY);
+                if (listener != null) listener.onNotebookClick(nb);
             });
 
             holder.itemView.setOnLongClickListener(v -> {

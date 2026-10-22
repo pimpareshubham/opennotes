@@ -31,10 +31,22 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:navigationBarColor">@color/surface</item>
         <item name="android:windowLightNavigationBar">false</item>
+
+        <!-- Window transitions for buttery smooth activity navigation -->
+        <item name="android:windowAnimationStyle">@style/Animation.OpenNotes.Activity</item>
+    </style>
+
+    <!-- Ultra-smooth, zero-latency activity transitions -->
+    <style name="Animation.OpenNotes.Activity" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/activity_open_enter</item>
+        <item name="android:activityOpenExitAnimation">@anim/activity_open_exit</item>
+        <item name="android:activityCloseEnterAnimation">@anim/activity_close_enter</item>
+        <item name="android:activityCloseExitAnimation">@anim/activity_close_exit</item>
     </style>
 
     <style name="Theme.OpenNotes.Editor" parent="Theme.OpenNotes">
-        <item name="android:windowBackground">@color/surface_variant</item>
+        <item name="android:windowBackground">#0A0A0C</item>
+        <item name="android:windowAnimationStyle">@style/Animation.OpenNotes.Activity</item>
     </style>
 
     <!-- Material Alert Dialog Theme -->
