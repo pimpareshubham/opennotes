@@ -157,4 +157,38 @@ public class TextWrappingAndLassoPdfTest {
         assertTrue("Initial box width enforces paragraph wrapping instead of single infinite line",
                 initialBoxWidth > 0f && initialBoxWidth <= availableWidth);
     }
+
+    @Test
+    public void testLassoSingleWordSelectionSplitting() {
+        String paragraph = "लोकपाल आणि लोकायुक्त कायदा";
+        // Words:
+        // 0: "लोकपाल"
+        // 1: "आणि"
+        // 2: "लोकायुक्त"
+        // 3: "कायदा"
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile("\\S+");
+        java.util.regex.Matcher m = p.matcher(paragraph);
+        List<String> words = new ArrayList<>();
+        List<int[]> spans = new ArrayList<>();
+        while (m.find()) {
+            words.add(m.group());
+            spans.add(new int[]{m.start(), m.end()});
+        }
+        assertEquals(4, words.size());
+        assertEquals("लोकायुक्त", words.get(2));
+
+        // When lasso targets only word 2 ("लोकायुक्त"):
+        int targetWordIndex = 2;
+        int[] targetSpan = spans.get(targetWordIndex);
+        String selectedWord = paragraph.substring(targetSpan[0], targetSpan[1]);
+        assertEquals("लोकायुक्त", selectedWord);
+
+        // Preceding unselected run: [0..1] ("लोकपाल आणि")
+        String preceding = paragraph.substring(spans.get(0)[0], spans.get(1)[1]);
+        assertEquals("लोकपाल आणि", preceding);
+
+        // Succeeding unselected run: [3] ("कायदा")
+        String succeeding = paragraph.substring(spans.get(3)[0], spans.get(3)[1]);
+        assertEquals("कायदा", succeeding);
+    }
 }

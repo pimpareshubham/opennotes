@@ -7,11 +7,15 @@ import android.graphics.Color;
 import android.graphics.ColorMatrix;
 import android.graphics.ColorMatrixColorFilter;
 import android.graphics.DashPathEffect;
+import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.Typeface;
+import android.text.Layout;
+import android.text.StaticLayout;
+import android.text.TextPaint;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.MotionEvent;
@@ -63,11 +67,14 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.IdentityHashMap;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -7084,10 +7091,31 @@ public class CanvasView extends View {
             }
 
             if (pg.texts != null) {
-                for (TextItem item : pg.texts) {
-                    if (item != null && RectF.intersects(item.getBounds(), localLassoBounds)
-                            && boundsIntersectLasso(item.getBounds(), lassoBounds, pTop)) {
-                        selectedTexts.add(item);
+                List<TextItem> textsToProcess = new ArrayList<>(pg.texts);
+                for (TextItem item : textsToProcess) {
+                    if (item == null || item.text == null || item.text.trim().isEmpty()) continue;
+                    if (!RectF.intersects(item.getBounds(), localLassoBounds)) continue;
+
+                    List<WordSpan> words = getWordSpans(item);
+                    if (words.size() <= 1) {
+                        if (boundsIntersectLasso(item.getBounds(), lassoBounds, pTop)) {
+                            selectedTexts.add(item);
+                        }
+                    } else {
+                        List<WordSpan> hitWords = new ArrayList<>();
+                        for (WordSpan w : words) {
+                            if (wordIntersectsLasso(w, lassoBounds, pTop)) {
+                                hitWords.add(w);
+                            }
+                        }
+
+                        if (hitWords.isEmpty()) {
+                            continue;
+                        } else if (hitWords.size() == words.size()) {
+                            selectedTexts.add(item);
+                        } else {
+                            splitAndSelectTextWords(pg, item, words, hitWords);
+                        }
                     }
                 }
             }
@@ -7259,6 +7287,197 @@ public class CanvasView extends View {
             if (worldBounds.contains(point.x, point.y)) return true;
         }
         return polygonEdgeIntersectsRect(worldBounds);
+    }
+
+    private boolean wordIntersectsLasso(WordSpan w, RectF lassoBounds, float yOffset) {
+        if (w == null || w.bounds == null || w.bounds.isEmpty()) return false;
+        RectF worldBounds = (yOffset != 0f)
+                ? new RectF(w.bounds.left, w.bounds.top + yOffset, w.bounds.right, w.bounds.bottom + yOffset)
+                : w.bounds;
+        if (!RectF.intersects(worldBounds, lassoBounds)) return false;
+        if (isPointInsideLasso(worldBounds.centerX(), worldBounds.centerY())) return true;
+        return boundsIntersectLasso(w.bounds, lassoBounds, yOffset);
+    }
+
+    private static class WordSpan {
+        final String text;
+        final int start;
+        final int end;
+        final int lineIndex;
+        final RectF bounds;
+        final float baselineX;
+        final float baselineY;
+
+        WordSpan(String text, int start, int end, int lineIndex, RectF bounds, float baselineX, float baselineY) {
+            this.text = text;
+            this.start = start;
+            this.end = end;
+            this.lineIndex = lineIndex;
+            this.bounds = bounds;
+            this.baselineX = baselineX;
+            this.baselineY = baselineY;
+        }
+    }
+
+    private List<WordSpan> getWordSpans(TextItem item) {
+        List<WordSpan> wordSpans = new ArrayList<>();
+        if (item == null || item.text == null || item.text.trim().isEmpty()) return wordSpans;
+
+        Pattern pattern = Pattern.compile("\\S+");
+        Matcher matcher = pattern.matcher(item.text);
+
+        boolean hasNewlines = item.text.indexOf('\n') >= 0;
+        boolean hasBoxWidth = item.boxWidth > 0f;
+
+        TextPaint tp = (textPaint instanceof TextPaint) ? (TextPaint) textPaint : new TextPaint(textPaint);
+        tp.setTextSize(item.fontSize);
+        tp.setTypeface(getCachedTypeface(item.fontKey));
+        TextSpacingCompat.configure(tp, item.letterSpacingEm, item.wordSpacingEm * item.fontSize);
+
+        Matrix rotMat = null;
+        if (Math.abs(item.rotationAngle) > 0.5f) {
+            rotMat = new Matrix();
+            rotMat.postRotate(item.rotationAngle, item.x, item.y);
+        }
+
+        if (hasNewlines || hasBoxWidth) {
+            int targetW = hasBoxWidth ? Math.max(20, (int) Math.ceil(item.boxWidth)) : 20000;
+            StaticLayout layout;
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                layout = StaticLayout.Builder.obtain(item.text, 0, item.text.length(), tp, targetW)
+                        .setAlignment(Layout.Alignment.ALIGN_NORMAL)
+                        .setLineSpacing(0f, 1.2f)
+                        .setIncludePad(false)
+                        .build();
+            } else {
+                layout = new StaticLayout(item.text, tp, targetW,
+                        Layout.Alignment.ALIGN_NORMAL, 1.2f, 0f, false);
+            }
+
+            int baseline0 = layout.getLineCount() > 0 ? layout.getLineBaseline(0) : Math.round(item.fontSize);
+            float topY = item.y - baseline0;
+
+            float[] pt = new float[2];
+            while (matcher.find()) {
+                int start = matcher.start();
+                int end = matcher.end();
+                String wordText = matcher.group();
+
+                int line = layout.getLineForOffset(start);
+                float lineBaseline = topY + layout.getLineBaseline(line);
+                float lineTop = topY + layout.getLineTop(line);
+                float lineBottom = topY + layout.getLineBottom(line);
+
+                float x1 = item.x + layout.getPrimaryHorizontal(start);
+                float x2 = item.x + layout.getPrimaryHorizontal(end);
+                float wLeft = Math.min(x1, x2);
+                float wRight = Math.max(x1, x2);
+
+                RectF wBounds = new RectF(wLeft - 2f, lineTop - 2f, wRight + 2f, lineBottom + 2f);
+                float baseX = wLeft;
+                float baseY = lineBaseline;
+
+                if (rotMat != null) {
+                    rotMat.mapRect(wBounds);
+                    pt[0] = baseX;
+                    pt[1] = baseY;
+                    rotMat.mapPoints(pt);
+                    baseX = pt[0];
+                    baseY = pt[1];
+                }
+
+                wordSpans.add(new WordSpan(wordText, start, end, line, wBounds, baseX, baseY));
+            }
+        } else {
+            float lineBaseline = item.y;
+            float lineTop = item.y - item.fontSize - 4f;
+            float lineBottom = item.y + 6f;
+
+            float[] pt = new float[2];
+            while (matcher.find()) {
+                int start = matcher.start();
+                int end = matcher.end();
+                String wordText = matcher.group();
+
+                float x1 = item.x + TextSpacingCompat.measureText(tp, item.text.substring(0, start), item.wordSpacingEm * item.fontSize);
+                float x2 = item.x + TextSpacingCompat.measureText(tp, item.text.substring(0, end), item.wordSpacingEm * item.fontSize);
+                float wLeft = Math.min(x1, x2);
+                float wRight = Math.max(x1, x2);
+
+                RectF wBounds = new RectF(wLeft - 2f, lineTop, wRight + 2f, lineBottom);
+                float baseX = wLeft;
+                float baseY = lineBaseline;
+
+                if (rotMat != null) {
+                    rotMat.mapRect(wBounds);
+                    pt[0] = baseX;
+                    pt[1] = baseY;
+                    rotMat.mapPoints(pt);
+                    baseX = pt[0];
+                    baseY = pt[1];
+                }
+
+                wordSpans.add(new WordSpan(wordText, start, end, 0, wBounds, baseX, baseY));
+            }
+        }
+        return wordSpans;
+    }
+
+    private void splitAndSelectTextWords(Page pg, TextItem item, List<WordSpan> allWords, List<WordSpan> hitWords) {
+        if (pg == null || item == null || allWords == null || hitWords == null || allWords.isEmpty()) return;
+
+        Set<WordSpan> hitSet = new HashSet<>(hitWords);
+        if (pg.texts != null) {
+            pg.texts.remove(item);
+        }
+
+        // Group contiguous words that have the same selection state AND are on the same line
+        List<List<WordSpan>> runs = new ArrayList<>();
+        List<Boolean> isSelectedRun = new ArrayList<>();
+
+        List<WordSpan> currentRun = new ArrayList<>();
+        Boolean currentSelected = null;
+        int currentLine = -1;
+
+        for (WordSpan w : allWords) {
+            boolean sel = hitSet.contains(w);
+            if (currentSelected == null || sel != currentSelected || w.lineIndex != currentLine) {
+                if (!currentRun.isEmpty()) {
+                    runs.add(currentRun);
+                    isSelectedRun.add(currentSelected);
+                }
+                currentRun = new ArrayList<>();
+                currentSelected = sel;
+                currentLine = w.lineIndex;
+            }
+            currentRun.add(w);
+        }
+        if (!currentRun.isEmpty()) {
+            runs.add(currentRun);
+            isSelectedRun.add(currentSelected);
+        }
+
+        if (pg.texts == null) pg.texts = new ArrayList<>();
+
+        for (int i = 0; i < runs.size(); i++) {
+            List<WordSpan> run = runs.get(i);
+            boolean isSel = isSelectedRun.get(i);
+            WordSpan firstW = run.get(0);
+            WordSpan lastW = run.get(run.size() - 1);
+
+            String runText = item.text.substring(firstW.start, lastW.end);
+            TextItem runItem = new TextItem(runText, firstW.baselineX, firstW.baselineY,
+                    item.color, item.fontSize, item.fontKey, item.rotationAngle);
+            runItem.letterSpacingEm = item.letterSpacingEm;
+            runItem.wordSpacingEm = item.wordSpacingEm;
+            runItem.boxWidth = 0f;
+
+            pg.texts.add(runItem);
+            if (isSel) {
+                selectedTexts.add(runItem);
+            }
+        }
+        strokeSpatialIndexDirty = true;
     }
 
     private boolean polygonEdgeIntersectsRect(RectF bounds) {
