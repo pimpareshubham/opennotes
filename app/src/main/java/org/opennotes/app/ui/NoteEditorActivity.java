@@ -120,6 +120,45 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     });
     private final Handler saveDebounceHandler = new Handler(Looper.getMainLooper());
 
+    private void executeSaveTask(Runnable task) {
+        if (task == null) return;
+        try {
+            if (!saveExecutor.isShutdown() && !saveExecutor.isTerminated()) {
+                saveExecutor.execute(task);
+            }
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            Log.w("NoteEditorActivity", "Save task rejected: executor is shutdown/terminated", e);
+        } catch (Throwable t) {
+            Log.w("NoteEditorActivity", "Failed to execute save task", t);
+        }
+    }
+
+    private void executeLoadTask(Runnable task) {
+        if (task == null) return;
+        try {
+            if (!loadExecutor.isShutdown() && !loadExecutor.isTerminated()) {
+                loadExecutor.execute(task);
+            }
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            Log.w("NoteEditorActivity", "Load task rejected: executor is shutdown/terminated", e);
+        } catch (Throwable t) {
+            Log.w("NoteEditorActivity", "Failed to execute load task", t);
+        }
+    }
+
+    private void executeFontIoTask(Runnable task) {
+        if (task == null) return;
+        try {
+            if (!fontIoExecutor.isShutdown() && !fontIoExecutor.isTerminated()) {
+                fontIoExecutor.execute(task);
+            }
+        } catch (java.util.concurrent.RejectedExecutionException e) {
+            Log.w("NoteEditorActivity", "Font IO task rejected: executor is shutdown/terminated", e);
+        } catch (Throwable t) {
+            Log.w("NoteEditorActivity", "Failed to execute font IO task", t);
+        }
+    }
+
     private long notebookId;
     private Notebook currentNotebook;
     private List<Page> pages;
@@ -317,7 +356,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         Toast.makeText(this, "The open notebook is unavailable.", Toast.LENGTH_LONG).show();
                         return;
                     }
-                    saveExecutor.execute(() -> {
+                    executeSaveTask(() -> {
                         try (OutputStream output = getContentResolver().openOutputStream(uri, "w")) {
                             if (output == null) throw new java.io.IOException("The selected destination could not be opened.");
                             NativeNoteArchive.writeNotebook(this, notebookSnapshot, pageSnapshots, output);
@@ -334,7 +373,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         importNativeNotebookLauncher = registerForActivityResult(
                 new ActivityResultContracts.OpenDocument(), uri -> {
                     if (uri == null) return;
-                    saveExecutor.execute(() -> {
+                    executeSaveTask(() -> {
                         try (InputStream input = getContentResolver().openInputStream(uri)) {
                             long importedId = NativeNoteArchive.importNotebook(this, dbHelper, input);
                             runOnUiThread(() -> {
@@ -793,7 +832,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void loadNotebookData() {
         // High-speed progressive background load
-        loadExecutor.execute(() -> {
+        executeLoadTask(() -> {
             try {
                 Notebook loadedNotebook = dbHelper.getNotebook(notebookId);
                 if (loadedNotebook == null) {
@@ -915,7 +954,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void renderDocumentTabs() {
         if (layoutDocumentTabs == null) return;
-        loadExecutor.execute(() -> {
+        executeLoadTask(() -> {
             try {
                 List<Notebook> loadedNotebooks = new ArrayList<>();
                 List<Long> toRemove = new ArrayList<>();
@@ -1273,7 +1312,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             }
             dialog.dismiss();
             saveCurrentPage();
-            saveExecutor.execute(() -> {
+            executeSaveTask(() -> {
                 long newId = dbHelper.insertNotebook(newNb);
                 Page firstPage = new Page(newId, 0, newNb.defaultTemplate, newNb.defaultBgColor, newNb.defaultIsInfinite);
                 dbHelper.insertPage(firstPage);
@@ -1359,7 +1398,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             textNotebookTitle.setText(newTitle);
                         }
                         Notebook snapshot = currentNotebook;
-                        saveExecutor.execute(() -> dbHelper.updateNotebook(snapshot));
+                        executeSaveTask(() -> dbHelper.updateNotebook(snapshot));
                         renderDocumentTabs();
                     }
                 })
@@ -4453,7 +4492,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         final int targetIdx = index;
         final Notebook nbSnapshot = currentNotebook;
-        saveExecutor.execute(() -> {
+        executeSaveTask(() -> {
             dbHelper.deletePage(notebookId, targetIdx);
             if (nbSnapshot != null) {
                 dbHelper.updateNotebook(nbSnapshot);
@@ -4534,7 +4573,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         currentNotebook.pageCount = pages.size() + 1;
         pages.add(newPage);
         Notebook notebookSnapshot = currentNotebook;
-        saveExecutor.execute(() -> {
+        executeSaveTask(() -> {
             dbHelper.insertPage(newPage);
             dbHelper.updateNotebook(notebookSnapshot);
         });
@@ -4631,7 +4670,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         saveCurrentPage();
                         currentNotebook.isFavorite = !currentNotebook.isFavorite;
                         final boolean fav = currentNotebook.isFavorite;
-                        saveExecutor.execute(() -> dbHelper.setFavorite(notebookId, fav));
+                        executeSaveTask(() -> dbHelper.setFavorite(notebookId, fav));
                         Toast.makeText(this, fav ? "Bookmarked ★ (Saved to Favorites)" : "Removed from Favorites", Toast.LENGTH_SHORT).show();
                     }
                 })
@@ -5330,10 +5369,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void saveNotebookViewState() {
-        if (notebookId <= 0) return;
-        final int pageIdx = (canvasView != null && canvasView.isContinuousVerticalScroll() && canvasView.getAllPages() != null && !canvasView.getAllPages().isEmpty())
+        if (notebookId <= 0 || pages == null || pages.isEmpty()) return;
+        final int rawPageIdx = (canvasView != null && canvasView.isContinuousVerticalScroll() && canvasView.getAllPages() != null && !canvasView.getAllPages().isEmpty())
                 ? canvasView.getActivePageIndex()
                 : currentPageIndex;
+        final int pageIdx = (rawPageIdx < 0 || rawPageIdx >= pages.size())
+                ? Math.max(0, Math.min(currentPageIndex, pages.size() - 1))
+                : rawPageIdx;
         final float scrollY = canvasView != null ? canvasView.getViewportOffsetY() : 0f;
         final float zoom = canvasView != null ? canvasView.getZoomPercent() : 100f;
         final float panX = canvasView != null ? canvasView.getPanOffsetX() : 0f;
@@ -5347,7 +5389,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         // 3. Asynchronously update SQLite database record
         final long nId = notebookId;
-        saveExecutor.execute(() -> {
+        executeSaveTask(() -> {
             try {
                 dbHelper.updateNotebookViewState(nId, pageIdx, scrollY, zoom, panX, panY);
             } catch (Throwable t) {
