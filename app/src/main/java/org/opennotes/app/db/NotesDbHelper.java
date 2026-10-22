@@ -665,12 +665,31 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         try {
             File dir = new File(appContext.getFilesDir(), "page_data");
             if (!dir.exists()) dir.mkdirs();
-            File file = new File(dir, prefix + "_" + pageKey + ".dat");
-            try (FileOutputStream fos = new FileOutputStream(file);
+            File targetFile = new File(dir, prefix + "_" + pageKey + ".dat");
+            File tempFile = new File(dir, prefix + "_" + pageKey + ".tmp");
+            try (FileOutputStream fos = new FileOutputStream(tempFile);
                  GZIPOutputStream gzos = new GZIPOutputStream(fos)) {
                 gzos.write(data.getBytes(StandardCharsets.UTF_8));
+                gzos.finish();
+                fos.flush();
             }
-            return "GZFILE:" + file.getName();
+            if (tempFile.exists()) {
+                if (targetFile.exists()) {
+                    targetFile.delete();
+                }
+                if (!tempFile.renameTo(targetFile)) {
+                    try (FileInputStream in = new FileInputStream(tempFile);
+                         FileOutputStream out = new FileOutputStream(targetFile)) {
+                        byte[] buf = new byte[8192];
+                        int len;
+                        while ((len = in.read(buf)) != -1) {
+                            out.write(buf, 0, len);
+                        }
+                    }
+                    tempFile.delete();
+                }
+            }
+            return "GZFILE:" + targetFile.getName();
         } catch (Exception e) {
             Log.e("NotesDbHelper", "Failed to write data to file, storing in DB directly", e);
             return data;
@@ -682,7 +701,15 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         if (storedValue.startsWith("GZFILE:")) {
             if (appContext == null) return "";
             String fileName = storedValue.substring(7);
-            File file = new File(new File(appContext.getFilesDir(), "page_data"), fileName);
+            File dir = new File(appContext.getFilesDir(), "page_data");
+            File file = new File(dir, fileName);
+            if (!file.exists() || file.length() == 0) {
+                String base = fileName.endsWith(".dat") ? fileName.substring(0, fileName.length() - 4) : fileName;
+                File tempFile = new File(dir, base + ".tmp");
+                if (tempFile.exists() && tempFile.length() > 0) {
+                    tempFile.renameTo(file);
+                }
+            }
             if (!file.exists()) return "";
             try (FileInputStream fis = new FileInputStream(file);
                  GZIPInputStream gzis = new GZIPInputStream(fis);
@@ -850,7 +877,32 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             cv.put(COL_PAGE_STROKES, strokesData);
             cv.put(COL_PAGE_SHAPES, shapesData);
             cv.put(COL_PAGE_TEXTS, textsData);
-            cv.put(COL_PAGE_IMAGES, imagesData);
+
+            // Anti-corruption guard: Never overwrite an existing PDF background image with empty/null data
+            if (imagesData != null && !imagesData.isEmpty() && !"[]".equals(imagesData.trim())) {
+                cv.put(COL_PAGE_IMAGES, imagesData);
+            } else {
+                Cursor ec = null;
+                boolean hasExistingPdf = false;
+                try {
+                    ec = db.query(TABLE_PAGES, new String[]{COL_PAGE_IMAGES},
+                            COL_PAGE_NB_ID + "=? AND " + COL_PAGE_INDEX + "=?",
+                            new String[]{String.valueOf(page.notebookId), String.valueOf(page.pageIndex)},
+                            null, null, null);
+                    if (ec != null && ec.moveToFirst()) {
+                        String ex = ec.getString(0);
+                        if (ex != null && ex.contains(PdfPageRenderer.PAGE_SEPARATOR)) {
+                            hasExistingPdf = true;
+                        }
+                    }
+                } catch (Throwable ignored) {
+                } finally {
+                    if (ec != null) ec.close();
+                }
+                if (!hasExistingPdf) {
+                    cv.put(COL_PAGE_IMAGES, imagesData);
+                }
+            }
             cv.put(COL_PAGE_UPDATED_AT, System.currentTimeMillis());
 
             int rows = db.update(TABLE_PAGES, cv,

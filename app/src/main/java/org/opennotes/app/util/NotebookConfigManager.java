@@ -7,6 +7,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import org.opennotes.app.model.DrawingTool;
+import org.opennotes.app.ui.CanvasView;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -28,6 +29,8 @@ import java.util.Map;
  * - Viewport lock state
  * - Laser pointer duration
  * - Auto-beautification & text conversion
+ * - Lasso selection mode (freehand vs rectangular)
+ * - Laser pointer mode (trail line vs pointer dot)
  */
 public final class NotebookConfigManager {
     private static final String PREF_NAME = "opennotes_notebook_configs";
@@ -48,6 +51,8 @@ public final class NotebookConfigManager {
     private static final String KEY_VIEWPORT_LOCKED = "viewport_locked_";
     private static final String KEY_LASER_DURATION = "laser_duration_";
     private static final String KEY_AUTO_BEAUTIFY = "auto_beautify_";
+    private static final String KEY_LASSO_MODE = "lasso_mode_";
+    private static final String KEY_LASER_MODE = "laser_mode_";
     private static final String KEY_TOOL_WIDTH_PREFIX = "tw_";
     private static final String KEY_TOOL_COLOR_PREFIX = "tc_";
 
@@ -67,6 +72,8 @@ public final class NotebookConfigManager {
         public Boolean viewportLocked = null;
         public Long laserDurationMs = null;
         public Boolean autoBeautifyEnabled = null;
+        public CanvasView.LassoMode lassoMode = null;
+        public CanvasView.LaserMode laserMode = null;
 
         public final Map<DrawingTool, Float> toolWidths = new HashMap<>();
         public final Map<DrawingTool, Integer> toolColors = new HashMap<>();
@@ -171,6 +178,18 @@ public final class NotebookConfigManager {
             if (sp.contains(KEY_AUTO_BEAUTIFY + notebookId)) {
                 config.autoBeautifyEnabled = sp.getBoolean(KEY_AUTO_BEAUTIFY + notebookId, true);
             }
+            if (sp.contains(KEY_LASSO_MODE + notebookId)) {
+                String lm = sp.getString(KEY_LASSO_MODE + notebookId, null);
+                if (lm != null) {
+                    try { config.lassoMode = CanvasView.LassoMode.valueOf(lm); } catch (Throwable ignored) {}
+                }
+            }
+            if (sp.contains(KEY_LASER_MODE + notebookId)) {
+                String lzm = sp.getString(KEY_LASER_MODE + notebookId, null);
+                if (lzm != null) {
+                    try { config.laserMode = CanvasView.LaserMode.valueOf(lzm); } catch (Throwable ignored) {}
+                }
+            }
 
             // Restore tool-specific widths and colors
             for (DrawingTool t : DrawingTool.values()) {
@@ -242,6 +261,12 @@ public final class NotebookConfigManager {
             if (config.autoBeautifyEnabled != null) {
                 editor.putBoolean(KEY_AUTO_BEAUTIFY + notebookId, config.autoBeautifyEnabled);
             }
+            if (config.lassoMode != null) {
+                editor.putString(KEY_LASSO_MODE + notebookId, config.lassoMode.name());
+            }
+            if (config.laserMode != null) {
+                editor.putString(KEY_LASER_MODE + notebookId, config.laserMode.name());
+            }
 
             for (Map.Entry<DrawingTool, Float> entry : config.toolWidths.entrySet()) {
                 if (entry.getKey() != null && entry.getValue() != null && entry.getValue() > 0f) {
@@ -279,6 +304,8 @@ public final class NotebookConfigManager {
             editor.remove(KEY_VIEWPORT_LOCKED + notebookId);
             editor.remove(KEY_LASER_DURATION + notebookId);
             editor.remove(KEY_AUTO_BEAUTIFY + notebookId);
+            editor.remove(KEY_LASSO_MODE + notebookId);
+            editor.remove(KEY_LASER_MODE + notebookId);
 
             for (DrawingTool t : DrawingTool.values()) {
                 editor.remove(KEY_TOOL_WIDTH_PREFIX + t.name() + "_" + notebookId);

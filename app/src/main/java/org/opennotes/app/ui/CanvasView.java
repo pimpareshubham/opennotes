@@ -1276,6 +1276,15 @@ public class CanvasView extends View {
         }
     }
 
+    public int getActivePageIndex() {
+        return activePageIndex;
+    }
+
+    @Nullable
+    public List<Page> getAllPages() {
+        return allPages;
+    }
+
     private void prefetchAdjacentPages(int activeIndex) {
         if (!isContinuousVerticalScroll || allPages == null || allPages.size() <= 1) return;
         int count = allPages.size();

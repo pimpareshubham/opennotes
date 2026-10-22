@@ -88,7 +88,9 @@ public class Page {
     public synchronized void setCanvasHeight(float height) {
         if (Math.abs(this.canvasHeight - height) > 1f) {
             this.canvasHeight = height;
-            this.isModified = true;
+            if (this.isContentLoaded) {
+                this.isModified = true;
+            }
         }
     }
 

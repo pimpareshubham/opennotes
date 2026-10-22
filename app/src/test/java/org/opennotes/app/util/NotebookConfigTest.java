@@ -29,6 +29,8 @@ public class NotebookConfigTest {
         assertNull(config.viewportLocked);
         assertNull(config.laserDurationMs);
         assertNull(config.autoBeautifyEnabled);
+        assertNull(config.lassoMode);
+        assertNull(config.laserMode);
         assertTrue(config.toolWidths.isEmpty());
         assertTrue(config.toolColors.isEmpty());
     }
@@ -73,6 +75,8 @@ public class NotebookConfigTest {
         config.viewportLocked = true;
         config.laserDurationMs = 2500L;
         config.autoBeautifyEnabled = false;
+        config.lassoMode = org.opennotes.app.ui.CanvasView.LassoMode.RECTANGLE;
+        config.laserMode = org.opennotes.app.ui.CanvasView.LaserMode.DOT;
 
         assertEquals(DrawingTool.HIGHLIGHTER, config.tool);
         assertEquals(15.0f, config.strokeWidth, 0.001f);
@@ -89,5 +93,7 @@ public class NotebookConfigTest {
         assertTrue(config.viewportLocked);
         assertEquals(Long.valueOf(2500L), config.laserDurationMs);
         assertFalse(config.autoBeautifyEnabled);
+        assertEquals(org.opennotes.app.ui.CanvasView.LassoMode.RECTANGLE, config.lassoMode);
+        assertEquals(org.opennotes.app.ui.CanvasView.LaserMode.DOT, config.laserMode);
     }
 }
