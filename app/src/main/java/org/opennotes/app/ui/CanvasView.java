@@ -304,6 +304,9 @@ public class CanvasView extends View {
     private float scaleGestureStartSpan;
     private boolean scaleGestureConfirmed;
     private boolean twoFingerScaleOccurred;
+    private boolean isTwoFingerInteracting = false;
+    private long lastTwoFingerEndTime = 0L;
+    private ValueAnimator activeScrollAnimator = null;
 
     // Multi-page & Continuous Vertical Scroll state
     private List<Page> allPages;
@@ -668,6 +671,10 @@ public class CanvasView extends View {
                 scaleGestureConfirmed = false;
             }
         });
+        scaleDetector.setQuickScaleEnabled(false);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            scaleDetector.setStylusScaleEnabled(false);
+        }
 
         strokePaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
         strokePaint.setStyle(Paint.Style.STROKE);
@@ -1618,19 +1625,6 @@ public class CanvasView extends View {
             float maxScroll = getMaxScrollY();
             viewportOffsetY = Math.max(0f, Math.min(maxScroll, effectiveScrollY));
             panOffsetY = 0f;
-            float pageW = 1440f;
-            ImageItem bg = getBackgroundImage();
-            if (bg != null && bg.width > 0) pageW = bg.width;
-            int viewW = getWidth();
-            if (viewW > 0) {
-                if (pageW * newScale <= viewW) {
-                    panOffsetX = (viewW - pageW * newScale) * 0.5f;
-                } else {
-                    float minPanX = viewW - pageW * newScale;
-                    float maxPanX = 0f;
-                    panOffsetX = Math.max(minPanX, Math.min(maxPanX, panOffsetX));
-                }
-            }
         }
     }
 
@@ -3073,24 +3067,6 @@ public class CanvasView extends View {
         float max = getMaxScrollY();
         if (viewportOffsetY < 0) viewportOffsetY = 0;
         if (viewportOffsetY > max) viewportOffsetY = max;
-
-        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
-            float pageW = 1440f;
-            ImageItem bg = getBackgroundImage();
-            if (bg != null && bg.width > 0) pageW = bg.width;
-            int viewW = getWidth();
-            if (viewW > 0) {
-                if (pageW * scaleFactor <= viewW) {
-                    panOffsetX = (viewW - pageW * scaleFactor) * 0.5f;
-                } else {
-                    float minPanX = viewW - pageW * scaleFactor;
-                    float maxPanX = 0f;
-                    if (panOffsetX < minPanX) panOffsetX = minPanX;
-                    if (panOffsetX > maxPanX) panOffsetX = maxPanX;
-                }
-            }
-            panOffsetY = 0f;
-        }
     }
 
 
@@ -5421,9 +5397,56 @@ public class CanvasView extends View {
         }
         boolean isPalm = isPalmTouch(event);
         boolean mixedStylusTouch = hasStylusPointer && pointerCount > 1;
+        boolean isWithinStylusCooldown = (SystemClock.uptimeMillis() - lastStylusActiveTime) < 800L;
         boolean canceledPointerUp = action == MotionEvent.ACTION_POINTER_UP
                 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0;
+
+        // Multi-touch two-finger zoom/pan gesture handling & release suppression
+        if (isTwoFingerInteracting) {
+            if (action == MotionEvent.ACTION_MOVE && pointerCount < 2) {
+                // Ignore residual single-pointer movement while fingers are lifting
+                return true;
+            }
+            if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
+                finishTwoFingerGesture();
+                return true;
+            }
+        }
+
+        if (action == MotionEvent.ACTION_DOWN && !hasStylusPointer) {
+            if (SystemClock.uptimeMillis() - lastTwoFingerEndTime < 150L) {
+                // Suppress accidental tap/drag bounce immediately following two-finger gesture release
+                return true;
+            }
+        }
+
+        if (!hasStylusPointer && !isWithinStylusCooldown && !isPalm && pointerCount >= 2) {
+            isTwoFingerInteracting = true;
+            handPanDragging = false;
+            removeCallbacks(longPressPasteRunnable);
+            if (activeStroke != null) {
+                cancelInProgressGesture();
+            }
+            if (scroller != null && !scroller.isFinished()) {
+                scroller.abortAnimation();
+            }
+            if (activeScrollAnimator != null && activeScrollAnimator.isRunning()) {
+                activeScrollAnimator.cancel();
+            }
+            if (velocityTracker != null) {
+                velocityTracker.recycle();
+                velocityTracker = null;
+            }
+            if (getParent() != null) {
+                getParent().requestDisallowInterceptTouchEvent(true);
+            }
+            if (!isViewportLocked) {
+                scaleDetector.onTouchEvent(event);
+            }
+            handleTwoFingerPanZoom(event, action);
+            return true;
+        }
 
         // 0. Single-Finger & Multi-Finger Canvas Move Gesture Mode
         // When enabled, fingers only move & zoom the canvas. Stylus always draws with the active pen/tool!
@@ -5437,16 +5460,6 @@ public class CanvasView extends View {
                 } else {
                     getParent().requestDisallowInterceptTouchEvent(true);
                 }
-            }
-
-            // Two-finger pinch-zoom and pan support while in Finger Move mode
-            if (pointerCount >= 2) {
-                handPanDragging = false;
-                if (!isViewportLocked) {
-                    scaleDetector.onTouchEvent(event);
-                }
-                handleTwoFingerPanZoom(event, action);
-                return true;
             }
 
             // Single-finger dragging to move canvas
@@ -5505,7 +5518,7 @@ public class CanvasView extends View {
                                 scroller.fling(0, (int) viewportOffsetY, 0, (int) -vy, 0, 0, 0, (int) getMaxScrollY());
                                 postInvalidateOnAnimation();
                             }
-                        } else if (isSwipePageEnabled && isSwipeSingleFingerEnabled) {
+                        } else if (isSwipePageEnabled && isSwipeSingleFingerEnabled && Math.abs(scaleFactor - 1.0f) <= 0.05f) {
                             float dx = touchX - handPanStartX;
                             float dy = touchY - handPanStartY;
                             float threshold = dp(swipeThresholdDp);
@@ -5534,8 +5547,6 @@ public class CanvasView extends View {
             }
             return true;
         }
-
-        boolean isWithinStylusCooldown = (SystemClock.uptimeMillis() - lastStylusActiveTime) < 800L;
 
         // Android can report a palm as a finger before canceling it. Never let
         // a finger touching during a live stylus stroke start a pinch detector.
@@ -5646,7 +5657,7 @@ public class CanvasView extends View {
                             break;
                     }
                     return true;
-                } else if (isSwipePageEnabled && isSwipeSingleFingerEnabled) {
+                } else if (isSwipePageEnabled && isSwipeSingleFingerEnabled && Math.abs(scaleFactor - 1.0f) <= 0.05f) {
                     float touchX = event.getX(0);
                     float touchY = event.getY(0);
                     switch (action) {
@@ -5676,15 +5687,6 @@ public class CanvasView extends View {
                     }
                 }
             }
-            return true;
-        }
-
-        // Fingers navigate when no stylus is touching and not during cooldown/palm.
-        if (!hasStylusPointer && !isWithinStylusCooldown && !isPalm && pointerCount >= 2) {
-            if (activeStroke != null) {
-                cancelInProgressGesture();
-            }
-            handleTwoFingerPanZoom(event, action);
             return true;
         }
 
@@ -6619,6 +6621,14 @@ public class CanvasView extends View {
         predictorStreamValid = false;
         hasPredictedInkPoint = false;
         pendingRenderRequests.clear();
+        if (activeScrollAnimator != null) {
+            activeScrollAnimator.cancel();
+            activeScrollAnimator = null;
+        }
+        if (activeZoomAnimator != null) {
+            activeZoomAnimator.cancel();
+            activeZoomAnimator = null;
+        }
         super.onDetachedFromWindow();
     }
 
@@ -6655,6 +6665,9 @@ public class CanvasView extends View {
                     if (scroller != null && !scroller.isFinished()) {
                         scroller.abortAnimation();
                     }
+                    if (activeScrollAnimator != null && activeScrollAnimator.isRunning()) {
+                        activeScrollAnimator.cancel();
+                    }
                 }
                 break;
             case MotionEvent.ACTION_MOVE:
@@ -6664,33 +6677,19 @@ public class CanvasView extends View {
                     if (Math.hypot(currentCenterX - twoFingerStartX, currentCenterY - twoFingerStartY) > dp(10f)) {
                         removeCallbacks(twoFingerSearchRunnable);
                     }
-                    // scaleDetector.onTouchEvent(event) already seamlessly handles simultaneous pinch zoom
-                    // and pan translation via applyTwoFingerTransform with zero lag, zero jerks, and zero jumps.
                 }
                 break;
             case MotionEvent.ACTION_POINTER_UP:
-            case MotionEvent.ACTION_UP:
                 removeCallbacks(twoFingerSearchRunnable);
-                if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
-                    float effectiveScrollY = viewportOffsetY - (panOffsetY / scaleFactor);
-                    float maxScroll = getMaxScrollY();
-                    viewportOffsetY = Math.max(0f, Math.min(maxScroll, effectiveScrollY));
-                    panOffsetY = 0f;
-                    float pageW = 1440f;
-                    ImageItem bg = getBackgroundImage();
-                    if (bg != null && bg.width > 0) pageW = bg.width;
-                    int viewW = getWidth();
-                    if (viewW > 0) {
-                        if (pageW * scaleFactor <= viewW) {
-                            panOffsetX = (viewW - pageW * scaleFactor) * 0.5f;
-                        } else {
-                            float minPanX = viewW - pageW * scaleFactor;
-                            float maxPanX = 0f;
-                            panOffsetX = Math.max(minPanX, Math.min(maxPanX, panOffsetX));
-                        }
-                    }
-                }
-                if (!isContinuousVerticalScroll && isSwipePageEnabled && isSwipeTwoFingerEnabled && !twoFingerScaleOccurred && event.getPointerCount() >= 2) {
+                // When one pointer lifts, do NOT clamp or snap anything!
+                // The remaining pointer will lift next without disturbing viewport coordinates.
+                break;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                removeCallbacks(twoFingerSearchRunnable);
+                if (!isContinuousVerticalScroll && isSwipePageEnabled && isSwipeTwoFingerEnabled
+                        && !twoFingerScaleOccurred && Math.abs(scaleFactor - 1.0f) <= 0.05f
+                        && event.getPointerCount() >= 2) {
                     float currentCenterX = (event.getX(0) + event.getX(1)) / 2f;
                     float currentCenterY = (event.getY(0) + event.getY(1)) / 2f;
                     float dx = currentCenterX - twoFingerStartX;
@@ -6704,18 +6703,73 @@ public class CanvasView extends View {
                         }
                     }
                 }
-                checkAndUpdateActivePage();
-                invalidate();
-                notifyZoomChange();
-                if (velocityTracker != null) {
-                    velocityTracker.recycle();
-                    velocityTracker = null;
-                }
-                manualTwoFingerPanConfirmed = false;
-                twoFingerScaleOccurred = false;
-                scaleGestureConfirmed = false;
+                finishTwoFingerGesture();
                 break;
         }
+    }
+
+    private void finishTwoFingerGesture() {
+        removeCallbacks(twoFingerSearchRunnable);
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            float effectiveScrollY = viewportOffsetY - (panOffsetY / scaleFactor);
+            float maxScroll = getMaxScrollY();
+            if (effectiveScrollY >= 0f && effectiveScrollY <= maxScroll) {
+                viewportOffsetY = effectiveScrollY;
+                panOffsetY = 0f;
+            } else {
+                float targetScroll = Math.max(0f, Math.min(maxScroll, effectiveScrollY));
+                animateOverscrollSettle(effectiveScrollY, targetScroll);
+            }
+        }
+        // In both continuous and single-page modes, panOffsetX is left EXACTLY
+        // where the user positioned it with their two fingers - zero snapping, zero jerks!
+
+        checkAndUpdateActivePage();
+        invalidate();
+        notifyZoomChange();
+        if (velocityTracker != null) {
+            velocityTracker.recycle();
+            velocityTracker = null;
+        }
+        isTwoFingerInteracting = false;
+        lastTwoFingerEndTime = SystemClock.uptimeMillis();
+        handPanDragging = false;
+        manualTwoFingerPanConfirmed = false;
+        twoFingerScaleOccurred = false;
+        scaleGestureConfirmed = false;
+    }
+
+    private void animateOverscrollSettle(float fromScrollY, float targetScrollY) {
+        if (activeScrollAnimator != null && activeScrollAnimator.isRunning()) {
+            activeScrollAnimator.cancel();
+        }
+        viewportOffsetY = fromScrollY;
+        panOffsetY = 0f;
+        ValueAnimator anim = ValueAnimator.ofFloat(fromScrollY, targetScrollY);
+        anim.setDuration(220L);
+        anim.setInterpolator(new DecelerateInterpolator(1.8f));
+        anim.addUpdateListener(animation -> {
+            viewportOffsetY = (float) animation.getAnimatedValue();
+            invalidate();
+            if (changeListener != null) {
+                changeListener.onScrollChanged(viewportOffsetY, getMaxScrollY());
+            }
+        });
+        anim.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                viewportOffsetY = targetScrollY;
+                panOffsetY = 0f;
+                clampViewport();
+                checkAndUpdateActivePage();
+                invalidate();
+                if (activeScrollAnimator == anim) {
+                    activeScrollAnimator = null;
+                }
+            }
+        });
+        activeScrollAnimator = anim;
+        anim.start();
     }
 
     private static int findStylusPointerIndex(MotionEvent event) {
