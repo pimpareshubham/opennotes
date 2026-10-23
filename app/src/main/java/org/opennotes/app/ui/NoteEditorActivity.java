@@ -3139,9 +3139,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             boolean isCurrent = (!isFitPageActive && zoom == currentReset);
             String desc;
             if (isPdf) {
-                if (zoom <= 75) desc = "Overview centered in viewport with 120 fps animation";
-                else if (zoom == 100) desc = "Standard 100% size centered in viewport with 120 fps animation";
-                else if (zoom <= 150) desc = "Enlarged reading centered in viewport with 120 fps animation";
+                if (zoom <= 75) desc = "Overview centered in viewport";
+                else if (zoom == 100) desc = "Standard 100% size centered in viewport";
+                else if (zoom <= 150) desc = "Enlarged reading centered in viewport";
                 else desc = "High-precision detailed view centered in viewport";
             } else {
                 if (zoom <= 75) desc = "Wide overview for seeing entire page layout";
