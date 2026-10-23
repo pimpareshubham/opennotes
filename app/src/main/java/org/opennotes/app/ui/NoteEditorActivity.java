@@ -5387,15 +5387,23 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         // 2. Synchronously save per-notebook configuration
         saveNotebookConfig();
 
-        // 3. Asynchronously update SQLite database record
+        // 3. Update SQLite database record
         final long nId = notebookId;
-        executeSaveTask(() -> {
+        if (isFinishing() || isDestroyed()) {
             try {
                 dbHelper.updateNotebookViewState(nId, pageIdx, scrollY, zoom, panX, panY);
             } catch (Throwable t) {
                 Log.w("NoteEditorActivity", "Failed to persist view state to db", t);
             }
-        });
+        } else {
+            executeSaveTask(() -> {
+                try {
+                    dbHelper.updateNotebookViewState(nId, pageIdx, scrollY, zoom, panX, panY);
+                } catch (Throwable t) {
+                    Log.w("NoteEditorActivity", "Failed to persist view state to db", t);
+                }
+            });
+        }
     }
 
     private void showSwipeGestureOptionsDialog() {
@@ -6510,18 +6518,59 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         dialog.show();
     }
 
+    private final java.util.concurrent.atomic.AtomicBoolean isAutoSaveRunning = new java.util.concurrent.atomic.AtomicBoolean(false);
+    private final java.util.concurrent.atomic.AtomicBoolean hasPendingSaveRequest = new java.util.concurrent.atomic.AtomicBoolean(false);
+
     private void triggerRealtimeAutoSave() {
-        saveDebounceHandler.removeCallbacksAndMessages(null);
-        saveDebounceHandler.postDelayed(() -> {
-            if (isFinishing() || isDestroyed()) return;
-            saveCurrentPage();
-        }, 600);
+        if (isFinishing() || isDestroyed()) return;
+        hasPendingSaveRequest.set(true);
+        if (isAutoSaveRunning.compareAndSet(false, true)) {
+            executeSaveTask(this::runAutoSaveLoop);
+        }
+    }
+
+    private void runAutoSaveLoop() {
+        try {
+            while (hasPendingSaveRequest.getAndSet(false)) {
+                if (isFinishing() || isDestroyed()) break;
+                List<Page> snapshots = new ArrayList<>();
+                if (pages != null && !pages.isEmpty()) {
+                    for (Page p : pages) {
+                        if (p != null && (p.isModified || p.id == 0) && p.isContentLoaded) {
+                            p.isModified = false;
+                            if (p.isInfinite && p == currentPage && canvasView != null) {
+                                p.setCanvasHeight(canvasView.getContentHeight());
+                            }
+                            snapshots.add(p.createSnapshot());
+                        }
+                    }
+                } else if (currentPage != null && (currentPage.isModified || currentPage.id == 0) && currentPage.isContentLoaded) {
+                    currentPage.isModified = false;
+                    if (currentPage.isInfinite && canvasView != null) {
+                        currentPage.setCanvasHeight(canvasView.getContentHeight());
+                    }
+                    snapshots.add(currentPage.createSnapshot());
+                }
+
+                for (Page s : snapshots) {
+                    dbHelper.savePage(s);
+                }
+            }
+        } finally {
+            isAutoSaveRunning.set(false);
+            if (hasPendingSaveRequest.get() && !isFinishing() && !isDestroyed()) {
+                if (isAutoSaveRunning.compareAndSet(false, true)) {
+                    executeSaveTask(this::runAutoSaveLoop);
+                }
+            }
+        }
     }
 
     private void saveCurrentPage() {
         saveNotebookViewState();
         saveNotebookConfig();
         saveDebounceHandler.removeCallbacksAndMessages(null);
+        hasPendingSaveRequest.set(false);
         if (pages != null && !pages.isEmpty()) {
             for (Page p : pages) {
                 if (p != null) {
@@ -6532,7 +6581,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     if ((p.isModified || p.id == 0) && p.isContentLoaded) {
                         p.isModified = false;
                         final Page snapshot = p.createSnapshot();
-                        executeSaveTask(() -> dbHelper.savePage(snapshot));
+                        dbHelper.savePage(snapshot);
                     }
                 }
             }
@@ -6544,7 +6593,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if ((currentPage.isModified || currentPage.id == 0) && currentPage.isContentLoaded) {
                 currentPage.isModified = false;
                 final Page snapshot = currentPage.createSnapshot();
-                executeSaveTask(() -> dbHelper.savePage(snapshot));
+                dbHelper.savePage(snapshot);
             }
         }
     }
@@ -6774,6 +6823,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
         try {
             saveExecutor.shutdown();
+            saveExecutor.awaitTermination(300, java.util.concurrent.TimeUnit.MILLISECONDS);
         } catch (Exception ignored) {}
         try {
             loadExecutor.shutdownNow();

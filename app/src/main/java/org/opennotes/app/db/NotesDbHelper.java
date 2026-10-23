@@ -111,6 +111,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     };
 
     private static NotesDbHelper instance;
+    private static final Object FILE_IO_LOCK = new Object();
     private final Context appContext;
     private final List<Notebook> cachedNotebooks = new java.util.concurrent.CopyOnWriteArrayList<>();
     private final Map<Long, Notebook> notebookCache = new ConcurrentHashMap<>();
@@ -662,36 +663,45 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             return data;
         }
         if (appContext == null) return data;
+        File dir = new File(appContext.getFilesDir(), "page_data");
+        if (!dir.exists()) dir.mkdirs();
+        File targetFile = new File(dir, prefix + "_" + pageKey + ".dat");
+        File tempFile = new File(dir, prefix + "_" + pageKey + "_" + System.nanoTime() + ".tmp");
         try {
-            File dir = new File(appContext.getFilesDir(), "page_data");
-            if (!dir.exists()) dir.mkdirs();
-            File targetFile = new File(dir, prefix + "_" + pageKey + ".dat");
-            File tempFile = new File(dir, prefix + "_" + pageKey + ".tmp");
             try (FileOutputStream fos = new FileOutputStream(tempFile);
                  GZIPOutputStream gzos = new GZIPOutputStream(fos)) {
                 gzos.write(data.getBytes(StandardCharsets.UTF_8));
                 gzos.finish();
                 fos.flush();
             }
-            if (tempFile.exists()) {
-                if (targetFile.exists()) {
-                    targetFile.delete();
-                }
-                if (!tempFile.renameTo(targetFile)) {
-                    try (FileInputStream in = new FileInputStream(tempFile);
-                         FileOutputStream out = new FileOutputStream(targetFile)) {
-                        byte[] buf = new byte[8192];
-                        int len;
-                        while ((len = in.read(buf)) != -1) {
-                            out.write(buf, 0, len);
+            if (tempFile.exists() && tempFile.length() > 0) {
+                synchronized (FILE_IO_LOCK) {
+                    if (!tempFile.renameTo(targetFile)) {
+                        File backupFile = new File(dir, prefix + "_" + pageKey + ".bak");
+                        if (targetFile.exists()) {
+                            targetFile.renameTo(backupFile);
+                        }
+                        if (!tempFile.renameTo(targetFile)) {
+                            try (FileInputStream in = new FileInputStream(tempFile);
+                                 FileOutputStream out = new FileOutputStream(targetFile)) {
+                                byte[] buf = new byte[8192];
+                                int len;
+                                while ((len = in.read(buf)) != -1) {
+                                    out.write(buf, 0, len);
+                                }
+                            }
+                            tempFile.delete();
+                        }
+                        if (backupFile.exists()) {
+                            backupFile.delete();
                         }
                     }
-                    tempFile.delete();
                 }
             }
             return "GZFILE:" + targetFile.getName();
         } catch (Exception e) {
             Log.e("NotesDbHelper", "Failed to write data to file, storing in DB directly", e);
+            if (tempFile.exists()) tempFile.delete();
             return data;
         }
     }
@@ -703,26 +713,42 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             String fileName = storedValue.substring(7);
             File dir = new File(appContext.getFilesDir(), "page_data");
             File file = new File(dir, fileName);
-            if (!file.exists() || file.length() == 0) {
-                String base = fileName.endsWith(".dat") ? fileName.substring(0, fileName.length() - 4) : fileName;
-                File tempFile = new File(dir, base + ".tmp");
-                if (tempFile.exists() && tempFile.length() > 0) {
-                    tempFile.renameTo(file);
+            synchronized (FILE_IO_LOCK) {
+                if (!file.exists() || file.length() == 0) {
+                    String base = fileName.endsWith(".dat") ? fileName.substring(0, fileName.length() - 4) : fileName;
+                    File backupFile = new File(dir, base + ".bak");
+                    if (backupFile.exists() && backupFile.length() > 0) {
+                        backupFile.renameTo(file);
+                    }
                 }
-            }
-            if (!file.exists()) return "";
-            try (FileInputStream fis = new FileInputStream(file);
-                 GZIPInputStream gzis = new GZIPInputStream(fis);
-                 ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                byte[] buffer = new byte[8192];
-                int len;
-                while ((len = gzis.read(buffer)) != -1) {
-                    baos.write(buffer, 0, len);
+                if (!file.exists() || file.length() == 0) return "";
+                try (FileInputStream fis = new FileInputStream(file);
+                     GZIPInputStream gzis = new GZIPInputStream(fis);
+                     ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                    byte[] buffer = new byte[8192];
+                    int len;
+                    while ((len = gzis.read(buffer)) != -1) {
+                        baos.write(buffer, 0, len);
+                    }
+                    return baos.toString(StandardCharsets.UTF_8.name());
+                } catch (Exception e) {
+                    Log.e("NotesDbHelper", "Failed to read data from " + fileName, e);
+                    String base = fileName.endsWith(".dat") ? fileName.substring(0, fileName.length() - 4) : fileName;
+                    File backupFile = new File(dir, base + ".bak");
+                    if (backupFile.exists() && backupFile.length() > 0) {
+                        try (FileInputStream fis = new FileInputStream(backupFile);
+                             GZIPInputStream gzis = new GZIPInputStream(fis);
+                             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                            byte[] buffer = new byte[8192];
+                            int len;
+                            while ((len = gzis.read(buffer)) != -1) {
+                                baos.write(buffer, 0, len);
+                            }
+                            return baos.toString(StandardCharsets.UTF_8.name());
+                        } catch (Exception ignored) {}
+                    }
+                    return "";
                 }
-                return baos.toString(StandardCharsets.UTF_8.name());
-            } catch (Exception e) {
-                Log.e("NotesDbHelper", "Failed to read data from " + fileName, e);
-                return "";
             }
         }
         return storedValue;
@@ -855,7 +881,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         savePage(page);
     }
 
-    public void savePage(Page page) {
+    public synchronized void savePage(Page page) {
         if (page == null) return;
         if (!page.isContentLoaded) {
             // NEVER save an unhydrated shell page to the database!
