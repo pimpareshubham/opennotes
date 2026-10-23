@@ -750,6 +750,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private static final String TOOLBAR_ORDER_PREFS = "toolbar_customization";
     private static final String TOOLBAR_ORDER_KEY = "tool_dock_order_v1";
+    private View activeToolbarDragView;
+    private boolean activeToolbarDragWasClickable;
+    private boolean activeToolbarDragWasLongClickable;
+    private boolean toolbarDragInProgress;
 
     /** Lets users drag toolbar actions into their preferred order and keeps it across launches. */
     private void setupToolbarReordering() {
@@ -778,6 +782,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
                 @Override
                 public boolean onTouch(View view, MotionEvent event) {
+                    if (toolbarDragInProgress && event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                        return true;
+                    }
                     switch (event.getActionMasked()) {
                         case MotionEvent.ACTION_DOWN:
                             downX = event.getRawX();
@@ -801,12 +808,22 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                                 dragArmHandler.removeCallbacks(armDrag);
                                 android.content.ClipData dragData = android.content.ClipData.newPlainText(
                                         "toolbar-item", String.valueOf(view.getId()));
+                                activeToolbarDragView = view;
+                                activeToolbarDragWasClickable = view.isClickable();
+                                activeToolbarDragWasLongClickable = restoreLongClickable;
+                                toolbarDragInProgress = true;
+                                // The source button must not run its click or configuration
+                                // action at any point during the system drag session.
+                                view.setClickable(false);
+                                view.setLongClickable(false);
+                                view.cancelLongPress();
                                 dragStarted = view.startDragAndDrop(
                                         dragData, new View.DragShadowBuilder(view), view, 0);
                                 if (dragStarted) {
                                     view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
                                     return true;
                                 }
+                                restoreActiveToolbarDragView();
                             }
                             return dragStarted;
                         case MotionEvent.ACTION_UP:
@@ -820,7 +837,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             }
                             dragArmed = false;
                             dragStarted = false;
-                            if (restoreLongClickable) view.setLongClickable(true);
+                            if (restoreLongClickable && !toolbarDragInProgress) view.setLongClickable(true);
                             restoreLongClickable = false;
                             return consumed;
                         default:
@@ -858,11 +875,23 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     }
                     return true;
                 case android.view.DragEvent.ACTION_DRAG_ENDED:
+                    restoreActiveToolbarDragView();
                     return true;
                 default:
                     return true;
             }
         });
+    }
+
+    private void restoreActiveToolbarDragView() {
+        View draggedView = activeToolbarDragView;
+        activeToolbarDragView = null;
+        toolbarDragInProgress = false;
+        if (draggedView == null) return;
+        draggedView.setClickable(activeToolbarDragWasClickable);
+        draggedView.setLongClickable(activeToolbarDragWasLongClickable);
+        activeToolbarDragWasClickable = false;
+        activeToolbarDragWasLongClickable = false;
     }
 
     private boolean isMovableToolbarItem(View view) {
