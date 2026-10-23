@@ -11,6 +11,7 @@ import org.opennotes.app.model.Notebook;
 import org.opennotes.app.model.Page;
 import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ImageItem;
+import org.opennotes.app.model.Stroke;
 import org.opennotes.app.util.PdfPageRenderer;
 
 import android.graphics.pdf.PdfRenderer;
@@ -24,8 +25,11 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -723,9 +727,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 }
                 if (!file.exists() || file.length() == 0) return "";
                 try (FileInputStream fis = new FileInputStream(file);
-                     GZIPInputStream gzis = new GZIPInputStream(fis);
-                     ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                    byte[] buffer = new byte[8192];
+                     GZIPInputStream gzis = new GZIPInputStream(fis, 32768);
+                     ByteArrayOutputStream baos = new ByteArrayOutputStream((int) Math.max(16384, file.length() * 4))) {
+                    byte[] buffer = new byte[32768];
                     int len;
                     while ((len = gzis.read(buffer)) != -1) {
                         baos.write(buffer, 0, len);
@@ -737,9 +741,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                     File backupFile = new File(dir, base + ".bak");
                     if (backupFile.exists() && backupFile.length() > 0) {
                         try (FileInputStream fis = new FileInputStream(backupFile);
-                             GZIPInputStream gzis = new GZIPInputStream(fis);
-                             ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                            byte[] buffer = new byte[8192];
+                             GZIPInputStream gzis = new GZIPInputStream(fis, 32768);
+                             ByteArrayOutputStream baos = new ByteArrayOutputStream((int) Math.max(16384, backupFile.length() * 4))) {
+                            byte[] buffer = new byte[32768];
                             int len;
                             while ((len = gzis.read(buffer)) != -1) {
                                 baos.write(buffer, 0, len);
@@ -977,8 +981,12 @@ public class NotesDbHelper extends SQLiteOpenHelper {
      * 2. Immediately loads strokes/shapes/images for the active page and page 0.
      * 3. Retains all pages in memory cache so subsequent opens are instantaneous (0ms).
      */
+    private final Set<Long> healedNotebookIds = Collections.synchronizedSet(new HashSet<>());
+
     public void healPdfPagesIfNeeded(long notebookId, SQLiteDatabase db) {
         if (db == null || notebookId <= 0) return;
+        if (healedNotebookIds.contains(notebookId)) return;
+        healedNotebookIds.add(notebookId);
         Cursor c = null;
         String pdfRefSample = null;
         try {
@@ -1124,12 +1132,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             return list;
         }
 
-        // Immediately load the active target page and page 0
+        // Immediately load only the active target page
         int targetIdx = Math.max(0, Math.min(initialActivePageIndex, list.size() - 1));
         ensurePageLoaded(list.get(targetIdx));
-        if (targetIdx != 0) {
-            ensurePageLoaded(list.get(0));
-        }
 
         return list;
     }
@@ -1189,6 +1194,16 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             } finally {
                 if (c != null) c.close();
             }
+
+            // Precompute cached stroke bounds on background thread so onDraw is instant
+            if (page.strokes != null) {
+                for (Stroke s : page.strokes) {
+                    if (s != null) {
+                        s.getBounds();
+                    }
+                }
+            }
+
             page.isContentLoaded = true;
             page.isModified = false;
         }
@@ -1211,24 +1226,6 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 rawImages = readColumnChunked(db, page.id, COL_PAGE_IMAGES);
             }
             page.imagesFromJson(readLargeDataFromFile(rawImages));
-        }
-
-        if (page.images.isEmpty() && db != null) {
-            healPdfPagesIfNeeded(page.notebookId, db);
-            Cursor rc = null;
-            try {
-                rc = db.query(TABLE_PAGES, new String[]{COL_PAGE_IMAGES, COL_PAGE_CANVAS_HEIGHT},
-                        COL_PAGE_ID + "=?", new String[]{String.valueOf(page.id)}, null, null, null);
-                if (rc != null && rc.moveToFirst()) {
-                    String healedImages = rc.getString(0);
-                    page.imagesFromJson(readLargeDataFromFile(healedImages));
-                    float h = rc.getFloat(1);
-                    if (h > 0) page.canvasHeight = h;
-                }
-            } catch (Throwable ignored) {
-            } finally {
-                if (rc != null) rc.close();
-            }
         }
     }
 

@@ -853,7 +853,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     applyLoadedNotebook(loadedNotebook, resultPages);
                     dbHelper.preloadRemainingPagesAsync(notebookId, resultPages, targetPage, () -> {
                         if (!isFinishing() && !isDestroyed() && canvasView != null) {
-                            canvasView.postInvalidate();
+                            if (canvasView.isContinuousVerticalScroll()) {
+                                canvasView.postInvalidate();
+                            }
                         }
                     });
                 });

@@ -109,29 +109,41 @@ public class Page {
     }
 
     public String strokesToJson() {
-        JSONArray arr = new JSONArray();
         List<Stroke> copy;
         synchronized (strokes) {
             copy = new ArrayList<>(strokes);
         }
-        for (Stroke s : copy) {
-            try {
-                arr.put(s.toJson());
-            } catch (JSONException ignored) {}
+        if (copy.isEmpty()) return "[]";
+        try {
+            StringBuilder sb = new StringBuilder(Math.max(64, copy.size() * 512));
+            org.opennotes.app.util.FastStrokeParser.writeStrokes(copy, sb);
+            return sb.toString();
+        } catch (Throwable fallback) {
+            JSONArray arr = new JSONArray();
+            for (Stroke s : copy) {
+                try {
+                    arr.put(s.toJson());
+                } catch (JSONException ignored) {}
+            }
+            return arr.toString();
         }
-        return arr.toString();
     }
 
     public void strokesFromJson(String jsonStr) {
         synchronized (strokes) {
             strokes.clear();
-            if (jsonStr == null || jsonStr.trim().isEmpty()) return;
+            if (jsonStr == null || jsonStr.trim().isEmpty() || "[]".equals(jsonStr.trim())) return;
             try {
-                JSONArray arr = new JSONArray(jsonStr);
-                for (int i = 0; i < arr.length(); i++) {
-                    strokes.add(Stroke.fromJson(arr.getJSONObject(i)));
-                }
-            } catch (JSONException ignored) {}
+                List<Stroke> parsed = org.opennotes.app.util.FastStrokeParser.parseStrokes(jsonStr);
+                strokes.addAll(parsed);
+            } catch (Throwable fallback) {
+                try {
+                    JSONArray arr = new JSONArray(jsonStr);
+                    for (int i = 0; i < arr.length(); i++) {
+                        strokes.add(Stroke.fromJson(arr.getJSONObject(i)));
+                    }
+                } catch (JSONException ignored) {}
+            }
         }
     }
 
