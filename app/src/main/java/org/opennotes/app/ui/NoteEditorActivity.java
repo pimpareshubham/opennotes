@@ -6251,8 +6251,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (fullscreen) {
             topBar.animate().translationY(-topBar.getHeight()).alpha(0f).setDuration(220)
                     .withEndAction(() -> topBar.setVisibility(View.GONE)).start();
-            floatingViewportPill.animate().alpha(0f).setDuration(180)
-                    .withEndAction(() -> floatingViewportPill.setVisibility(View.GONE)).start();
+            floatingViewportPill.animate().cancel();
+            floatingViewportPill.setVisibility(View.VISIBLE);
+            floatingViewportPill.setAlpha(1f);
             cardToolProperties.setVisibility(View.GONE);
             lassoFloatingActionBar.setVisibility(View.GONE);
             btnExitFullscreen.setVisibility(View.VISIBLE);
