@@ -300,18 +300,6 @@
             app:tint="@color/text_primary"
             android:background="?selectableItemBackgroundBorderless" />
 
-        <!-- Paste (Visible when clipboard has contents) -->
-        <ImageView
-            android:id="@+id/btnToolbarPaste"
-            android:layout_width="@dimen/editor_history_button_size"
-            android:layout_height="@dimen/editor_history_button_size"
-            android:padding="7dp"
-            android:src="@drawable/ic_paste"
-            app:tint="@color/accent"
-            android:background="?selectableItemBackgroundBorderless"
-            android:contentDescription="Paste from clipboard"
-            android:visibility="gone" />
-
         <View
             android:layout_width="1dp"
             android:layout_height="22dp"

@@ -265,7 +265,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private boolean isZenFullscreen = false;
 
     // Clipboard Paste shortcuts
-    private ImageView btnToolbarPaste;
     private View layoutLongPressPastePopup;
 
     // Image Picker & Voice Recorder & Font Picker & Handwriting Profile
@@ -612,15 +611,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         btnExitFullscreen = findViewById(R.id.btnExitFullscreen);
 
-        btnToolbarPaste = findViewById(R.id.btnToolbarPaste);
         layoutLongPressPastePopup = findViewById(R.id.layoutLongPressPastePopup);
-        if (btnToolbarPaste != null) {
-            btnToolbarPaste.setOnClickListener(v -> {
-                canvasView.pasteSelection();
-                Toast.makeText(this, "Pasted from clipboard", Toast.LENGTH_SHORT).show();
-                updatePasteButtonVisibility();
-            });
-        }
 
         canvasView.setOnCanvasChangeListener(this);
         canvasView.setOnPageSwipeListener(new CanvasView.OnPageSwipeListener() {
@@ -4157,10 +4148,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     public void updatePasteButtonVisibility() {
         if (canvasView == null) return;
-        boolean hasClipboard = canvasView.hasClipboardContents();
-        if (btnToolbarPaste != null) {
-            btnToolbarPaste.setVisibility(hasClipboard ? View.VISIBLE : View.GONE);
-        }
         updateLassoActionAvailability();
     }
 
