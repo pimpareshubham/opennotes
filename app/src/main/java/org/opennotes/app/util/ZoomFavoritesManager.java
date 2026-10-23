@@ -85,6 +85,9 @@ public class ZoomFavoritesManager {
     }
 
     private static final String KEY_DEFAULT_RESET_ZOOM = "default_reset_zoom_level";
+    public static final String PDF_RESET_MODE_FIT_PAGE = "FIT_PAGE";
+    public static final String PDF_RESET_MODE_FAVORITE_CENTERED = "FAVORITE_CENTERED";
+    private static final String KEY_PDF_RESET_MODE = "pdf_reset_mode";
 
     /**
      * Gets the user's preferred zoom percentage to reset to (defaults to 100%).
@@ -101,5 +104,22 @@ public class ZoomFavoritesManager {
         if (zoomPercent < 10 || zoomPercent > 2000) return;
         SharedPreferences prefs = getPrefs(context);
         prefs.edit().putInt(KEY_DEFAULT_RESET_ZOOM, zoomPercent).apply();
+    }
+
+    /**
+     * Gets the preferred PDF reset mode (defaults to FIT_PAGE).
+     */
+    public static synchronized String getPdfResetMode(Context context) {
+        SharedPreferences prefs = getPrefs(context);
+        return prefs.getString(KEY_PDF_RESET_MODE, PDF_RESET_MODE_FIT_PAGE);
+    }
+
+    /**
+     * Sets the preferred PDF reset mode (FIT_PAGE or FAVORITE_CENTERED).
+     */
+    public static synchronized void setPdfResetMode(Context context, String mode) {
+        if (mode == null) return;
+        SharedPreferences prefs = getPrefs(context);
+        prefs.edit().putString(KEY_PDF_RESET_MODE, mode).apply();
     }
 }

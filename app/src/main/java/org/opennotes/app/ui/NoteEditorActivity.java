@@ -1470,6 +1470,49 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
+    private String getPdfResetMode() {
+        if (notebookId > 0) {
+            NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, notebookId);
+            if (config != null && config.pdfResetMode != null) {
+                return config.pdfResetMode;
+            }
+        }
+        return ZoomFavoritesManager.getPdfResetMode(this);
+    }
+
+    private void setPdfResetMode(String mode) {
+        if (mode == null) return;
+        ZoomFavoritesManager.setPdfResetMode(this, mode);
+        if (notebookId > 0) {
+            NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, notebookId);
+            if (config == null) config = new NotebookConfigManager.NotebookConfig();
+            config.pdfResetMode = mode;
+            NotebookConfigManager.saveConfig(this, notebookId, config);
+        }
+    }
+
+    private boolean isPdfResetFitPage() {
+        return ZoomFavoritesManager.PDF_RESET_MODE_FIT_PAGE.equals(getPdfResetMode());
+    }
+
+    private void executeResetZoom() {
+        if (canvasView == null) return;
+        if (canvasView.isPdfDocument()) {
+            if (isPdfResetFitPage()) {
+                canvasView.fitPageToAvailableSpace(true);
+                Toast.makeText(this, "Aligned to page fit 📄", Toast.LENGTH_SHORT).show();
+            } else {
+                int targetResetZoom = getFavoriteResetZoom();
+                canvasView.resetPdfToZoomCentered(targetResetZoom, true);
+                Toast.makeText(this, "Zoom reset to " + targetResetZoom + "% ★ (Centered)", Toast.LENGTH_SHORT).show();
+            }
+        } else {
+            int targetResetZoom = getFavoriteResetZoom();
+            canvasView.resetZoom(targetResetZoom);
+            Toast.makeText(this, "Zoom reset to " + targetResetZoom + "% ★", Toast.LENGTH_SHORT).show();
+        }
+    }
+
     private void toggleFavoriteCurrentZoom() {
         if (canvasView == null || btnFavorite == null) return;
         int currentZoom = Math.round(canvasView.getZoomPercent());
@@ -1481,6 +1524,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         } else {
             ZoomFavoritesManager.addFavorite(this, currentZoom);
             setFavoriteResetZoom(currentZoom);
+            if (canvasView.isPdfDocument()) {
+                setPdfResetMode(ZoomFavoritesManager.PDF_RESET_MODE_FAVORITE_CENTERED);
+            }
+            saveNotebookConfig();
             updateFavoriteZoomIcon(currentZoom);
             btnFavorite.animate().scaleX(1.35f).scaleY(1.35f).setDuration(120)
                     .withEndAction(() -> btnFavorite.animate().scaleX(1.0f).scaleY(1.0f).setDuration(120).start())
@@ -1793,6 +1840,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         // Viewport Pill
         btnFavorite.setOnClickListener(v -> toggleFavoriteCurrentZoom());
+        btnFavorite.setOnLongClickListener(v -> {
+            showResetZoomFavoritesMenu();
+            return true;
+        });
 
         textZoomPercent.setOnClickListener(v -> showZoomPickerDialog());
 
@@ -1816,16 +1867,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 resetZoomHandler.removeCallbacksAndMessages(null);
                 resetZoomHandler.postDelayed(() -> {
                     if (isFinishing() || isDestroyed()) return;
-                    if (canvasView != null && canvasView.isPdfDocument()) {
-                        canvasView.fitPageToAvailableSpace(true);
-                        Toast.makeText(this, "Aligned to page fit", Toast.LENGTH_SHORT).show();
-                    } else {
-                        int targetResetZoom = getFavoriteResetZoom();
-                        if (canvasView != null) {
-                            canvasView.resetZoom(targetResetZoom);
-                        }
-                        Toast.makeText(this, "Zoom reset to " + targetResetZoom + "% ★", Toast.LENGTH_SHORT).show();
-                    }
+                    executeResetZoom();
                 }, 300L);
             }
         });
@@ -2355,6 +2397,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             config.lassoMode = canvasView.getLassoMode();
             config.laserMode = canvasView.getLaserMode();
             config.defaultResetZoom = getFavoriteResetZoom();
+            config.pdfResetMode = getPdfResetMode();
 
             NotebookConfigManager.saveConfig(this, notebookId, config);
         } catch (Throwable t) {
@@ -2535,6 +2578,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
         if (config.defaultResetZoom != null && config.defaultResetZoom >= 10) {
             ZoomFavoritesManager.setDefaultResetZoom(this, config.defaultResetZoom);
+        }
+        if (config.pdfResetMode != null) {
+            ZoomFavoritesManager.setPdfResetMode(this, config.pdfResetMode);
         }
     }
 
@@ -3054,6 +3100,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void showResetZoomFavoritesMenu() {
         if (canvasView == null) return;
+        boolean isPdf = canvasView.isPdfDocument();
+        boolean isFitPageActive = isPdf && isPdfResetFitPage();
+
         List<Integer> favorites = ZoomFavoritesManager.getFavoriteZoomLevels(this);
         List<Integer> sortedOptions = new ArrayList<>();
         if (favorites != null && !favorites.isEmpty()) {
@@ -3072,23 +3121,50 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         int currentReset = getFavoriteResetZoom();
 
         ModernOptionsSelectorDialog.Builder builder = new ModernOptionsSelectorDialog.Builder(this)
-                .setTitle("Reset Zoom Target")
-                .setSubtitle("Choose your favorite zoom level for one-tap reset")
-                .setHeaderSymbol("★");
+                .setTitle(isPdf ? "PDF Reset Viewport" : "Reset Zoom Target")
+                .setSubtitle(isPdf ? "Choose Page Fit or Favorite Viewport (Centered) for one-tap reset" : "Choose your favorite zoom level for one-tap reset")
+                .setHeaderSymbol(isPdf ? "🎯" : "★");
+
+        if (isPdf) {
+            builder.addOption(0, "📄", "Fit Page to Screen",
+                    "Fit page width edge-to-edge in screen", isFitPageActive, () -> {
+                        setPdfResetMode(ZoomFavoritesManager.PDF_RESET_MODE_FIT_PAGE);
+                        saveNotebookConfig();
+                        canvasView.fitPageToAvailableSpace(true);
+                        Toast.makeText(this, "Reset target set to: Fit to Page 📄", Toast.LENGTH_SHORT).show();
+                    });
+        }
 
         for (int zoom : sortedOptions) {
-            boolean isCurrent = (zoom == currentReset);
+            boolean isCurrent = (!isFitPageActive && zoom == currentReset);
             String desc;
-            if (zoom <= 75) desc = "Wide overview for seeing entire page layout";
-            else if (zoom == 100) desc = "Standard 100% natural handwriting size";
-            else if (zoom <= 150) desc = "Comfortable enlarged writing and reading";
-            else desc = "High-precision detailed note taking";
+            if (isPdf) {
+                if (zoom <= 75) desc = "Overview centered in viewport with 120 fps animation";
+                else if (zoom == 100) desc = "Standard 100% size centered in viewport with 120 fps animation";
+                else if (zoom <= 150) desc = "Enlarged reading centered in viewport with 120 fps animation";
+                else desc = "High-precision detailed view centered in viewport";
+            } else {
+                if (zoom <= 75) desc = "Wide overview for seeing entire page layout";
+                else if (zoom == 100) desc = "Standard 100% natural handwriting size";
+                else if (zoom <= 150) desc = "Comfortable enlarged writing and reading";
+                else desc = "High-precision detailed note taking";
+            }
 
             final int chosenZoom = zoom;
-            builder.addOption(zoom, "★", zoom + "% Zoom", desc, isCurrent, () -> {
+            String label = isPdf ? (zoom + "% Zoom (Centered)") : (zoom + "% Zoom");
+            builder.addOption(zoom, "★", label, desc, isCurrent, () -> {
+                if (isPdf) {
+                    setPdfResetMode(ZoomFavoritesManager.PDF_RESET_MODE_FAVORITE_CENTERED);
+                }
                 setFavoriteResetZoom(chosenZoom);
-                canvasView.resetZoom(chosenZoom);
-                Toast.makeText(this, "Reset zoom set to " + chosenZoom + "% ★", Toast.LENGTH_SHORT).show();
+                saveNotebookConfig();
+                if (isPdf) {
+                    canvasView.resetPdfToZoomCentered(chosenZoom, true);
+                    Toast.makeText(this, "Reset target set to " + chosenZoom + "% ★ (Centered)", Toast.LENGTH_SHORT).show();
+                } else {
+                    canvasView.resetZoom(chosenZoom);
+                    Toast.makeText(this, "Reset zoom set to " + chosenZoom + "% ★", Toast.LENGTH_SHORT).show();
+                }
             });
         }
 
@@ -3140,9 +3216,19 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         ImageButton btnDeleteFavoriteZoom = itemView.findViewById(R.id.btnDeleteFavoriteZoom);
 
                         textZoomPercent.setText(favZoom + "%");
+                        boolean isPdf = (canvasView != null && canvasView.isPdfDocument());
+                        boolean isPdfCentered = isPdf && !isPdfResetFitPage();
                         if (favZoom == currentReset) {
-                            badgeCurrentZoom.setText(favZoom == currentZoom ? "Current ★ Reset" : "★ Reset Target");
-                            badgeCurrentZoom.setVisibility(View.VISIBLE);
+                            boolean isTarget = !isPdf || isPdfCentered;
+                            if (isTarget) {
+                                badgeCurrentZoom.setText(favZoom == currentZoom ? "Current ★ Reset" : "★ Reset Target");
+                                badgeCurrentZoom.setVisibility(View.VISIBLE);
+                            } else if (favZoom == currentZoom) {
+                                badgeCurrentZoom.setText("Current");
+                                badgeCurrentZoom.setVisibility(View.VISIBLE);
+                            } else {
+                                badgeCurrentZoom.setVisibility(View.GONE);
+                            }
                         } else if (favZoom == currentZoom) {
                             badgeCurrentZoom.setText("Current");
                             badgeCurrentZoom.setVisibility(View.VISIBLE);
@@ -3153,7 +3239,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         // Clicking favorite item sets the zoom AND sets it as the reset zoom target
                         itemView.setOnClickListener(v -> {
                             setFavoriteResetZoom(favZoom);
-                            canvasView.setZoom(favZoom);
+                            if (canvasView != null && canvasView.isPdfDocument()) {
+                                setPdfResetMode(ZoomFavoritesManager.PDF_RESET_MODE_FAVORITE_CENTERED);
+                                saveNotebookConfig();
+                                canvasView.resetPdfToZoomCentered(favZoom, true);
+                            } else {
+                                canvasView.setZoom(favZoom);
+                            }
                             Toast.makeText(NoteEditorActivity.this, "Zoom set to " + favZoom + "% ★ (Reset Target)", Toast.LENGTH_SHORT).show();
                             dialog.dismiss();
                         });
@@ -3193,6 +3285,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             btnAddCurrentToFavorites.setOnClickListener(v -> {
                 ZoomFavoritesManager.addFavorite(this, currentZoom);
                 setFavoriteResetZoom(currentZoom);
+                if (canvasView != null && canvasView.isPdfDocument()) {
+                    setPdfResetMode(ZoomFavoritesManager.PDF_RESET_MODE_FAVORITE_CENTERED);
+                }
+                saveNotebookConfig();
                 Toast.makeText(this, "Zoom " + currentZoom + "% added to favorites & set as reset target ★", Toast.LENGTH_SHORT).show();
                 updateFavoriteZoomIcon(currentZoom);
                 btnAddCurrentToFavorites.setText("★ Current Zoom Favorited");
@@ -3207,6 +3303,28 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         // Populate Standard Presets
         if (layoutPresetsList != null) {
             layoutPresetsList.removeAllViews();
+            if (canvasView != null && canvasView.isPdfDocument()) {
+                View fitPageItem = LayoutInflater.from(this).inflate(R.layout.item_preset_zoom_level, layoutPresetsList, false);
+                TextView textPresetZoomPercent = fitPageItem.findViewById(R.id.textPresetZoomPercent);
+                TextView badgePresetCurrent = fitPageItem.findViewById(R.id.badgePresetCurrent);
+                textPresetZoomPercent.setText("📄 Fit Page to Screen");
+                boolean isFitPageActive = isPdfResetFitPage();
+                if (isFitPageActive) {
+                    badgePresetCurrent.setText("Reset Target");
+                    badgePresetCurrent.setVisibility(View.VISIBLE);
+                } else {
+                    badgePresetCurrent.setVisibility(View.GONE);
+                }
+                fitPageItem.setOnClickListener(v -> {
+                    setPdfResetMode(ZoomFavoritesManager.PDF_RESET_MODE_FIT_PAGE);
+                    saveNotebookConfig();
+                    canvasView.fitPageToAvailableSpace(true);
+                    Toast.makeText(NoteEditorActivity.this, "Reset target set to: Fit Page 📄", Toast.LENGTH_SHORT).show();
+                    dialog.dismiss();
+                });
+                layoutPresetsList.addView(fitPageItem);
+            }
+
             for (int preset : ZoomFavoritesManager.PRESET_ZOOM_LEVELS) {
                 View presetItem = LayoutInflater.from(this).inflate(R.layout.item_preset_zoom_level, layoutPresetsList, false);
                 TextView textPresetZoomPercent = presetItem.findViewById(R.id.textPresetZoomPercent);
@@ -3222,7 +3340,13 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
                 presetItem.setOnClickListener(v -> {
                     setFavoriteResetZoom(preset);
-                    canvasView.setZoom(preset);
+                    if (canvasView != null && canvasView.isPdfDocument()) {
+                        setPdfResetMode(ZoomFavoritesManager.PDF_RESET_MODE_FAVORITE_CENTERED);
+                        saveNotebookConfig();
+                        canvasView.resetPdfToZoomCentered(preset, true);
+                    } else {
+                        canvasView.setZoom(preset);
+                    }
                     Toast.makeText(NoteEditorActivity.this, "Zoom set to " + preset + "% ★ (Reset Target)", Toast.LENGTH_SHORT).show();
                     dialog.dismiss();
                 });
@@ -3232,20 +3356,18 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         if (btnResetZoomDialog != null) {
+            boolean isPdf = (canvasView != null && canvasView.isPdfDocument());
+            boolean isFitPageActive = isPdf && isPdfResetFitPage();
             int target = getFavoriteResetZoom();
             if (btnResetZoomDialog instanceof com.google.android.material.button.MaterialButton) {
-                ((com.google.android.material.button.MaterialButton) btnResetZoomDialog).setText("Reset (" + target + "%)");
+                if (isFitPageActive) {
+                    ((com.google.android.material.button.MaterialButton) btnResetZoomDialog).setText("Reset (Fit Page)");
+                } else {
+                    ((com.google.android.material.button.MaterialButton) btnResetZoomDialog).setText("Reset (" + target + "%)");
+                }
             }
             btnResetZoomDialog.setOnClickListener(v -> {
-                if (canvasView != null && canvasView.isPdfDocument()) {
-                    canvasView.fitPageToAvailableSpace(true);
-                    Toast.makeText(this, "Aligned to page fit", Toast.LENGTH_SHORT).show();
-                } else {
-                    if (canvasView != null) {
-                        canvasView.resetZoom(target);
-                    }
-                    Toast.makeText(this, "Zoom reset to " + target + "% ★", Toast.LENGTH_SHORT).show();
-                }
+                executeResetZoom();
                 dialog.dismiss();
             });
         }

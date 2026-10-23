@@ -54,6 +54,7 @@ public final class NotebookConfigManager {
     private static final String KEY_LASSO_MODE = "lasso_mode_";
     private static final String KEY_LASER_MODE = "laser_mode_";
     private static final String KEY_DEFAULT_RESET_ZOOM = "default_reset_zoom_";
+    private static final String KEY_PDF_RESET_MODE = "pdf_reset_mode_";
     private static final String KEY_TOOL_WIDTH_PREFIX = "tw_";
     private static final String KEY_TOOL_COLOR_PREFIX = "tc_";
 
@@ -76,6 +77,7 @@ public final class NotebookConfigManager {
         public CanvasView.LassoMode lassoMode = null;
         public CanvasView.LaserMode laserMode = null;
         public Integer defaultResetZoom = null;
+        public String pdfResetMode = null;
 
         public final Map<DrawingTool, Float> toolWidths = new HashMap<>();
         public final Map<DrawingTool, Integer> toolColors = new HashMap<>();
@@ -195,6 +197,9 @@ public final class NotebookConfigManager {
             if (sp.contains(KEY_DEFAULT_RESET_ZOOM + notebookId)) {
                 config.defaultResetZoom = sp.getInt(KEY_DEFAULT_RESET_ZOOM + notebookId, 100);
             }
+            if (sp.contains(KEY_PDF_RESET_MODE + notebookId)) {
+                config.pdfResetMode = sp.getString(KEY_PDF_RESET_MODE + notebookId, null);
+            }
 
             // Restore tool-specific widths and colors
             for (DrawingTool t : DrawingTool.values()) {
@@ -275,6 +280,9 @@ public final class NotebookConfigManager {
             if (config.defaultResetZoom != null && config.defaultResetZoom >= 10) {
                 editor.putInt(KEY_DEFAULT_RESET_ZOOM + notebookId, config.defaultResetZoom);
             }
+            if (config.pdfResetMode != null) {
+                editor.putString(KEY_PDF_RESET_MODE + notebookId, config.pdfResetMode);
+            }
 
             for (Map.Entry<DrawingTool, Float> entry : config.toolWidths.entrySet()) {
                 if (entry.getKey() != null && entry.getValue() != null && entry.getValue() > 0f) {
@@ -314,6 +322,8 @@ public final class NotebookConfigManager {
             editor.remove(KEY_AUTO_BEAUTIFY + notebookId);
             editor.remove(KEY_LASSO_MODE + notebookId);
             editor.remove(KEY_LASER_MODE + notebookId);
+            editor.remove(KEY_DEFAULT_RESET_ZOOM + notebookId);
+            editor.remove(KEY_PDF_RESET_MODE + notebookId);
 
             for (DrawingTool t : DrawingTool.values()) {
                 editor.remove(KEY_TOOL_WIDTH_PREFIX + t.name() + "_" + notebookId);

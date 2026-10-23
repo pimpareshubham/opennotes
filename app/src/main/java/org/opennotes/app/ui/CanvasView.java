@@ -1407,8 +1407,8 @@ public class CanvasView extends View {
 
             ValueAnimator anim = ValueAnimator.ofFloat(0f, 1f);
             activeZoomAnimator = anim;
-            anim.setDuration(280);
-            anim.setInterpolator(new android.view.animation.DecelerateInterpolator(1.8f));
+            anim.setDuration(320);
+            anim.setInterpolator(new android.view.animation.DecelerateInterpolator(2.0f));
             float finalTargetScale = targetScale;
             float finalTargetPanX = targetPanX;
             float finalTargetPanY = targetPanY;
@@ -1422,7 +1422,142 @@ public class CanvasView extends View {
                 checkAndUpdateActivePage();
                 invalidate();
                 notifyZoomChange();
-                notifyLassoSelection();
+                if (hasSelection()) {
+                    notifyLassoSelection();
+                }
+            });
+            anim.addListener(new android.animation.AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(android.animation.Animator animation) {
+                    scaleFactor = finalTargetScale;
+                    panOffsetX = finalTargetPanX;
+                    panOffsetY = finalTargetPanY;
+                    viewportOffsetY = finalTargetViewportY;
+                    clampViewport();
+                    checkAndUpdateActivePage();
+                    invalidate();
+                    notifyZoomChange();
+                    notifyLassoSelection();
+                    if (activeZoomAnimator == anim) {
+                        activeZoomAnimator = null;
+                    }
+                }
+            });
+            anim.start();
+        } else {
+            scaleFactor = targetScale;
+            panOffsetX = targetPanX;
+            panOffsetY = targetPanY;
+            viewportOffsetY = targetViewportOffsetY;
+            clampViewport();
+            checkAndUpdateActivePage();
+            invalidate();
+            notifyZoomChange();
+            notifyLassoSelection();
+        }
+    }
+
+    /**
+     * Resets zoom to the specified target level for a PDF page, aligning the PDF page
+     * to the exact horizontal and vertical center of the viewport with buttery-smooth 120 fps animation.
+     */
+    public void resetPdfToZoomCentered(float targetZoomPercent, boolean animated) {
+        int viewW = getWidth();
+        int viewH = getHeight();
+        if (viewW <= 0 || viewH <= 0) {
+            return;
+        }
+
+        float targetScale = Math.max(0.10f, Math.min(16.0f, targetZoomPercent / 100f));
+
+        Page activePage = (isContinuousVerticalScroll && allPages != null && activePageIndex >= 0 && activePageIndex < allPages.size())
+                ? allPages.get(activePageIndex)
+                : currentPage;
+        ImageItem bgImg = getPageBackgroundImage(activePage);
+
+        float pageW = (bgImg != null && bgImg.width > 0) ? bgImg.width : (activePage != null ? getPageWidth(activePage) : viewW);
+        float pageH = (bgImg != null && bgImg.height > 0) ? bgImg.height : (activePage != null ? getPageHeight(activePage) : viewH);
+
+        if (pageW <= 0f) pageW = viewW;
+        if (pageH <= 0f) pageH = viewH;
+
+        // Horizontally center the PDF page within the viewport
+        float targetPanX = (viewW - pageW * targetScale) * 0.5f;
+
+        float targetPanY;
+        float targetViewportOffsetY;
+
+        if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+            targetPanY = 0f;
+            int pageIdx = (activePageIndex >= 0 && activePageIndex < allPages.size())
+                    ? activePageIndex
+                    : Math.max(0, Math.min(allPages.size() - 1, findPageIndexAtY(viewportOffsetY)));
+            float pageTop = getPageTop(pageIdx);
+            float startScale = Math.max(0.01f, scaleFactor);
+
+            float focusY = viewH * 0.5f;
+            float currentCenterDocY = (focusY - panOffsetY) / startScale + viewportOffsetY;
+
+            float activePageTopScreenY = panOffsetY + (pageTop - viewportOffsetY) * startScale;
+
+            if (Math.abs(activePageTopScreenY) <= dp(80f)) {
+                targetViewportOffsetY = pageTop;
+            } else {
+                targetViewportOffsetY = currentCenterDocY - (focusY / targetScale);
+            }
+            float maxScrollAtTarget = Math.max(0f, getTotalPagesHeight() - (viewH / targetScale));
+            targetViewportOffsetY = Math.max(0f, Math.min(targetViewportOffsetY, maxScrollAtTarget));
+        } else {
+            if (pageH * targetScale <= viewH) {
+                targetPanY = (viewH - pageH * targetScale) * 0.5f;
+            } else {
+                float startScale = Math.max(0.01f, scaleFactor);
+                float focusY = viewH * 0.5f;
+                float currentCenterDocY = (focusY - panOffsetY) / startScale;
+                if (Math.abs(panOffsetY) <= dp(80f)) {
+                    targetPanY = 0f;
+                } else {
+                    targetPanY = focusY - (currentCenterDocY * targetScale);
+                    float minPanY = viewH - pageH * targetScale;
+                    targetPanY = Math.max(minPanY, Math.min(0f, targetPanY));
+                }
+            }
+            targetViewportOffsetY = 0f;
+        }
+
+        if (activeZoomAnimator != null && activeZoomAnimator.isRunning()) {
+            activeZoomAnimator.cancel();
+        }
+        if (!scroller.isFinished()) {
+            scroller.abortAnimation();
+        }
+
+        if (animated) {
+            float startScale = scaleFactor;
+            float startPanX = panOffsetX;
+            float startPanY = panOffsetY;
+            float startViewportY = viewportOffsetY;
+
+            ValueAnimator anim = ValueAnimator.ofFloat(0f, 1f);
+            activeZoomAnimator = anim;
+            anim.setDuration(320);
+            anim.setInterpolator(new android.view.animation.DecelerateInterpolator(2.0f));
+            float finalTargetScale = targetScale;
+            float finalTargetPanX = targetPanX;
+            float finalTargetPanY = targetPanY;
+            float finalTargetViewportY = targetViewportOffsetY;
+            anim.addUpdateListener(animation -> {
+                float fraction = animation.getAnimatedFraction();
+                scaleFactor = startScale + (finalTargetScale - startScale) * fraction;
+                panOffsetX = startPanX + (finalTargetPanX - startPanX) * fraction;
+                panOffsetY = startPanY + (finalTargetPanY - startPanY) * fraction;
+                viewportOffsetY = startViewportY + (finalTargetViewportY - startViewportY) * fraction;
+                checkAndUpdateActivePage();
+                invalidate();
+                notifyZoomChange();
+                if (hasSelection()) {
+                    notifyLassoSelection();
+                }
             });
             anim.addListener(new android.animation.AnimatorListenerAdapter() {
                 @Override
@@ -1556,7 +1691,13 @@ public class CanvasView extends View {
 
     public void resetZoom() {
         if (isPdfDocument()) {
-            fitPageToAvailableSpace(true);
+            String mode = ZoomFavoritesManager.getPdfResetMode(getContext());
+            if (ZoomFavoritesManager.PDF_RESET_MODE_FAVORITE_CENTERED.equals(mode)) {
+                int targetResetZoom = ZoomFavoritesManager.getDefaultResetZoom(getContext());
+                resetPdfToZoomCentered(targetResetZoom, true);
+            } else {
+                fitPageToAvailableSpace(true);
+            }
         } else {
             int targetResetZoom = ZoomFavoritesManager.getDefaultResetZoom(getContext());
             resetZoom(targetResetZoom);
@@ -1564,6 +1705,10 @@ public class CanvasView extends View {
     }
 
     public void resetZoom(float targetZoomPercent) {
+        if (isPdfDocument()) {
+            resetPdfToZoomCentered(targetZoomPercent, true);
+            return;
+        }
         float startScale = Math.max(0.01f, scaleFactor);
         float targetScale = Math.max(0.10f, Math.min(16.0f, targetZoomPercent / 100f));
         if (Math.abs(targetScale - startScale) < 0.005f) {
