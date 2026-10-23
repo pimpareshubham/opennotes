@@ -6933,7 +6933,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .setPositiveButton("Insert", (d, w) -> {
                     String text = input.getText().toString();
                     if (!text.trim().isEmpty()) {
-                        canvasView.addTextItem(text, x, y);
+                        canvasView.addTextItemFromTextTool(text, x, y);
                     }
                 })
                 .setNegativeButton("Cancel", null);

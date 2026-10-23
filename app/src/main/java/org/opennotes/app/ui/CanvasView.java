@@ -3082,6 +3082,15 @@ public class CanvasView extends View {
     }
 
     public void addTextItem(String text, float x, float y, String fontKey) {
+        addTextItem(text, x, y, fontKey, false);
+    }
+
+    /** Inserts text while keeping the text tool active for placing another text item. */
+    public void addTextItemFromTextTool(String text, float x, float y) {
+        addTextItem(text, x, y, beautifyFontKey, true);
+    }
+
+    private void addTextItem(String text, float x, float y, String fontKey, boolean keepTextToolActive) {
         if (text == null || text.trim().isEmpty()) return;
         float actualX = (x - panOffsetX) / scaleFactor;
         float actualY = (y - panOffsetY) / scaleFactor + viewportOffsetY;
@@ -3145,7 +3154,9 @@ public class CanvasView extends View {
         lassoSelectionPageTop = pTop;
         updateSelectionBounds();
         hasLassoSelection = true;
-        currentTool = DrawingTool.LASSO;
+        if (!keepTextToolActive) {
+            currentTool = DrawingTool.LASSO;
+        }
 
         invalidate();
         notifyChange();
