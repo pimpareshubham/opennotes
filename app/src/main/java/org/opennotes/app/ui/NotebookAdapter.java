@@ -133,6 +133,7 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                         && o.updatedAt == n.updatedAt
                         && o.pageCount == n.pageCount
                         && o.isFavorite == n.isFavorite
+                        && o.isPinned == n.isPinned
                         && o.coverColor == n.coverColor
                         && java.util.Objects.equals(o.title, n.title)
                         && java.util.Objects.equals(o.folder, n.folder);
@@ -153,6 +154,7 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                     || n1.updatedAt != n2.updatedAt
                     || n1.pageCount != n2.pageCount
                     || n1.isFavorite != n2.isFavorite
+                    || n1.isPinned != n2.isPinned
                     || n1.coverColor != n2.coverColor
                     || !java.util.Objects.equals(n1.title, n2.title)
                     || !java.util.Objects.equals(n1.folder, n2.folder)) {
@@ -281,6 +283,7 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         holder.titleView.setText(nb.title);
         holder.pagesBadge.setText(nb.pageCount + (nb.pageCount == 1 ? " page" : " pages"));
         holder.dateView.setText(dateFormat.format(new Date(nb.updatedAt)));
+        holder.iconPinned.setVisibility(nb.isPinned && !isSelectionMode ? View.VISIBLE : View.GONE);
 
         // Cover styling with spine
         GradientDrawable coverBg = new GradientDrawable();
@@ -369,6 +372,7 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         ImageView btnFavorite;
         ImageView btnMore;
         ImageView checkSelect;
+        ImageView iconPinned;
 
         public NotebookViewHolder(@NonNull View itemView) {
             super(itemView);
@@ -380,6 +384,7 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             btnFavorite = itemView.findViewById(R.id.btnFavorite);
             btnMore = itemView.findViewById(R.id.btnMore);
             checkSelect = itemView.findViewById(R.id.checkSelect);
+            iconPinned = itemView.findViewById(R.id.iconPinned);
         }
     }
 }

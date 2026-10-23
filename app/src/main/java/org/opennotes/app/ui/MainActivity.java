@@ -753,6 +753,16 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 .addOption(1, "📖", "Open Notebook", "Read or continue writing in this notebook", false, () -> {
                     openNotebook(notebook.id);
                 })
+                .addOption(6, notebook.isPinned ? "📌" : "📍",
+                        notebook.isPinned ? "Unpin Notebook" : "Pin Notebook",
+                        notebook.isPinned ? "Remove this notebook from the top of the list" : "Keep this notebook at the top of the list",
+                        false, () -> {
+                            notebook.isPinned = !notebook.isPinned;
+                            final boolean pinned = notebook.isPinned;
+                            notebookIoExecutor.execute(() -> dbHelper.setPinned(notebook.id, pinned));
+                            loadNotebooks();
+                            Toast.makeText(this, pinned ? "Notebook pinned to top" : "Notebook unpinned", Toast.LENGTH_SHORT).show();
+                        })
                 .addOption(2, "✏️", getString(R.string.rename), "Change notebook title", false, () -> {
                     showRenameDialog(notebook);
                 })

@@ -43,7 +43,7 @@ import org.opennotes.app.util.NotebookViewStateManager;
 
 public class NotesDbHelper extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "opennotes.db";
-    private static final int DATABASE_VERSION = 5;
+    private static final int DATABASE_VERSION = 6;
 
     // Notebooks table
     public static final String TABLE_NOTEBOOKS = "notebooks";
@@ -56,6 +56,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     public static final String COL_NB_DEFAULT_IS_INFINITE = "default_is_infinite";
     public static final String COL_NB_PAGE_COUNT = "page_count";
     public static final String COL_NB_FAVORITE = "is_favorite";
+    public static final String COL_NB_PINNED = "is_pinned";
     public static final String COL_NB_CREATED_AT = "created_at";
     public static final String COL_NB_UPDATED_AT = "updated_at";
     public static final String COL_NB_LAST_PAGE_INDEX = "last_page_index";
@@ -216,6 +217,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 + COL_NB_DEFAULT_IS_INFINITE + " INTEGER DEFAULT 0, "
                 + COL_NB_PAGE_COUNT + " INTEGER DEFAULT 1, "
                 + COL_NB_FAVORITE + " INTEGER DEFAULT 0, "
+                + COL_NB_PINNED + " INTEGER DEFAULT 0, "
                 + COL_NB_CREATED_AT + " INTEGER, "
                 + COL_NB_UPDATED_AT + " INTEGER, "
                 + COL_NB_LAST_PAGE_INDEX + " INTEGER DEFAULT 0, "
@@ -273,6 +275,11 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_LAST_ZOOM + " REAL DEFAULT 100;");
                 db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_LAST_PAN_X + " REAL DEFAULT 0;");
                 db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_LAST_PAN_Y + " REAL DEFAULT 0;");
+            } catch (Exception ignored) {}
+        }
+        if (oldVersion < 6) {
+            try {
+                db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_PINNED + " INTEGER DEFAULT 0;");
             } catch (Exception ignored) {}
         }
     }
@@ -346,6 +353,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_NB_DEFAULT_IS_INFINITE, nb.defaultIsInfinite ? 1 : 0);
         cv.put(COL_NB_PAGE_COUNT, 1);
         cv.put(COL_NB_FAVORITE, nb.isFavorite ? 1 : 0);
+        cv.put(COL_NB_PINNED, nb.isPinned ? 1 : 0);
         cv.put(COL_NB_LAST_PAGE_INDEX, nb.lastPageIndex);
         cv.put(COL_NB_LAST_SCROLL_Y, nb.lastScrollY);
         cv.put(COL_NB_LAST_ZOOM, nb.lastZoomPercent > 0 ? nb.lastZoomPercent : 100f);
@@ -382,6 +390,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             values.put(COL_NB_DEFAULT_IS_INFINITE, notebook.defaultIsInfinite ? 1 : 0);
             values.put(COL_NB_PAGE_COUNT, Math.max(1, pages == null ? 0 : pages.size()));
             values.put(COL_NB_FAVORITE, notebook.isFavorite ? 1 : 0);
+            values.put(COL_NB_PINNED, notebook.isPinned ? 1 : 0);
             values.put(COL_NB_LAST_PAGE_INDEX, notebook.lastPageIndex);
             values.put(COL_NB_LAST_SCROLL_Y, notebook.lastScrollY);
             values.put(COL_NB_LAST_ZOOM, notebook.lastZoomPercent > 0 ? notebook.lastZoomPercent : 100f);
@@ -429,6 +438,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_NB_DEFAULT_IS_INFINITE, nb.defaultIsInfinite ? 1 : 0);
         cv.put(COL_NB_PAGE_COUNT, nb.pageCount);
         cv.put(COL_NB_FAVORITE, nb.isFavorite ? 1 : 0);
+        cv.put(COL_NB_PINNED, nb.isPinned ? 1 : 0);
         cv.put(COL_NB_LAST_PAGE_INDEX, nb.lastPageIndex);
         cv.put(COL_NB_LAST_SCROLL_Y, nb.lastScrollY);
         cv.put(COL_NB_LAST_ZOOM, nb.lastZoomPercent > 0 ? nb.lastZoomPercent : 100f);
@@ -525,6 +535,16 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         invalidateCachedNotebooksAsync();
     }
 
+    public synchronized void setPinned(long notebookId, boolean pinned) {
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues values = new ContentValues();
+        values.put(COL_NB_PINNED, pinned ? 1 : 0);
+        db.update(TABLE_NOTEBOOKS, values, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+        Notebook cached = notebookCache.get(notebookId);
+        if (cached != null) cached.isPinned = pinned;
+        invalidateCachedNotebooksAsync();
+    }
+
     public synchronized Notebook getNotebook(long id) {
         Notebook cached = notebookCache.get(id);
         if (cached != null) {
@@ -562,7 +582,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             args.add("%" + searchQuery.trim() + "%");
         }
 
-        query.append(" ORDER BY " + COL_NB_UPDATED_AT + " DESC");
+        query.append(" ORDER BY " + COL_NB_PINNED + " DESC, " + COL_NB_UPDATED_AT + " DESC");
 
         Cursor c = db.rawQuery(query.toString(), args.toArray(new String[0]));
         if (c != null) {
@@ -634,6 +654,8 @@ public class NotesDbHelper extends SQLiteOpenHelper {
 
         nb.pageCount = c.getInt(c.getColumnIndexOrThrow(COL_NB_PAGE_COUNT));
         nb.isFavorite = c.getInt(c.getColumnIndexOrThrow(COL_NB_FAVORITE)) == 1;
+        int pinnedIdx = c.getColumnIndex(COL_NB_PINNED);
+        nb.isPinned = pinnedIdx != -1 && c.getInt(pinnedIdx) == 1;
         nb.createdAt = c.getLong(c.getColumnIndexOrThrow(COL_NB_CREATED_AT));
         nb.updatedAt = c.getLong(c.getColumnIndexOrThrow(COL_NB_UPDATED_AT));
 

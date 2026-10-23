@@ -43,6 +43,18 @@
                 android:visibility="gone"
                 android:contentDescription="Select notebook" />
 
+            <ImageView
+                android:id="@+id/iconPinned"
+                android:layout_width="32dp"
+                android:layout_height="32dp"
+                android:layout_gravity="top|start"
+                android:layout_margin="8dp"
+                android:padding="7dp"
+                android:src="@drawable/ic_push_pin"
+                android:contentDescription="Pinned notebook"
+                app:tint="#38BDF8"
+                android:visibility="gone" />
+
             <!-- Page count badge -->
             <TextView
                 android:id="@+id/textPagesBadge"

@@ -767,6 +767,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 boolean pointerDown;
                 boolean dragArmed;
                 boolean dragStarted;
+                boolean restoreLongClickable;
                 final Runnable armDrag = () -> {
                     if (pointerDown) {
                         dragArmed = true;
@@ -784,6 +785,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             pointerDown = true;
                             dragArmed = false;
                             dragStarted = false;
+                            // Toolbar buttons may use long-press to open configuration menus.
+                            // Suppress that gesture while the pointer is held so a drag never
+                            // opens the button's menu before the user can move it.
+                            restoreLongClickable = view.isLongClickable();
+                            if (restoreLongClickable) view.setLongClickable(false);
+                            view.cancelLongPress();
                             dragArmHandler.postDelayed(armDrag, 300L);
                             return false;
                         case MotionEvent.ACTION_MOVE:
@@ -813,6 +820,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             }
                             dragArmed = false;
                             dragStarted = false;
+                            if (restoreLongClickable) view.setLongClickable(true);
+                            restoreLongClickable = false;
                             return consumed;
                         default:
                             return dragStarted;
@@ -4907,6 +4916,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void showMoreMenu() {
         boolean isFavNotebook = currentNotebook != null && currentNotebook.isFavorite;
+        boolean isPinnedNotebook = currentNotebook != null && currentNotebook.isPinned;
         boolean hasClipboard = canvasView != null && canvasView.hasClipboardContents();
         boolean isStylusOnly = canvasView != null && canvasView.isStylusOnly();
 
@@ -4976,6 +4986,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         final boolean fav = currentNotebook.isFavorite;
                         executeSaveTask(() -> dbHelper.setFavorite(notebookId, fav));
                         Toast.makeText(this, fav ? "Bookmarked ★ (Saved to Favorites)" : "Removed from Favorites", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .addOption(16, "📌", isPinnedNotebook ? "Unpin Notebook" : "Pin Notebook",
+                        isPinnedNotebook ? "Remove this notebook from the top of the home list" : "Keep this notebook at the top of the home list",
+                        isPinnedNotebook, () -> {
+                    if (currentNotebook != null) {
+                        currentNotebook.isPinned = !currentNotebook.isPinned;
+                        final boolean pinned = currentNotebook.isPinned;
+                        executeSaveTask(() -> dbHelper.setPinned(notebookId, pinned));
+                        Toast.makeText(this, pinned ? "Notebook pinned to top" : "Notebook unpinned", Toast.LENGTH_SHORT).show();
                     }
                 })
                 .addDestructiveOption(6, "🗑️", "Clear Canvas", "Erase all strokes on this page", () -> {

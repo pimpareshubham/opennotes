@@ -91,6 +91,7 @@ public final class NativeNoteArchive {
             notebookJson.put("defaultBgColor", notebook.defaultBgColor);
             notebookJson.put("defaultIsInfinite", notebook.defaultIsInfinite);
             notebookJson.put("favorite", notebook.isFavorite);
+            notebookJson.put("pinned", notebook.isPinned);
             notebookJson.put("createdAt", notebook.createdAt);
             notebookJson.put("updatedAt", notebook.updatedAt);
             manifest.put("notebook", notebookJson);
@@ -260,6 +261,7 @@ public final class NativeNoteArchive {
         notebook.defaultBgColor = json.optInt("defaultBgColor", 0xFF121214);
         notebook.defaultIsInfinite = json.optBoolean("defaultIsInfinite", false);
         notebook.isFavorite = json.optBoolean("favorite", false);
+        notebook.isPinned = json.optBoolean("pinned", false);
         notebook.createdAt = json.optLong("createdAt", notebook.createdAt);
         notebook.updatedAt = json.optLong("updatedAt", notebook.updatedAt);
         return notebook;

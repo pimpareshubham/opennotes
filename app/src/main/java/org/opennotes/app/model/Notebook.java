@@ -10,6 +10,7 @@ public class Notebook {
     public boolean defaultIsInfinite;
     public int pageCount;
     public boolean isFavorite;
+    public boolean isPinned;
     public long createdAt;
     public long updatedAt;
     public int lastPageIndex = 0;
