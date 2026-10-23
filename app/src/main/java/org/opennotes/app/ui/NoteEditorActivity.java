@@ -6920,6 +6920,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     @Override
     protected void onResume() {
         super.onResume();
+        enableHighRefreshRate();
         FullscreenMode.apply(this);
         updatePasteButtonVisibility();
     }

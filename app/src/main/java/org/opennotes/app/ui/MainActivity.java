@@ -285,6 +285,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     @Override
     protected void onResume() {
         super.onResume();
+        enableHighRefreshRate();
         FullscreenMode.apply(this);
         List<Notebook> cached = dbHelper.getCachedNotebooks();
         if (cached != null && !cached.isEmpty() && adapter != null) {

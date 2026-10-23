@@ -959,6 +959,13 @@ public class CanvasView extends View {
             } else if (!isColorDark(pageBackgroundColor) && !isColorDark(currentColor)) {
                 currentColor = 0xFF1E293B; // Dark ink on light page
             }
+
+            // Start decoding the page background as soon as the page is selected. Waiting for
+            // onDraw() to discover it adds an avoidable frame to every PDF open/page change.
+            ImageItem backgroundImage = getPageBackgroundImage(page);
+            if (backgroundImage != null) {
+                requestAsyncImageLoad(backgroundImage);
+            }
         }
         viewportOffsetY = 0f;
         clearSelection();
