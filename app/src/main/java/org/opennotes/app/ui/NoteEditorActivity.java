@@ -445,6 +445,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         applyResponsiveEditorLayout();
         loadNotebookData();
         setupListeners();
+        setupToolbarReordering();
         setupToolPropertyCard();
         restoreNotebookConfig(notebookId);
         updateFavoriteIcon();
@@ -745,6 +746,198 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             pageNavParams.setMarginEnd(dp(16));
         }
         pageNav.setLayoutParams(pageNavParams);
+    }
+
+    private static final String TOOLBAR_ORDER_PREFS = "toolbar_customization";
+    private static final String TOOLBAR_ORDER_KEY = "tool_dock_order_v1";
+
+    /** Lets users drag toolbar actions into their preferred order and keeps it across launches. */
+    private void setupToolbarReordering() {
+        android.widget.LinearLayout dock = findViewById(R.id.toolDockPill);
+        if (dock == null) return;
+        android.widget.HorizontalScrollView dockScroll = findViewById(R.id.toolDockScroll);
+
+        restoreToolbarOrder(dock);
+        final int touchSlop = android.view.ViewConfiguration.get(this).getScaledTouchSlop();
+        for (View item : getMovableToolbarItems(dock)) {
+            final android.os.Handler dragArmHandler = new android.os.Handler(Looper.getMainLooper());
+            item.setOnTouchListener(new View.OnTouchListener() {
+                float downX;
+                float downY;
+                boolean pointerDown;
+                boolean dragArmed;
+                boolean dragStarted;
+                final Runnable armDrag = () -> {
+                    if (pointerDown) {
+                        dragArmed = true;
+                        android.view.ViewParent parent = item.getParent();
+                        if (parent != null) parent.requestDisallowInterceptTouchEvent(true);
+                    }
+                };
+
+                @Override
+                public boolean onTouch(View view, MotionEvent event) {
+                    switch (event.getActionMasked()) {
+                        case MotionEvent.ACTION_DOWN:
+                            downX = event.getRawX();
+                            downY = event.getRawY();
+                            pointerDown = true;
+                            dragArmed = false;
+                            dragStarted = false;
+                            dragArmHandler.postDelayed(armDrag, 300L);
+                            return false;
+                        case MotionEvent.ACTION_MOVE:
+                            float deltaX = event.getRawX() - downX;
+                            float deltaY = event.getRawY() - downY;
+                            if (dragArmed && !dragStarted && Math.abs(deltaX) > touchSlop
+                                    && Math.abs(deltaX) > Math.abs(deltaY)) {
+                                dragArmHandler.removeCallbacks(armDrag);
+                                android.content.ClipData dragData = android.content.ClipData.newPlainText(
+                                        "toolbar-item", String.valueOf(view.getId()));
+                                dragStarted = view.startDragAndDrop(
+                                        dragData, new View.DragShadowBuilder(view), view, 0);
+                                if (dragStarted) {
+                                    view.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+                                    return true;
+                                }
+                            }
+                            return dragStarted;
+                        case MotionEvent.ACTION_UP:
+                        case MotionEvent.ACTION_CANCEL:
+                            boolean consumed = dragStarted;
+                            pointerDown = false;
+                            dragArmHandler.removeCallbacks(armDrag);
+                            if (dragArmed) {
+                                android.view.ViewParent parent = view.getParent();
+                                if (parent != null) parent.requestDisallowInterceptTouchEvent(false);
+                            }
+                            dragArmed = false;
+                            dragStarted = false;
+                            return consumed;
+                        default:
+                            return dragStarted;
+                    }
+                }
+            });
+        }
+
+        dock.setOnDragListener((target, event) -> {
+            switch (event.getAction()) {
+                case android.view.DragEvent.ACTION_DRAG_STARTED:
+                    return event.getLocalState() instanceof View
+                            && ((View) event.getLocalState()).getParent() == dock;
+                case android.view.DragEvent.ACTION_DROP:
+                    if (event.getLocalState() instanceof View) {
+                        reorderToolbarItem(dock, (View) event.getLocalState(), event.getX());
+                        return true;
+                    }
+                    return false;
+                case android.view.DragEvent.ACTION_DRAG_LOCATION:
+                    if (dockScroll != null) {
+                        int[] dockLocation = new int[2];
+                        int[] scrollLocation = new int[2];
+                        dock.getLocationOnScreen(dockLocation);
+                        dockScroll.getLocationOnScreen(scrollLocation);
+                        float xInScroll = event.getX() + dockLocation[0] - scrollLocation[0];
+                        int edgeSize = dp(44);
+                        int scrollStep = dp(16);
+                        if (xInScroll < edgeSize) {
+                            dockScroll.scrollBy(-scrollStep, 0);
+                        } else if (xInScroll > dockScroll.getWidth() - edgeSize) {
+                            dockScroll.scrollBy(scrollStep, 0);
+                        }
+                    }
+                    return true;
+                case android.view.DragEvent.ACTION_DRAG_ENDED:
+                    return true;
+                default:
+                    return true;
+            }
+        });
+    }
+
+    private boolean isMovableToolbarItem(View view) {
+        if (view == null || view.getId() == View.NO_ID) return false;
+        if (view instanceof ImageView) return true;
+        return view.getId() == R.id.layoutPenBoxDock
+                || view.getId() == R.id.layoutDockQuickColors;
+    }
+
+    private List<View> getMovableToolbarItems(android.widget.LinearLayout dock) {
+        List<View> items = new ArrayList<>();
+        for (int i = 0; i < dock.getChildCount(); i++) {
+            View child = dock.getChildAt(i);
+            if (isMovableToolbarItem(child)) items.add(child);
+        }
+        return items;
+    }
+
+    private void reorderToolbarItem(android.widget.LinearLayout dock, View dragged, float dropX) {
+        List<View> items = getMovableToolbarItems(dock);
+        if (!items.remove(dragged)) return;
+
+        int destination = items.size();
+        for (int i = 0; i < items.size(); i++) {
+            View item = items.get(i);
+            if (dropX < item.getX() + item.getWidth() / 2f) {
+                destination = i;
+                break;
+            }
+        }
+        items.add(destination, dragged);
+        applyToolbarOrder(dock, items);
+        saveToolbarOrder(dock);
+    }
+
+    private void restoreToolbarOrder(android.widget.LinearLayout dock) {
+        String saved = getSharedPreferences(TOOLBAR_ORDER_PREFS, MODE_PRIVATE)
+                .getString(TOOLBAR_ORDER_KEY, null);
+        if (saved == null || saved.trim().isEmpty()) return;
+
+        List<View> currentItems = getMovableToolbarItems(dock);
+        java.util.Map<String, View> itemByName = new java.util.HashMap<>();
+        for (View item : currentItems) {
+            try {
+                itemByName.put(getResources().getResourceEntryName(item.getId()), item);
+            } catch (android.content.res.Resources.NotFoundException ignored) {}
+        }
+
+        List<View> ordered = new ArrayList<>();
+        java.util.Set<View> added = java.util.Collections.newSetFromMap(
+                new java.util.IdentityHashMap<View, Boolean>());
+        for (String name : saved.split(",")) {
+            View item = itemByName.get(name);
+            if (item != null && added.add(item)) ordered.add(item);
+        }
+        for (View item : currentItems) {
+            if (added.add(item)) ordered.add(item);
+        }
+        applyToolbarOrder(dock, ordered);
+    }
+
+    private void saveToolbarOrder(android.widget.LinearLayout dock) {
+        StringBuilder value = new StringBuilder();
+        for (View item : getMovableToolbarItems(dock)) {
+            try {
+                if (value.length() > 0) value.append(',');
+                value.append(getResources().getResourceEntryName(item.getId()));
+            } catch (android.content.res.Resources.NotFoundException ignored) {}
+        }
+        getSharedPreferences(TOOLBAR_ORDER_PREFS, MODE_PRIVATE).edit()
+                .putString(TOOLBAR_ORDER_KEY, value.toString()).apply();
+    }
+
+    private void applyToolbarOrder(android.widget.LinearLayout dock, List<View> orderedItems) {
+        List<View> originalChildren = new ArrayList<>();
+        for (int i = 0; i < dock.getChildCount(); i++) originalChildren.add(dock.getChildAt(i));
+        dock.removeAllViews();
+
+        int nextItem = 0;
+        for (View original : originalChildren) {
+            View child = isMovableToolbarItem(original)
+                    ? orderedItems.get(nextItem++) : original;
+            dock.addView(child, child.getLayoutParams());
+        }
     }
 
     @Override
