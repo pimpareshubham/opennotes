@@ -379,6 +379,10 @@ public class CanvasView extends View {
     private final List<ShapeItem> selectedShapes = new ArrayList<>();
     private final List<TextItem> selectedTexts = new ArrayList<>();
     private final List<ImageItem> selectedImages = new ArrayList<>();
+    private final Set<Stroke> selectedStrokeSet = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<ShapeItem> selectedShapeSet = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<TextItem> selectedTextSet = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<ImageItem> selectedImageSet = Collections.newSetFromMap(new IdentityHashMap<>());
     private ActionRecord textSpacingPreviewRecord;
     private List<TextItem> textSpacingPreviewTargets;
     private Map<String, List<TextItem>> textSpacingPreviewGroups;
@@ -507,7 +511,12 @@ public class CanvasView extends View {
 
     private static final class TextSpacingTargets {
         final List<TextItem> affected = new ArrayList<>();
+        final Set<TextItem> affectedSet = Collections.newSetFromMap(new IdentityHashMap<>());
         final Map<String, List<TextItem>> groups = new HashMap<>();
+
+        void addAffected(TextItem item) {
+            if (affectedSet.add(item)) affected.add(item);
+        }
     }
 
 
@@ -2979,6 +2988,7 @@ public class CanvasView extends View {
 
         clearSelection();
         selectedTexts.add(item);
+        selectedTextSet.add(item);
         lassoSelectionPage = targetPage;
         lassoSelectionPageTop = pTop;
         updateSelectionBounds();
@@ -3351,7 +3361,7 @@ public class CanvasView extends View {
                 if (page.images != null) {
                     for (ImageItem img : page.images) {
                         if (img != null && !img.isBackground) {
-                            if (isTransformingSelection() && page == lassoSelectionPage && selectedImages.contains(img)) continue;
+                            if (isTransformingSelection() && page == lassoSelectionPage && selectedImageSet.contains(img)) continue;
                             drawImage(canvas, img);
                         }
                     }
@@ -3359,21 +3369,21 @@ public class CanvasView extends View {
 
                 if (page.shapes != null) {
                     for (ShapeItem shape : page.shapes) {
-                        if (isTransformingSelection() && page == lassoSelectionPage && selectedShapes.contains(shape)) continue;
+                        if (isTransformingSelection() && page == lassoSelectionPage && selectedShapeSet.contains(shape)) continue;
                         drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth, shape.lineStyle, shape.fillColor);
                     }
                 }
 
                 if (page.texts != null) {
                     for (TextItem item : page.texts) {
-                        if (isTransformingSelection() && page == lassoSelectionPage && selectedTexts.contains(item)) continue;
+                        if (isTransformingSelection() && page == lassoSelectionPage && selectedTextSet.contains(item)) continue;
                         drawTextItem(canvas, item);
                     }
                 }
 
                 if (page.strokes != null) {
                     for (Stroke stroke : page.strokes) {
-                        if (isTransformingSelection() && page == lassoSelectionPage && selectedStrokes.contains(stroke)) continue;
+                        if (isTransformingSelection() && page == lassoSelectionPage && selectedStrokeSet.contains(stroke)) continue;
                         drawStroke(canvas, stroke);
                     }
                 }
@@ -3414,7 +3424,7 @@ public class CanvasView extends View {
                 if (currentPage.images != null) {
                     for (ImageItem img : currentPage.images) {
                         if (img != null && !img.isBackground && RectF.intersects(img.getBounds(), visibleViewport)) {
-                            if (isTransformingSelection() && selectedImages.contains(img)) continue;
+                            if (isTransformingSelection() && selectedImageSet.contains(img)) continue;
                             drawImage(canvas, img);
                         }
                     }
@@ -3423,14 +3433,14 @@ public class CanvasView extends View {
                 // 3. Draw Committed Shapes (culled to visible screen)
                 for (ShapeItem shape : currentPage.shapes) {
                     if (!RectF.intersects(shape.getBounds(), visibleViewport)) continue;
-                    if (isTransformingSelection() && selectedShapes.contains(shape)) continue;
+                    if (isTransformingSelection() && selectedShapeSet.contains(shape)) continue;
                     drawShape(canvas, shape.type, shape.startX, shape.startY, shape.endX, shape.endY, shape.color, shape.strokeWidth, shape.lineStyle, shape.fillColor);
                 }
 
                 // 4. Draw Committed Text (culled to visible screen)
                 for (TextItem item : currentPage.texts) {
                     if (!RectF.intersects(item.getBounds(), visibleViewport)) continue;
-                    if (isTransformingSelection() && selectedTexts.contains(item)) continue;
+                    if (isTransformingSelection() && selectedTextSet.contains(item)) continue;
                     drawTextItem(canvas, item);
                 }
 
@@ -3440,7 +3450,7 @@ public class CanvasView extends View {
                     if (index >= currentPage.strokes.size()) break;
                     Stroke stroke = currentPage.strokes.get(index);
                     if (!RectF.intersects(stroke.getBounds(), visibleViewport)) continue;
-                    if (isTransformingSelection() && selectedStrokes.contains(stroke)) continue;
+                    if (isTransformingSelection() && selectedStrokeSet.contains(stroke)) continue;
                     drawStroke(canvas, stroke);
                 }
 
@@ -4361,6 +4371,10 @@ public class CanvasView extends View {
         selectedShapes.clear();
         selectedTexts.clear();
         selectedImages.clear();
+        selectedStrokeSet.clear();
+        selectedShapeSet.clear();
+        selectedTextSet.clear();
+        selectedImageSet.clear();
         selectionBounds.setEmpty();
         lassoPath.reset();
         lassoPoints.clear();
@@ -4386,19 +4400,35 @@ public class CanvasView extends View {
         selectedShapes.clear();
         selectedTexts.clear();
         selectedImages.clear();
+        selectedStrokeSet.clear();
+        selectedShapeSet.clear();
+        selectedTextSet.clear();
+        selectedImageSet.clear();
         if (targetPage.strokes != null) {
             for (Stroke item : targetPage.strokes) {
-                if (item != null && !item.getBounds().isEmpty()) selectedStrokes.add(item);
+                if (item != null && !item.getBounds().isEmpty()) {
+                    selectedStrokes.add(item);
+                    selectedStrokeSet.add(item);
+                }
             }
         }
         if (targetPage.shapes != null) {
-            for (ShapeItem item : targetPage.shapes) if (item != null) selectedShapes.add(item);
+            for (ShapeItem item : targetPage.shapes) if (item != null) {
+                selectedShapes.add(item);
+                selectedShapeSet.add(item);
+            }
         }
         if (targetPage.texts != null) {
-            for (TextItem item : targetPage.texts) if (item != null) selectedTexts.add(item);
+            for (TextItem item : targetPage.texts) if (item != null) {
+                selectedTexts.add(item);
+                selectedTextSet.add(item);
+            }
         }
         if (targetPage.images != null) {
-            for (ImageItem item : targetPage.images) if (item != null && !item.isBackground) selectedImages.add(item);
+            for (ImageItem item : targetPage.images) if (item != null && !item.isBackground) {
+                selectedImages.add(item);
+                selectedImageSet.add(item);
+            }
         }
         lassoPath.reset();
         lassoPoints.clear();
@@ -4426,12 +4456,19 @@ public class CanvasView extends View {
         lassoSelectionPage = targetPage;
         lassoSelectionPageTop = pTop;
         selectedStrokes.clear();
+        selectedStrokeSet.clear();
         for (Stroke item : targetPage.strokes) {
-            if (item != null && !item.getBounds().isEmpty()) selectedStrokes.add(item);
+            if (item != null && !item.getBounds().isEmpty()) {
+                selectedStrokes.add(item);
+                selectedStrokeSet.add(item);
+            }
         }
         selectedShapes.clear();
         selectedTexts.clear();
         selectedImages.clear();
+        selectedShapeSet.clear();
+        selectedTextSet.clear();
+        selectedImageSet.clear();
         lassoPath.reset();
         lassoPoints.clear();
         lastAnnouncedSelection = "";
@@ -4710,12 +4747,22 @@ public class CanvasView extends View {
         }
         selectedStrokes.clear();
         selectedStrokes.addAll(strokes);
+        selectedStrokeSet.clear();
+        selectedStrokeSet.addAll(strokes);
         selectedShapes.clear();
         selectedShapes.addAll(shapes);
+        selectedShapeSet.clear();
+        selectedShapeSet.addAll(shapes);
         selectedTexts.clear();
         selectedTexts.addAll(texts);
+        selectedTextSet.clear();
+        selectedTextSet.addAll(texts);
         selectedImages.clear();
-        if (images != null) selectedImages.addAll(images);
+        selectedImageSet.clear();
+        if (images != null) {
+            selectedImages.addAll(images);
+            selectedImageSet.addAll(images);
+        }
         updateSelectionBounds();
         hasLassoSelection = hasAnySelectedItems();
         lastAnnouncedSelection = "";
@@ -4885,7 +4932,7 @@ public class CanvasView extends View {
         TextSpacingTargets targets = new TextSpacingTargets();
         for (TextItem item : selectedTexts) {
             if (item.spacingGroupId == null || item.spacingGroupId.isEmpty()) {
-                if (!targets.affected.contains(item)) targets.affected.add(item);
+                targets.addAffected(item);
                 continue;
             }
             if (!targets.groups.containsKey(item.spacingGroupId)) {
@@ -4897,7 +4944,7 @@ public class CanvasView extends View {
                 targets.groups.put(item.spacingGroupId, group);
             }
             for (TextItem member : targets.groups.get(item.spacingGroupId)) {
-                if (!targets.affected.contains(member)) targets.affected.add(member);
+                targets.addAffected(member);
             }
         }
         return targets;
@@ -7118,6 +7165,10 @@ public class CanvasView extends View {
         selectedShapes.clear();
         selectedTexts.clear();
         selectedImages.clear();
+        selectedStrokeSet.clear();
+        selectedShapeSet.clear();
+        selectedTextSet.clear();
+        selectedImageSet.clear();
 
         List<Page> candidatePages = new ArrayList<>();
         List<Float> pageTops = new ArrayList<>();
@@ -7160,6 +7211,7 @@ public class CanvasView extends View {
                     if (s != null && RectF.intersects(s.getBounds(), localLassoBounds)
                             && strokeIntersectsLasso(s, lassoBounds, pTop)) {
                         selectedStrokes.add(s);
+                        selectedStrokeSet.add(s);
                     }
                 }
             }
@@ -7169,6 +7221,7 @@ public class CanvasView extends View {
                     if (sh != null && RectF.intersects(sh.getBounds(), localLassoBounds)
                             && shapeIntersectsLasso(sh, pTop)) {
                         selectedShapes.add(sh);
+                        selectedShapeSet.add(sh);
                     }
                 }
             }
@@ -7183,6 +7236,7 @@ public class CanvasView extends View {
                     if (words.size() <= 1) {
                         if (boundsIntersectLasso(item.getBounds(), lassoBounds, pTop)) {
                             selectedTexts.add(item);
+                            selectedTextSet.add(item);
                         }
                     } else {
                         List<WordSpan> hitWords = new ArrayList<>();
@@ -7196,6 +7250,7 @@ public class CanvasView extends View {
                             continue;
                         } else if (hitWords.size() == words.size()) {
                             selectedTexts.add(item);
+                            selectedTextSet.add(item);
                         } else {
                             splitAndSelectTextWords(pg, item, words, hitWords);
                         }
@@ -7208,6 +7263,7 @@ public class CanvasView extends View {
                     if (item != null && !item.isBackground && RectF.intersects(item.getBounds(), localLassoBounds)
                             && boundsIntersectLasso(item.getBounds(), lassoBounds, pTop)) {
                         selectedImages.add(item);
+                        selectedImageSet.add(item);
                     }
                 }
             }
@@ -7558,6 +7614,7 @@ public class CanvasView extends View {
             pg.texts.add(runItem);
             if (isSel) {
                 selectedTexts.add(runItem);
+                selectedTextSet.add(runItem);
             }
         }
         strokeSpatialIndexDirty = true;

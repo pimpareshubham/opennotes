@@ -21,10 +21,12 @@ import java.io.OutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * On-device personalization store for corrections, vocabulary, word pairs, and ink prototypes.
@@ -115,6 +117,7 @@ public class UserHandwritingModel {
     private final List<LearnedPrototype> learnedPrototypes = new ArrayList<>();
     // User-specific custom vocabulary additions
     private final List<String> customVocabulary = new ArrayList<>();
+    private final Set<String> customVocabularySet = new HashSet<>();
     // Adjacent tokens collected from text the user explicitly corrected or taught.
     private final Map<String, Integer> learnedBigrams = new HashMap<>();
 
@@ -148,7 +151,7 @@ public class UserHandwritingModel {
         }
 
         // 2. Add to user vocabulary
-        if (!customVocabulary.contains(trimmedIntended)) {
+        if (customVocabularySet.add(trimmedIntended)) {
             customVocabulary.add(trimmedIntended);
         }
         learnBigrams(trimmedIntended);
@@ -267,6 +270,7 @@ public class UserHandwritingModel {
         personalizedReplacements.clear();
         learnedPrototypes.clear();
         customVocabulary.clear();
+        customVocabularySet.clear();
         learnedBigrams.clear();
         saveToDisk();
     }
@@ -595,6 +599,7 @@ public class UserHandwritingModel {
             personalizedReplacements.clear();
             learnedPrototypes.clear();
             customVocabulary.clear();
+            customVocabularySet.clear();
             learnedBigrams.clear();
         }
 
@@ -632,8 +637,11 @@ public class UserHandwritingModel {
                     Math.max(0, MAX_IMPORTED_ENTRIES - customVocabulary.size()));
             for (int i = 0; i < limit; i++) {
                 String v = vocabArr.optString(i);
-                if (v != null && !v.trim().isEmpty() && !customVocabulary.contains(v)) {
-                    customVocabulary.add(v.trim());
+                if (v != null) {
+                    String trimmed = v.trim();
+                    if (!trimmed.isEmpty() && customVocabularySet.add(trimmed)) {
+                        customVocabulary.add(trimmed);
+                    }
                 }
             }
         }
