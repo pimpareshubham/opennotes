@@ -193,7 +193,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private LinearLayout mainToolDock;
     private ImageView btnUndo, btnRedo;
     private ImageView btnToolbarCircleToSearch;
-    private ImageView toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso;
+    private ImageView toolFountain, toolPen, toolBrush, toolHighlighter, toolPencil, toolEraser, toolLasso;
     private ImageView toolLaser, toolHand;
     private ImageView btnAutoBeautify;
     private ImageView btnTeachHandwriting;
@@ -523,6 +523,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         btnToolbarCircleToSearch = findViewById(R.id.btnToolbarCircleToSearch);
         toolFountain = findViewById(R.id.toolFountain);
         toolPen = findViewById(R.id.toolPen);
+        toolBrush = findViewById(R.id.toolBrush);
         toolHighlighter = findViewById(R.id.toolHighlighter);
         toolPencil = findViewById(R.id.toolPencil);
         toolEraser = findViewById(R.id.toolEraser);
@@ -693,7 +694,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         setViewSize(btnRedo, historyButtonSize, historyButtonSize);
         int[] drawingTools = {
                 R.id.btnToolbarCircleToSearch,
-                R.id.toolFountain, R.id.toolPen, R.id.toolEraser, R.id.toolLasso,
+                R.id.toolFountain, R.id.toolPen, R.id.toolBrush, R.id.toolEraser, R.id.toolLasso,
                 R.id.toolHighlighter, R.id.toolPencil, R.id.toolShape, R.id.toolText,
                 R.id.toolMedia, R.id.toolLaser, R.id.toolHand, R.id.btnAutoBeautify, R.id.btnTeachHandwriting
         };
@@ -948,7 +949,20 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if (item != null && added.add(item)) ordered.add(item);
         }
         for (View item : currentItems) {
-            if (added.add(item)) ordered.add(item);
+            if (!added.add(item)) continue;
+            if (item.getId() == R.id.toolBrush) {
+                int penIndex = -1;
+                for (int i = 0; i < ordered.size(); i++) {
+                    if (ordered.get(i).getId() == R.id.toolPen) {
+                        penIndex = i;
+                        break;
+                    }
+                }
+                if (penIndex >= 0) ordered.add(penIndex + 1, item);
+                else ordered.add(item);
+            } else {
+                ordered.add(item);
+            }
         }
         applyToolbarOrder(dock, ordered);
     }
@@ -1837,6 +1851,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         // Tools
         toolFountain.setOnClickListener(v -> selectOrToggleTool(DrawingTool.FOUNTAIN, "Fountain Pen Settings"));
         toolPen.setOnClickListener(v -> selectOrToggleTool(DrawingTool.PEN, "Ballpoint Pen Settings"));
+        toolBrush.setOnClickListener(v -> selectOrToggleTool(DrawingTool.BRUSH, "Paint Brush Settings"));
         toolHighlighter.setOnClickListener(v -> selectOrToggleTool(DrawingTool.HIGHLIGHTER, "Highlighter Settings"));
         toolPencil.setOnClickListener(v -> selectOrToggleTool(DrawingTool.PENCIL, "Pencil Settings"));
         toolEraser.setOnClickListener(v -> {
@@ -2562,6 +2577,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         switch (current) {
             case FOUNTAIN: return toolFountain;
             case PEN: return toolPen;
+            case BRUSH: return toolBrush;
             case HIGHLIGHTER: return toolHighlighter;
             case PENCIL: return toolPencil;
             case LASER: return toolLaser;
@@ -3136,6 +3152,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 case PEN:
                     icon.setImageResource(R.drawable.ic_pen);
                     break;
+                case BRUSH:
+                    icon.setImageResource(R.drawable.ic_paint_brush);
+                    break;
                 case PENCIL:
                     icon.setImageResource(R.drawable.ic_pencil);
                     break;
@@ -3275,7 +3294,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     }
 
     private void updateToolUi(DrawingTool tool) {
-        ImageView[] allTools = {toolFountain, toolPen, toolHighlighter, toolPencil, toolEraser, toolLasso, toolShape, toolText, toolLaser};
+        ImageView[] allTools = {toolFountain, toolPen, toolBrush, toolHighlighter, toolPencil, toolEraser, toolLasso, toolShape, toolText, toolLaser};
         for (ImageView iv : allTools) {
             if (iv != null) {
                 iv.setBackgroundResource(0);
@@ -3290,6 +3309,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 break;
             case PEN:
                 activeIv = toolPen;
+                break;
+            case BRUSH:
+                activeIv = toolBrush;
                 break;
             case HIGHLIGHTER:
                 activeIv = toolHighlighter;

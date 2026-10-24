@@ -339,6 +339,18 @@
             android:background="?selectableItemBackgroundBorderless"
             android:contentDescription="Ballpoint Pen" />
 
+        <!-- Textured Paint Brush -->
+        <ImageView
+            android:id="@+id/toolBrush"
+            android:layout_width="@dimen/editor_tool_button_size"
+            android:layout_height="@dimen/editor_tool_button_size"
+            android:padding="7dp"
+            android:layout_marginStart="3dp"
+            android:src="@drawable/ic_paint_brush"
+            android:background="?selectableItemBackgroundBorderless"
+            android:contentDescription="Textured Paint Brush"
+            android:tooltipText="Textured Paint Brush" />
+
         <!-- Eraser -->
         <ImageView
             android:id="@+id/toolEraser"

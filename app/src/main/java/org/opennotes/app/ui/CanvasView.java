@@ -542,6 +542,7 @@ public class CanvasView extends View {
     private Paint strokePaint;
     private Paint fountainPaint;
     private Paint brushPaint;
+    private Paint brushGrainPaint;
     private Paint highlighterPaint;
     private Paint templateLinePaint;
     private Paint templateMarginPaint;
@@ -719,6 +720,7 @@ public class CanvasView extends View {
         brushPaint.setStyle(Paint.Style.STROKE);
         brushPaint.setStrokeJoin(Paint.Join.ROUND);
         brushPaint.setStrokeCap(Paint.Cap.ROUND);
+        brushGrainPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
 
         highlighterPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
         highlighterPaint.setStyle(Paint.Style.STROKE);
@@ -4277,11 +4279,7 @@ public class CanvasView extends View {
 
     private void drawBrushStroke(Canvas canvas, Stroke stroke) {
         if (stroke.points.isEmpty()) return;
-        brushPaint.setColor(stroke.color);
-        brushPaint.setAlpha(220);
-        brushPaint.setStyle(Paint.Style.FILL);
-        canvas.drawPath(stroke.getPressurePath(pressureSensitivity), brushPaint);
-        brushPaint.setStyle(Paint.Style.STROKE);
+        PaintBrushRenderer.draw(canvas, stroke, pressureSensitivity, brushPaint, brushGrainPaint);
     }
 
     private void drawRotationIcon(Canvas canvas, float cx, float cy, float r) {

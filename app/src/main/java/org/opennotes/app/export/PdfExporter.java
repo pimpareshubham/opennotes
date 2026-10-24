@@ -13,6 +13,7 @@ import org.opennotes.app.db.NotesDbHelper;
 import org.opennotes.app.ai.PageWritingContext;
 import org.opennotes.app.model.DrawingPoint;
 import org.opennotes.app.model.DrawingTool;
+import org.opennotes.app.ui.PaintBrushRenderer;
 import org.opennotes.app.model.ImageItem;
 import org.opennotes.app.model.Notebook;
 import org.opennotes.app.model.Page;
@@ -207,6 +208,7 @@ public class PdfExporter {
 
                 Paint brushPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
                 brushPaint.setStyle(Paint.Style.FILL);
+                Paint brushGrainPaint = new Paint(Paint.ANTI_ALIAS_FLAG | Paint.DITHER_FLAG);
 
                 for (Stroke stroke : page.strokes) {
                     if (stroke.points == null || stroke.points.isEmpty()) continue;
@@ -217,9 +219,7 @@ public class PdfExporter {
                         canvas.drawPath(stroke.getPressurePath(1.0f), fountainPaint);
                         continue;
                     } else if (stroke.tool == DrawingTool.BRUSH) {
-                        brushPaint.setColor(stroke.color);
-                        brushPaint.setAlpha(220);
-                        canvas.drawPath(stroke.getPressurePath(1.0f), brushPaint);
+                        PaintBrushRenderer.draw(canvas, stroke, 1.0f, brushPaint, brushGrainPaint);
                         continue;
                     }
 
