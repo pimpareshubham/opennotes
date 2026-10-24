@@ -119,6 +119,15 @@ public final class PaintBrushRenderer {
         Path fibers = stroke.getBrushEdgeFibers();
         if (fibers != null) canvas.drawPath(fibers, fiberPaint);
 
+        Path tails = stroke.getBrushTailFibers();
+        if (tails != null) {
+            fiberPaint.setColor(lighten(stroke.color, style == 8 ? 2.0f : 1.28f));
+            fiberPaint.setAlpha(style == 8 ? 170 : 104);
+            fiberPaint.setStrokeWidth(Math.max(0.24f, Math.min(0.42f, stroke.width * 0.016f)));
+            fiberPaint.setStrokeCap(Paint.Cap.BUTT);
+            canvas.drawPath(tails, fiberPaint);
+        }
+
         fiberPaint.setStyle(Paint.Style.FILL);
         fiberPaint.setAlpha(255);
         glowPaint.setStyle(Paint.Style.FILL);
