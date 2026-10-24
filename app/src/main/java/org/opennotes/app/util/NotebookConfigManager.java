@@ -55,6 +55,7 @@ public final class NotebookConfigManager {
     private static final String KEY_LASER_MODE = "laser_mode_";
     private static final String KEY_DEFAULT_RESET_ZOOM = "default_reset_zoom_";
     private static final String KEY_PDF_RESET_MODE = "pdf_reset_mode_";
+    private static final String KEY_SHAPE_TYPE = "shape_type_";
     private static final String KEY_TOOL_WIDTH_PREFIX = "tw_";
     private static final String KEY_TOOL_COLOR_PREFIX = "tc_";
 
@@ -78,6 +79,7 @@ public final class NotebookConfigManager {
         public CanvasView.LaserMode laserMode = null;
         public Integer defaultResetZoom = null;
         public String pdfResetMode = null;
+        public String shapeType = null;
 
         public final Map<DrawingTool, Float> toolWidths = new HashMap<>();
         public final Map<DrawingTool, Integer> toolColors = new HashMap<>();
@@ -200,6 +202,9 @@ public final class NotebookConfigManager {
             if (sp.contains(KEY_PDF_RESET_MODE + notebookId)) {
                 config.pdfResetMode = sp.getString(KEY_PDF_RESET_MODE + notebookId, null);
             }
+            if (sp.contains(KEY_SHAPE_TYPE + notebookId)) {
+                config.shapeType = sp.getString(KEY_SHAPE_TYPE + notebookId, null);
+            }
 
             // Restore tool-specific widths and colors
             for (DrawingTool t : DrawingTool.values()) {
@@ -283,6 +288,9 @@ public final class NotebookConfigManager {
             if (config.pdfResetMode != null) {
                 editor.putString(KEY_PDF_RESET_MODE + notebookId, config.pdfResetMode);
             }
+            if (config.shapeType != null) {
+                editor.putString(KEY_SHAPE_TYPE + notebookId, config.shapeType);
+            }
 
             for (Map.Entry<DrawingTool, Float> entry : config.toolWidths.entrySet()) {
                 if (entry.getKey() != null && entry.getValue() != null && entry.getValue() > 0f) {
@@ -324,6 +332,7 @@ public final class NotebookConfigManager {
             editor.remove(KEY_LASER_MODE + notebookId);
             editor.remove(KEY_DEFAULT_RESET_ZOOM + notebookId);
             editor.remove(KEY_PDF_RESET_MODE + notebookId);
+            editor.remove(KEY_SHAPE_TYPE + notebookId);
 
             for (DrawingTool t : DrawingTool.values()) {
                 editor.remove(KEY_TOOL_WIDTH_PREFIX + t.name() + "_" + notebookId);

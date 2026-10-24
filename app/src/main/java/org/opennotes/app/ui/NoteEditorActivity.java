@@ -1949,7 +1949,21 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
         toolShape.setOnClickListener(v -> {
             closeToolPropertiesCard();
-            showShapeSelectorDialog();
+            long now = SystemClock.uptimeMillis();
+            boolean isDoubleClick = lastShapeClickTime > 0L && (now - lastShapeClickTime) < 450L;
+            lastShapeClickTime = isDoubleClick ? 0L : now;
+            if (isDoubleClick) {
+                showShapeSelectorDialog();
+                return;
+            }
+
+            DrawingTool previousTool = canvasView.getTool();
+            if (previousTool != null) saveCurrentToolWidthAndColor(previousTool);
+            canvasView.setTool(DrawingTool.SHAPE);
+            updateToolUi(DrawingTool.SHAPE);
+            if (appSettings != null) appSettings.setLastTool(DrawingTool.SHAPE);
+            restoreToolWidthAndColor(DrawingTool.SHAPE);
+            saveNotebookConfig();
         });
         toolText.setOnClickListener(v -> {
             closeToolPropertiesCard();
@@ -2253,6 +2267,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private DrawingTool lastClickedTool = null;
     private long lastEraserClickTime = 0L;
     private long lastLassoClickTime = 0L;
+    private long lastShapeClickTime = 0L;
     private long lastResetZoomClickTime = 0L;
     private final Handler resetZoomHandler = new Handler(Looper.getMainLooper());
 
@@ -2478,6 +2493,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (ev.getAction() == MotionEvent.ACTION_DOWN) {
             float rawX = ev.getRawX();
             float rawY = ev.getRawY();
+            if (!isTouchInsideView(toolShape, rawX, rawY, dpToPx(4))) {
+                lastShapeClickTime = 0L;
+            }
             boolean closedAnyMenu = false;
 
             // 1. Tool properties popup menu (Frame 50)
@@ -2620,6 +2638,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             config.laserMode = canvasView.getLaserMode();
             config.defaultResetZoom = getFavoriteResetZoom();
             config.pdfResetMode = getPdfResetMode();
+            config.shapeType = canvasView.getShapeType().name();
 
             NotebookConfigManager.saveConfig(this, notebookId, config);
         } catch (Throwable t) {
@@ -2700,6 +2719,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (savedTool == DrawingTool.HAND) savedTool = DrawingTool.FOUNTAIN;
         canvasView.setTool(savedTool);
         updateToolUi(savedTool);
+        if (config.shapeType != null) {
+            try {
+                canvasView.setShapeType(ShapeItem.Type.valueOf(config.shapeType));
+            } catch (IllegalArgumentException ignored) {}
+        }
 
         float savedWidth = config.getToolWidth(savedTool);
         if (savedWidth <= 0f) {
@@ -4454,6 +4478,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 canvasView.setShapeType(types[idx]);
                 canvasView.setTool(DrawingTool.SHAPE);
                 updateToolUi(DrawingTool.SHAPE);
+                if (appSettings != null) appSettings.setLastTool(DrawingTool.SHAPE);
+                restoreToolWidthAndColor(DrawingTool.SHAPE);
                 saveNotebookConfig();
                 Toast.makeText(this, "Draw " + shapes[idx] + " (" + fillStyleName + ")", Toast.LENGTH_SHORT).show();
             });

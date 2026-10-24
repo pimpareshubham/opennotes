@@ -34,7 +34,7 @@
         <!-- Notebook Info Bar (Aligns perfectly with regular notebook cards) -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="@dimen/home_notebook_info_height"
             android:orientation="horizontal"
             android:paddingHorizontal="14dp"
             android:paddingVertical="10dp"
@@ -67,8 +67,8 @@
             </LinearLayout>
 
             <ImageView
-                android:layout_width="28dp"
-                android:layout_height="28dp"
+                android:layout_width="36dp"
+                android:layout_height="36dp"
                 android:padding="5dp"
                 android:src="@drawable/ic_add"
                 app:tint="@color/accent"

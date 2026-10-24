@@ -86,7 +86,7 @@
         <!-- Notebook Info Bar -->
         <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="@dimen/home_notebook_info_height"
             android:orientation="horizontal"
             android:paddingHorizontal="14dp"
             android:paddingVertical="10dp"
