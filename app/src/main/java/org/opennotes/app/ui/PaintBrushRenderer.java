@@ -18,7 +18,9 @@ import java.util.Random;
 /** Shared pressure-shaped paint brush with a subtle, repeatable bristle grain. */
 public final class PaintBrushRenderer {
     private static final BitmapShader GRAIN_SHADER = new BitmapShader(
-            createGrainTile(), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+            createGrainTile(false), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
+    private static final BitmapShader HIGHLIGHT_SHADER = new BitmapShader(
+            createGrainTile(true), Shader.TileMode.REPEAT, Shader.TileMode.REPEAT);
     private static final LruCache<Integer, PorterDuffColorFilter> COLOR_FILTERS =
             new LruCache<Integer, PorterDuffColorFilter>(24);
 
@@ -30,18 +32,22 @@ public final class PaintBrushRenderer {
         Path shape = stroke.getPressurePath(pressureSensitivity);
         fillPaint.setStyle(Paint.Style.FILL);
         fillPaint.setColor(stroke.color);
-        fillPaint.setAlpha(238);
+        fillPaint.setAlpha(246);
         canvas.drawPath(shape, fillPaint);
 
         RectF bounds = stroke.getBounds();
         if (bounds == null || bounds.isEmpty()) return;
-        int darkerColor = darken(stroke.color, 0.43f);
+        int darkerColor = darken(stroke.color, 0.70f);
         canvas.save();
         canvas.clipPath(shape);
         grainPaint.setStyle(Paint.Style.FILL);
         grainPaint.setShader(GRAIN_SHADER);
         grainPaint.setColorFilter(colorFilter(darkerColor));
-        grainPaint.setAlpha(155);
+        grainPaint.setAlpha(72);
+        canvas.drawRect(bounds, grainPaint);
+        grainPaint.setShader(HIGHLIGHT_SHADER);
+        grainPaint.setColorFilter(colorFilter(lighten(stroke.color, 1.16f)));
+        grainPaint.setAlpha(42);
         canvas.drawRect(bounds, grainPaint);
         grainPaint.setShader(null);
         grainPaint.setColorFilter(null);
@@ -49,27 +55,23 @@ public final class PaintBrushRenderer {
         canvas.restore();
     }
 
-    private static Bitmap createGrainTile() {
+    private static Bitmap createGrainTile(boolean highlight) {
         final int size = 96;
         Bitmap bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
-        Random random = new Random(0x51A7B00BL);
+        Random random = new Random(highlight ? 0x51A7B00CL : 0x51A7B00BL);
         Paint grain = new Paint(Paint.ANTI_ALIAS_FLAG);
         grain.setColor(0xFFFFFFFF);
-        for (int i = 0; i < 180; i++) {
-            int alpha = 36 + random.nextInt(150);
+        int strandCount = highlight ? 38 : 58;
+        for (int i = 0; i < strandCount; i++) {
+            int alpha = highlight ? 12 + random.nextInt(34) : 14 + random.nextInt(42);
             grain.setAlpha(alpha);
-            grain.setStrokeWidth(0.35f + random.nextFloat() * 1.05f);
+            grain.setStrokeWidth(0.2f + random.nextFloat() * 0.48f);
             float x = random.nextFloat() * size;
             float y = random.nextFloat() * size;
-            float length = 2.5f + random.nextFloat() * 17f;
-            float drift = (random.nextFloat() - 0.5f) * 3f;
+            float length = 7f + random.nextFloat() * (highlight ? 24f : 32f);
+            float drift = (random.nextFloat() - 0.5f) * 1.4f;
             canvas.drawLine(x, y, x + length, y + drift, grain);
-        }
-        for (int i = 0; i < 110; i++) {
-            grain.setAlpha(30 + random.nextInt(90));
-            float radius = 0.35f + random.nextFloat() * 0.8f;
-            canvas.drawCircle(random.nextFloat() * size, random.nextFloat() * size, radius, grain);
         }
         return bitmap;
     }
@@ -79,6 +81,14 @@ public final class PaintBrushRenderer {
         int r = Math.round(((color >>> 16) & 0xFF) * amount);
         int g = Math.round(((color >>> 8) & 0xFF) * amount);
         int b = Math.round((color & 0xFF) * amount);
+        return (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    private static int lighten(int color, float amount) {
+        int a = (color >>> 24) & 0xFF;
+        int r = Math.min(255, Math.round(((color >>> 16) & 0xFF) * amount));
+        int g = Math.min(255, Math.round(((color >>> 8) & 0xFF) * amount));
+        int b = Math.min(255, Math.round((color & 0xFF) * amount));
         return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
