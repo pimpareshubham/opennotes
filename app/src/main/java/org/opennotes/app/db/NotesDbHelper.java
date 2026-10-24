@@ -43,7 +43,7 @@ import org.opennotes.app.util.NotebookViewStateManager;
 
 public class NotesDbHelper extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "opennotes.db";
-    private static final int DATABASE_VERSION = 6;
+    private static final int DATABASE_VERSION = 7;
 
     // Notebooks table
     public static final String TABLE_NOTEBOOKS = "notebooks";
@@ -51,6 +51,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     public static final String COL_NB_TITLE = "title";
     public static final String COL_NB_FOLDER = "folder";
     public static final String COL_NB_COVER_COLOR = "cover_color";
+    public static final String COL_NB_COVER_STYLE = "cover_style";
+    public static final String COL_NB_COVER_IMAGE = "cover_image_path";
+    public static final String COL_NB_COVER_TEXT = "cover_text";
     public static final String COL_NB_TEMPLATE = "template";
     public static final String COL_NB_DEFAULT_BG_COLOR = "default_bg_color";
     public static final String COL_NB_DEFAULT_IS_INFINITE = "default_is_infinite";
@@ -212,6 +215,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 + COL_NB_TITLE + " TEXT NOT NULL, "
                 + COL_NB_FOLDER + " TEXT DEFAULT 'Default', "
                 + COL_NB_COVER_COLOR + " INTEGER, "
+                + COL_NB_COVER_STYLE + " INTEGER DEFAULT -1, "
+                + COL_NB_COVER_IMAGE + " TEXT, "
+                + COL_NB_COVER_TEXT + " TEXT, "
                 + COL_NB_TEMPLATE + " TEXT, "
                 + COL_NB_DEFAULT_BG_COLOR + " INTEGER DEFAULT -1, "
                 + COL_NB_DEFAULT_IS_INFINITE + " INTEGER DEFAULT 0, "
@@ -282,6 +288,11 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                 db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_PINNED + " INTEGER DEFAULT 0;");
             } catch (Exception ignored) {}
         }
+        if (oldVersion < 7) {
+            try { db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_COVER_STYLE + " INTEGER DEFAULT -1;"); } catch (Exception ignored) {}
+            try { db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_COVER_IMAGE + " TEXT;"); } catch (Exception ignored) {}
+            try { db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_COVER_TEXT + " TEXT;"); } catch (Exception ignored) {}
+        }
     }
 
     /** Remove the old auto-created sample only when it still has its untouched default page. */
@@ -348,6 +359,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_NB_TITLE, nb.title);
         cv.put(COL_NB_FOLDER, nb.folder);
         cv.put(COL_NB_COVER_COLOR, nb.coverColor);
+        cv.put(COL_NB_COVER_STYLE, nb.coverStyle);
+        cv.put(COL_NB_COVER_IMAGE, nb.coverImagePath);
+        cv.put(COL_NB_COVER_TEXT, nb.coverText);
         cv.put(COL_NB_TEMPLATE, nb.defaultTemplate.name());
         cv.put(COL_NB_DEFAULT_BG_COLOR, nb.defaultBgColor);
         cv.put(COL_NB_DEFAULT_IS_INFINITE, nb.defaultIsInfinite ? 1 : 0);
@@ -384,6 +398,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             values.put(COL_NB_TITLE, notebook.title != null ? notebook.title : "Imported Notebook");
             values.put(COL_NB_FOLDER, notebook.folder != null ? notebook.folder : "Default");
             values.put(COL_NB_COVER_COLOR, notebook.coverColor);
+            values.put(COL_NB_COVER_STYLE, notebook.coverStyle);
+            values.put(COL_NB_COVER_IMAGE, notebook.coverImagePath);
+            values.put(COL_NB_COVER_TEXT, notebook.coverText);
             values.put(COL_NB_TEMPLATE, (notebook.defaultTemplate != null
                     ? notebook.defaultTemplate : PaperTemplate.BLANK).name());
             values.put(COL_NB_DEFAULT_BG_COLOR, notebook.defaultBgColor);
@@ -433,6 +450,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_NB_TITLE, nb.title);
         cv.put(COL_NB_FOLDER, nb.folder);
         cv.put(COL_NB_COVER_COLOR, nb.coverColor);
+        cv.put(COL_NB_COVER_STYLE, nb.coverStyle);
+        cv.put(COL_NB_COVER_IMAGE, nb.coverImagePath);
+        cv.put(COL_NB_COVER_TEXT, nb.coverText);
         cv.put(COL_NB_TEMPLATE, nb.defaultTemplate.name());
         cv.put(COL_NB_DEFAULT_BG_COLOR, nb.defaultBgColor);
         cv.put(COL_NB_DEFAULT_IS_INFINITE, nb.defaultIsInfinite ? 1 : 0);
@@ -605,6 +625,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         if (original == null) return -1;
 
         Notebook dup = new Notebook(original.title + " (Copy)", original.coverColor, original.defaultTemplate);
+        dup.coverStyle = original.coverStyle;
+        dup.coverImagePath = original.coverImagePath;
+        dup.coverText = original.coverText;
         dup.folder = original.folder;
         dup.defaultBgColor = original.defaultBgColor;
         dup.defaultIsInfinite = original.defaultIsInfinite;
@@ -643,6 +666,12 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         nb.title = c.getString(c.getColumnIndexOrThrow(COL_NB_TITLE));
         nb.folder = c.getString(c.getColumnIndexOrThrow(COL_NB_FOLDER));
         nb.coverColor = c.getInt(c.getColumnIndexOrThrow(COL_NB_COVER_COLOR));
+        int coverStyleIdx = c.getColumnIndex(COL_NB_COVER_STYLE);
+        nb.coverStyle = coverStyleIdx >= 0 ? c.getInt(coverStyleIdx) : -1;
+        int coverImageIdx = c.getColumnIndex(COL_NB_COVER_IMAGE);
+        nb.coverImagePath = coverImageIdx >= 0 ? c.getString(coverImageIdx) : null;
+        int coverTextIdx = c.getColumnIndex(COL_NB_COVER_TEXT);
+        nb.coverText = coverTextIdx >= 0 ? c.getString(coverTextIdx) : "";
         String tpl = c.getString(c.getColumnIndexOrThrow(COL_NB_TEMPLATE));
         nb.defaultTemplate = PaperTemplate.fromString(tpl);
 

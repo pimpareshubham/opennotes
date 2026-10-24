@@ -79,6 +79,14 @@ public final class NativeNoteArchive {
                 pageEntries.put(entryName);
             }
 
+            String archivedCoverImage = "";
+            if (notebook.coverImagePath != null && !notebook.coverImagePath.trim().isEmpty()) {
+                AssetResult result = writeAssetIfNeeded(context, zip, archivedAssets,
+                        notebook.coverImagePath, assetIndex);
+                assetIndex = result.nextIndex;
+                archivedCoverImage = result.reference;
+            }
+
             JSONObject manifest = new JSONObject();
             manifest.put("format", FORMAT);
             manifest.put("version", VERSION);
@@ -86,6 +94,9 @@ public final class NativeNoteArchive {
             notebookJson.put("title", notebook.title != null ? notebook.title : "Untitled Notebook");
             notebookJson.put("folder", notebook.folder != null ? notebook.folder : "Default");
             notebookJson.put("coverColor", notebook.coverColor);
+            notebookJson.put("coverStyle", notebook.coverStyle);
+            notebookJson.put("coverText", notebook.coverText != null ? notebook.coverText : "");
+            notebookJson.put("coverImage", archivedCoverImage);
             notebookJson.put("defaultTemplate", (notebook.defaultTemplate != null
                     ? notebook.defaultTemplate : PaperTemplate.BLANK).name());
             notebookJson.put("defaultBgColor", notebook.defaultBgColor);
@@ -209,6 +220,10 @@ public final class NativeNoteArchive {
             if (!installedAssets.mkdirs()) throw new IOException("Could not create storage for the notebook's media.");
 
             Map<String, String> resolvedAssets = new HashMap<>();
+            String coverImageRef = notebookJson.optString("coverImage", "");
+            if (!coverImageRef.isEmpty()) {
+                notebook.coverImagePath = resolveAsset(coverImageRef, staging, installedAssets, resolvedAssets);
+            }
             List<Page> pages = new ArrayList<>(pageList.length());
             for (int index = 0; index < pageList.length(); index++) {
                 String name = pageList.getString(index);
@@ -258,6 +273,8 @@ public final class NativeNoteArchive {
                 json.optInt("coverColor", 0xFF1E3A8A),
                 PaperTemplate.fromString(json.optString("defaultTemplate", "BLANK")));
         notebook.folder = json.optString("folder", "Default");
+        notebook.coverStyle = json.optInt("coverStyle", -1);
+        notebook.coverText = json.optString("coverText", "");
         notebook.defaultBgColor = json.optInt("defaultBgColor", 0xFF121214);
         notebook.defaultIsInfinite = json.optBoolean("defaultIsInfinite", false);
         notebook.isFavorite = json.optBoolean("favorite", false);

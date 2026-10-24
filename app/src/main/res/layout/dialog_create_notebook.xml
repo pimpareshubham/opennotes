@@ -65,6 +65,13 @@
             android:background="@drawable/bg_notebook_cover"
             android:elevation="4dp">
 
+            <ImageView
+                android:id="@+id/previewCoverImage"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="centerCrop"
+                android:visibility="gone" />
+
             <View
                 android:layout_width="12dp"
                 android:layout_height="match_parent"
@@ -81,6 +88,23 @@
                 android:textColor="#FFFFFF"
                 android:textSize="14sp"
                 android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/textPreviewCoverCaption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|center_horizontal"
+                android:layout_margin="10dp"
+                android:gravity="center"
+                android:maxLines="2"
+                android:ellipsize="end"
+                android:textColor="#EFFFFFFF"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:shadowColor="#99000000"
+                android:shadowDx="0"
+                android:shadowDy="1"
+                android:shadowRadius="4" />
         </FrameLayout>
 
         <!-- Right: Settings and Template options -->
@@ -218,21 +242,52 @@
                         android:gravity="center_vertical" />
                 </HorizontalScrollView>
 
-                <!-- Color Choices -->
-                <HorizontalScrollView
+                <!-- Notebook Cover Designs -->
+                <LinearLayout
                     android:id="@+id/containerColorChoices"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:scrollbars="none"
+                    android:orientation="vertical"
                     android:visibility="gone">
 
-                    <LinearLayout
-                        android:id="@+id/layoutColorButtons"
-                        android:layout_width="wrap_content"
+                    <HorizontalScrollView
+                        android:layout_width="match_parent"
+                        android:layout_height="84dp"
+                        android:scrollbars="none">
+                        <LinearLayout
+                            android:id="@+id/layoutColorButtons"
+                            android:layout_width="wrap_content"
+                            android:layout_height="match_parent"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical" />
+                    </HorizontalScrollView>
+
+                    <TextView
+                        android:id="@+id/btnChooseCustomCover"
+                        android:layout_width="match_parent"
+                        android:layout_height="36dp"
+                        android:layout_marginTop="4dp"
+                        android:gravity="center"
+                        android:text="🖼  Choose custom cover image"
+                        android:textColor="@color/accent"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:background="@drawable/bg_floating_pill" />
+
+                    <EditText
+                        android:id="@+id/editCoverCaption"
+                        android:layout_width="match_parent"
                         android:layout_height="38dp"
-                        android:orientation="horizontal"
-                        android:gravity="center_vertical" />
-                </HorizontalScrollView>
+                        android:layout_marginTop="6dp"
+                        android:background="@drawable/bg_search_bar"
+                        android:hint="Optional cover text"
+                        android:paddingHorizontal="10dp"
+                        android:textColor="@color/text_primary"
+                        android:textColorHint="@color/text_hint"
+                        android:textSize="12sp"
+                        android:singleLine="true"
+                        android:inputType="textCapSentences" />
+                </LinearLayout>
             </FrameLayout>
 
             <!-- Create button -->

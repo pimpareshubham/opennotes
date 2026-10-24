@@ -5,6 +5,9 @@ public class Notebook {
     public String title;
     public String folder;
     public int coverColor;
+    public int coverStyle = -1;
+    public String coverImagePath;
+    public String coverText = "";
     public PaperTemplate defaultTemplate;
     public int defaultBgColor;
     public boolean defaultIsInfinite;

@@ -1306,16 +1306,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
-    private final int[] PRESET_COVER_COLORS = {
-            0xFF1E1E24, // Dark Obsidian (Default StarNote style)
-            0xFF1E3A8A, // Deep Navy
-            0xFF065F46, // Emerald
-            0xFF334155, // Slate
-            0xFF581C87, // Plum
-            0xFF9F1239, // Crimson
-            0xFF92400E, // Amber
-            0xFF18181B  // Pitch Charcoal
-    };
+    private java.util.function.Consumer<String> pendingCoverImageCallback;
+    private final ActivityResultLauncher<String[]> openCoverImageLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri == null || pendingCoverImageCallback == null) return;
+                try {
+                    pendingCoverImageCallback.accept(NotebookCoverUi.importImage(this, uri));
+                } catch (Exception e) {
+                    Toast.makeText(this, "Could not load cover image", Toast.LENGTH_SHORT).show();
+                }
+            });
 
     private void showCreateNotebookDialog() {
         View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_create_notebook, null);
@@ -1323,6 +1323,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         TextView btnCancel = dialogView.findViewById(R.id.btnCancelCreate);
         TextView btnConfirm = dialogView.findViewById(R.id.btnConfirmCreate);
         FrameLayout previewCoverBox = dialogView.findViewById(R.id.previewCoverBox);
+        ImageView previewCoverImage = dialogView.findViewById(R.id.previewCoverImage);
+        TextView textPreviewCoverCaption = dialogView.findViewById(R.id.textPreviewCoverCaption);
+        EditText editCoverCaption = dialogView.findViewById(R.id.editCoverCaption);
+        View btnChooseCustomCover = dialogView.findViewById(R.id.btnChooseCustomCover);
         TextView textPreviewTitle = dialogView.findViewById(R.id.textPreviewTitle);
         EditText editTitle = dialogView.findViewById(R.id.editNotebookTitle);
         TextView btnFormatInfinite = dialogView.findViewById(R.id.btnFormatInfinite);
@@ -1335,18 +1339,24 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         LinearLayout layoutPageBgButtons = dialogView.findViewById(R.id.layoutPageBgButtons);
         LinearLayout layoutColorButtons = dialogView.findViewById(R.id.layoutColorButtons);
 
-        final int[] selectedCoverColor = {PRESET_COVER_COLORS[0]};
+        final int[] selectedCoverStyle = {0};
+        final int[] selectedCoverColor = {NotebookCoverStyles.startColor(0)};
+        final String[] selectedCoverImage = {null};
         final int[] selectedPageBgColor = {appSettings != null ? appSettings.getDefaultPageBgColor() : 0xFF000000};
         PaperTemplate initialTpl = appSettings != null ? appSettings.getDefaultPaperTemplate() : PaperTemplate.BLANK;
         final PaperTemplate[] selectedTemplate = {initialTpl != null ? initialTpl : PaperTemplate.BLANK};
         final boolean[] isInfinite = {true};
 
         Runnable updatePreview = () -> {
-            GradientDrawable gd = new GradientDrawable();
-            gd.setCornerRadius(16f);
-            gd.setColor(selectedCoverColor[0]);
-            gd.setStroke(2, 0xFF38BDF8);
-            previewCoverBox.setBackground(gd);
+            previewCoverBox.setBackground(selectedCoverStyle[0] >= 0
+                    ? NotebookCoverStyles.drawable(selectedCoverStyle[0])
+                    : NotebookCoverStyles.legacyDrawable(selectedCoverColor[0]));
+            Bitmap bitmap = NotebookCoverUi.decodePreview(selectedCoverImage[0]);
+            previewCoverImage.setImageBitmap(bitmap);
+            previewCoverImage.setVisibility(bitmap == null ? View.GONE : View.VISIBLE);
+            String text = editCoverCaption.getText() == null ? "" : editCoverCaption.getText().toString().trim();
+            textPreviewCoverCaption.setText(text);
+            textPreviewCoverCaption.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
         };
         updatePreview.run();
 
@@ -1493,25 +1503,34 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
         updatePageBgUi.run();
 
-        // Color choices
-        for (int col : PRESET_COVER_COLORS) {
-            View dot = new View(this);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(60, 60);
-            lp.setMargins(6, 0, 6, 0);
-            dot.setLayoutParams(lp);
-
-            GradientDrawable gd = new GradientDrawable();
-            gd.setShape(GradientDrawable.OVAL);
-            gd.setColor(col);
-            gd.setStroke(2, 0xFF475569);
-            dot.setBackground(gd);
-
-            dot.setOnClickListener(v -> {
-                selectedCoverColor[0] = col;
+        NotebookCoverUi.populateStyles(this, layoutColorButtons, 0, style -> {
+            selectedCoverStyle[0] = style;
+            selectedCoverColor[0] = NotebookCoverStyles.startColor(style);
+            selectedCoverImage[0] = null;
+            for (int i = 0; i < layoutColorButtons.getChildCount(); i++) {
+                ((GradientDrawable) layoutColorButtons.getChildAt(i).getBackground()).setStroke(
+                        Math.round((i == style ? 3 : 1) * getResources().getDisplayMetrics().density),
+                        i == style ? 0xFF38BDF8 : 0x668FFFFFFF);
+            }
+            updatePreview.run();
+        });
+        btnChooseCustomCover.setOnClickListener(v -> {
+            pendingCoverImageCallback = path -> {
+                selectedCoverImage[0] = path;
+                selectedCoverStyle[0] = -1;
+                for (int i = 0; i < layoutColorButtons.getChildCount(); i++) {
+                    ((GradientDrawable) layoutColorButtons.getChildAt(i).getBackground()).setStroke(
+                            Math.round(getResources().getDisplayMetrics().density), 0x668FFFFFFF);
+                }
                 updatePreview.run();
-            });
-            layoutColorButtons.addView(dot);
-        }
+            };
+            openCoverImageLauncher.launch(new String[]{"image/*"});
+        });
+        editCoverCaption.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { updatePreview.run(); }
+            @Override public void afterTextChanged(Editable s) {}
+        });
 
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setView(dialogView)
@@ -1525,6 +1544,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             if (title.isEmpty()) title = "Unnamed note";
 
             Notebook newNb = new Notebook(title, selectedCoverColor[0], selectedTemplate[0]);
+            newNb.coverStyle = selectedCoverStyle[0];
+            newNb.coverImagePath = selectedCoverImage[0];
+            newNb.coverText = editCoverCaption.getText() != null ? editCoverCaption.getText().toString().trim() : "";
             newNb.defaultIsInfinite = isInfinite[0];
             newNb.defaultBgColor = selectedPageBgColor[0];
             if (appSettings != null) {

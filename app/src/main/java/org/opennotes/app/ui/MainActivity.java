@@ -3,6 +3,7 @@ package org.opennotes.app.ui;
 import android.content.ClipData;
 import android.content.Intent;
 import android.graphics.Color;
+import android.graphics.Bitmap;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
@@ -83,16 +84,18 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     private boolean isFavoritesOnly = false;
     private String currentSearchQuery = "";
 
-    private final int[] PRESET_COVER_COLORS = {
-            0xFF1E1E24, // Dark Obsidian (Default StarNote style)
-            0xFF1E3A8A, // Deep Navy
-            0xFF065F46, // Emerald
-            0xFF334155, // Slate
-            0xFF581C87, // Plum
-            0xFF9F1239, // Crimson
-            0xFF92400E, // Amber
-            0xFF18181B  // Pitch Charcoal
-    };
+    private java.util.function.Consumer<String> pendingCoverImageCallback;
+
+    private final ActivityResultLauncher<String[]> openCoverImageLauncher =
+            registerForActivityResult(new ActivityResultContracts.OpenDocument(), uri -> {
+                if (uri == null || pendingCoverImageCallback == null) return;
+                try {
+                    String savedPath = NotebookCoverUi.importImage(this, uri);
+                    if (savedPath != null) pendingCoverImageCallback.accept(savedPath);
+                } catch (Exception e) {
+                    Toast.makeText(this, "Could not load cover image", Toast.LENGTH_SHORT).show();
+                }
+            });
 
     private final ExecutorService notebookIoExecutor = Executors.newSingleThreadExecutor();
     private final Handler searchDebounceHandler = new Handler(Looper.getMainLooper());
@@ -124,6 +127,9 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             });
 
     private AlertDialog backupProgressDialog;
+    private LinearProgressIndicator backupProgressIndicator;
+    private TextView backupProgressStatus;
+    private TextView backupProgressPercent;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -387,6 +393,10 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         TextView btnCancel = dialogView.findViewById(R.id.btnCancelCreate);
         TextView btnConfirm = dialogView.findViewById(R.id.btnConfirmCreate);
         FrameLayout previewCoverBox = dialogView.findViewById(R.id.previewCoverBox);
+        ImageView previewCoverImage = dialogView.findViewById(R.id.previewCoverImage);
+        TextView textPreviewCoverCaption = dialogView.findViewById(R.id.textPreviewCoverCaption);
+        EditText editCoverCaption = dialogView.findViewById(R.id.editCoverCaption);
+        View btnChooseCustomCover = dialogView.findViewById(R.id.btnChooseCustomCover);
         TextView textPreviewTitle = dialogView.findViewById(R.id.textPreviewTitle);
         EditText editTitle = dialogView.findViewById(R.id.editNotebookTitle);
         TextView btnFormatInfinite = dialogView.findViewById(R.id.btnFormatInfinite);
@@ -399,18 +409,25 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         LinearLayout layoutPageBgButtons = dialogView.findViewById(R.id.layoutPageBgButtons);
         LinearLayout layoutColorButtons = dialogView.findViewById(R.id.layoutColorButtons);
 
-        final int[] selectedCoverColor = {PRESET_COVER_COLORS[0]};
+        final int[] selectedCoverStyle = {0};
+        final int[] selectedCoverColor = {NotebookCoverStyles.startColor(0)};
+        final String[] selectedCoverImage = {null};
         final int[] selectedPageBgColor = {AppSettings.getInstance(this).getDefaultPageBgColor()};
         PaperTemplate initialTpl = AppSettings.getInstance(this).getDefaultPaperTemplate();
         final PaperTemplate[] selectedTemplate = {initialTpl != null ? initialTpl : PaperTemplate.BLANK};
         final boolean[] isInfinite = {true};
 
         Runnable updatePreview = () -> {
-            GradientDrawable gd = new GradientDrawable();
-            gd.setCornerRadius(16f);
-            gd.setColor(selectedCoverColor[0]);
-            gd.setStroke(2, 0xFF38BDF8);
-            previewCoverBox.setBackground(gd);
+            previewCoverBox.setBackground(selectedCoverStyle[0] >= 0
+                    ? NotebookCoverStyles.drawable(selectedCoverStyle[0])
+                    : NotebookCoverStyles.legacyDrawable(selectedCoverColor[0]));
+            previewCoverBox.setClipToOutline(true);
+            Bitmap bitmap = NotebookCoverUi.decodePreview(selectedCoverImage[0]);
+            previewCoverImage.setImageBitmap(bitmap);
+            previewCoverImage.setVisibility(bitmap == null ? View.GONE : View.VISIBLE);
+            String caption = editCoverCaption.getText() == null ? "" : editCoverCaption.getText().toString().trim();
+            textPreviewCoverCaption.setText(caption);
+            textPreviewCoverCaption.setVisibility(caption.isEmpty() ? View.GONE : View.VISIBLE);
         };
         updatePreview.run();
 
@@ -558,25 +575,34 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         }
         updatePageBgUi.run();
 
-        // Color choices
-        for (int col : PRESET_COVER_COLORS) {
-            View dot = new View(this);
-            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(60, 60);
-            lp.setMargins(6, 0, 6, 0);
-            dot.setLayoutParams(lp);
-
-            GradientDrawable gd = new GradientDrawable();
-            gd.setShape(GradientDrawable.OVAL);
-            gd.setColor(col);
-            gd.setStroke(2, 0xFF475569);
-            dot.setBackground(gd);
-
-            dot.setOnClickListener(v -> {
-                selectedCoverColor[0] = col;
+        NotebookCoverUi.populateStyles(this, layoutColorButtons, 0, style -> {
+            selectedCoverStyle[0] = style;
+            selectedCoverColor[0] = NotebookCoverStyles.startColor(style);
+            selectedCoverImage[0] = null;
+            for (int i = 0; i < layoutColorButtons.getChildCount(); i++) {
+                ((GradientDrawable) layoutColorButtons.getChildAt(i).getBackground()).setStroke(
+                        Math.round((i == style ? 3 : 1) * getResources().getDisplayMetrics().density),
+                        i == style ? 0xFF38BDF8 : 0x668FFFFFFF);
+            }
+            updatePreview.run();
+        });
+        btnChooseCustomCover.setOnClickListener(v -> {
+            pendingCoverImageCallback = path -> {
+                selectedCoverImage[0] = path;
+                selectedCoverStyle[0] = -1;
+                for (int i = 0; i < layoutColorButtons.getChildCount(); i++) {
+                    ((GradientDrawable) layoutColorButtons.getChildAt(i).getBackground()).setStroke(
+                            Math.round(getResources().getDisplayMetrics().density), 0x668FFFFFFF);
+                }
                 updatePreview.run();
-            });
-            layoutColorButtons.addView(dot);
-        }
+            };
+            openCoverImageLauncher.launch(new String[]{"image/*"});
+        });
+        editCoverCaption.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { updatePreview.run(); }
+            @Override public void afterTextChanged(Editable s) {}
+        });
 
         AlertDialog dialog = new MaterialAlertDialogBuilder(this)
                 .setView(dialogView)
@@ -598,6 +624,9 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             if (title.isEmpty()) title = "Unnamed note";
 
             Notebook newNb = new Notebook(title, selectedCoverColor[0], selectedTemplate[0]);
+            newNb.coverStyle = selectedCoverStyle[0];
+            newNb.coverImagePath = selectedCoverImage[0];
+            newNb.coverText = editCoverCaption.getText() != null ? editCoverCaption.getText().toString().trim() : "";
             newNb.defaultIsInfinite = isInfinite[0];
             newNb.defaultBgColor = selectedPageBgColor[0];
             AppSettings.getInstance(this).setDefaultPageBgColor(selectedPageBgColor[0]);
@@ -766,6 +795,9 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 .addOption(2, "✏️", getString(R.string.rename), "Change notebook title", false, () -> {
                     showRenameDialog(notebook);
                 })
+                .addOption(7, "🎨", "Edit Notebook Cover", "Choose a design, photo, and cover text", false, () -> {
+                    showNotebookCoverEditor(notebook);
+                })
                 .addOption(3, "📑", getString(R.string.duplicate), "Create a full copy with all pages", false, () -> {
                     duplicateNotebook(notebook);
                 })
@@ -777,6 +809,143 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 })
                 .show();
     }
+
+    private void showNotebookCoverEditor(Notebook notebook) {
+        float d = getResources().getDisplayMetrics().density;
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int pad = Math.round(20 * d);
+        root.setPadding(pad, pad, pad, pad);
+        TextView heading = new TextView(this);
+        heading.setText("Make this notebook yours");
+        heading.setTextColor(0xFFF8FAFC);
+        heading.setTextSize(18);
+        heading.setTypeface(null, android.graphics.Typeface.BOLD);
+        root.addView(heading);
+        FrameLayout preview = new FrameLayout(this);
+        LinearLayout.LayoutParams previewLp = new LinearLayout.LayoutParams(Math.round(120*d), Math.round(150*d));
+        previewLp.gravity = Gravity.CENTER_HORIZONTAL;
+        previewLp.topMargin = Math.round(12*d);
+        preview.setLayoutParams(previewLp);
+        ImageView photo = new ImageView(this);
+        photo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        preview.addView(photo, new FrameLayout.LayoutParams(-1, -1));
+        TextView title = new TextView(this);
+        title.setText(notebook.title);
+        title.setTextColor(Color.WHITE);
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(Math.round(8*d), Math.round(8*d), Math.round(8*d), Math.round(8*d));
+        title.setTypeface(null, android.graphics.Typeface.BOLD);
+        preview.addView(title, new FrameLayout.LayoutParams(-1, -1));
+        TextView captionPreview = new TextView(this);
+        captionPreview.setTextColor(0xFFEFFFFFFF);
+        captionPreview.setGravity(Gravity.CENTER);
+        captionPreview.setTextSize(10);
+        FrameLayout.LayoutParams captionLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        captionLp.setMargins(Math.round(6*d), 0, Math.round(6*d), Math.round(7*d));
+        preview.addView(captionPreview, captionLp);
+        root.addView(preview);
+
+        EditText caption = new EditText(this);
+        caption.setSingleLine(true);
+        caption.setText(notebook.coverText == null ? "" : notebook.coverText);
+        caption.setHint("Add a title or custom cover text");
+        caption.setTextColor(0xFFF8FAFC);
+        caption.setHintTextColor(0xFF94A3B8);
+        caption.setBackgroundResource(R.drawable.bg_search_bar);
+        caption.setPadding(Math.round(12*d), 0, Math.round(12*d), 0);
+        LinearLayout.LayoutParams captionLp2 = new LinearLayout.LayoutParams(-1, Math.round(44*d));
+        captionLp2.topMargin = Math.round(12*d);
+        root.addView(caption, captionLp2);
+        TextView choosePhoto = new TextView(this);
+        choosePhoto.setText("🖼  Choose a photo cover");
+        choosePhoto.setTextColor(0xFF38BDF8);
+        choosePhoto.setGravity(Gravity.CENTER);
+        choosePhoto.setBackgroundResource(R.drawable.bg_floating_pill);
+        LinearLayout.LayoutParams chooseLp = new LinearLayout.LayoutParams(-1, Math.round(40*d));
+        chooseLp.topMargin = Math.round(8*d);
+        root.addView(choosePhoto, chooseLp);
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        android.widget.GridLayout grid = new android.widget.GridLayout(this);
+        grid.setColumnCount(3);
+        int[] selected = {notebook.coverStyle >= 0 ? notebook.coverStyle : -1};
+        int[] coverColor = {notebook.coverColor};
+        String[] imagePath = {notebook.coverImagePath};
+        for (int i = 0; i < NotebookCoverStyles.count(); i++) {
+            final int style = i;
+            FrameLayout card = new FrameLayout(this);
+            android.widget.GridLayout.LayoutParams glp = new android.widget.GridLayout.LayoutParams();
+            glp.width = 0;
+            glp.height = Math.round(66*d);
+            glp.columnSpec = android.widget.GridLayout.spec(android.widget.GridLayout.UNDEFINED, 1f);
+            glp.setMargins(Math.round(4*d), Math.round(4*d), Math.round(4*d), Math.round(4*d));
+            card.setLayoutParams(glp);
+            card.setBackground(NotebookCoverStyles.drawable(i));
+            TextView label = new TextView(this);
+            label.setText(NotebookCoverStyles.NAMES[i]);
+            label.setTextColor(Color.WHITE);
+            label.setGravity(Gravity.CENTER);
+            label.setTextSize(10);
+            card.addView(label, new FrameLayout.LayoutParams(-1, -1));
+            if (selected[0] == i) ((GradientDrawable) card.getBackground()).setStroke(Math.round(3*d), 0xFF38BDF8);
+            card.setOnClickListener(v -> {
+                selected[0] = style;
+                coverColor[0] = NotebookCoverStyles.startColor(style);
+                imagePath[0] = null;
+                for (int j = 0; j < grid.getChildCount(); j++) {
+                    View child = grid.getChildAt(j);
+                    ((GradientDrawable) child.getBackground()).setStroke(Math.round(j == style ? 3*d : 1*d),
+                            j == style ? 0xFF38BDF8 : 0x668FFFFFFF);
+                }
+                updateCoverEditorPreview(preview, photo, captionPreview, selected[0], coverColor[0], null,
+                        caption.getText().toString());
+            });
+            grid.addView(card);
+        }
+        scroll.addView(grid);
+        LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(-1, Math.round(190*d));
+        scrollLp.topMargin = Math.round(8*d);
+        root.addView(scroll, scrollLp);
+        Runnable refresh = () -> updateCoverEditorPreview(preview, photo, captionPreview,
+                selected[0], coverColor[0], imagePath[0], caption.getText().toString());
+        caption.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override public void onTextChanged(CharSequence s, int start, int before, int count) { refresh.run(); }
+            @Override public void afterTextChanged(Editable s) {}
+        });
+        choosePhoto.setOnClickListener(v -> {
+            pendingCoverImageCallback = path -> {
+                imagePath[0] = path;
+                selected[0] = -1;
+                refresh.run();
+            };
+            openCoverImageLauncher.launch(new String[]{"image/*"});
+        });
+        refresh.run();
+        AlertDialog dialog = new MaterialAlertDialogBuilder(this).setView(root)
+                .setNegativeButton("Cancel", null).setPositiveButton("Save", (dlg, which) -> {
+                    notebook.coverStyle = selected[0];
+                    notebook.coverColor = coverColor[0];
+                    notebook.coverImagePath = imagePath[0];
+                    notebook.coverText = caption.getText().toString().trim();
+                    notebookIoExecutor.execute(() -> dbHelper.updateNotebook(notebook));
+                    loadNotebooks();
+                }).create();
+        ThemeUtils.styleDialog(dialog, this);
+        dialog.show();
+    }
+
+    private void updateCoverEditorPreview(FrameLayout preview, ImageView photo, TextView caption,
+                                          int style, int color, String imagePath, String text) {
+        preview.setBackground(style >= 0 ? NotebookCoverStyles.drawable(style) : NotebookCoverStyles.legacyDrawable(color));
+        preview.setClipToOutline(true);
+        Bitmap bitmap = NotebookCoverUi.decodePreview(imagePath);
+        photo.setImageBitmap(bitmap);
+        photo.setVisibility(bitmap == null ? View.GONE : View.VISIBLE);
+        caption.setText(text == null ? "" : text.trim());
+        caption.setVisibility(text == null || text.trim().isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
 
     private void showRenameDialog(Notebook notebook) {
         android.widget.FrameLayout container = new android.widget.FrameLayout(this);
@@ -1145,11 +1314,19 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         dialog.show();
     }
 
-    private void showBackupProgress(String message) {
+    private void showBackupProgress(String title, String subtitle) {
         if (isFinishing() || isDestroyed()) return;
+        View progressView = LayoutInflater.from(this).inflate(R.layout.dialog_backup_progress, null);
+        ((TextView) progressView.findViewById(R.id.textBackupTitle)).setText(title);
+        ((TextView) progressView.findViewById(R.id.textBackupSubtitle)).setText(subtitle);
+        backupProgressIndicator = progressView.findViewById(R.id.progressBackup);
+        backupProgressStatus = progressView.findViewById(R.id.textBackupStatus);
+        backupProgressPercent = progressView.findViewById(R.id.textBackupPercent);
+        backupProgressIndicator.setIndeterminate(true);
+        backupProgressStatus.setText("Getting things ready…");
+        backupProgressPercent.setText("");
         backupProgressDialog = new MaterialAlertDialogBuilder(this)
-                .setTitle("Please wait")
-                .setMessage(message)
+                .setView(progressView)
                 .setCancelable(false)
                 .create();
         ThemeUtils.styleDialog(backupProgressDialog, this);
@@ -1161,11 +1338,32 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             backupProgressDialog.dismiss();
             backupProgressDialog = null;
         }
+        backupProgressIndicator = null;
+        backupProgressStatus = null;
+        backupProgressPercent = null;
+    }
+
+    private void updateBackupProgress(String stage, long current, long total) {
+        runOnUiThread(() -> {
+            if (backupProgressDialog == null || !backupProgressDialog.isShowing()
+                    || backupProgressIndicator == null) return;
+            backupProgressStatus.setText(stage);
+            if (total <= 0) {
+                backupProgressIndicator.setIndeterminate(true);
+                backupProgressPercent.setText("");
+            } else {
+                int percent = (int) Math.min(100, Math.max(0, (current * 100L) / total));
+                backupProgressIndicator.setIndeterminate(false);
+                backupProgressIndicator.setMax(1000);
+                backupProgressIndicator.setProgressCompat((int) Math.min(1000, (current * 1000L) / total), true);
+                backupProgressPercent.setText(percent + "%");
+            }
+        });
     }
 
     private void handleCreateBackup(Uri uri) {
-        showBackupProgress("Exporting complete library backup to ZIP...");
-        BackupManager.createBackup(this, uri, new BackupManager.BackupCallback() {
+        showBackupProgress("Creating local backup", "Packing notebooks, pages, and media into a ZIP archive.");
+        BackupManager.createBackup(this, uri, this::updateBackupProgress, new BackupManager.BackupCallback() {
             @Override
             public void onSuccess(int notebookCount, long totalBytes) {
                 runOnUiThread(() -> {
@@ -1203,8 +1401,8 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     }
 
     private void executeRestore(Uri uri) {
-        showBackupProgress("Restoring library from backup archive...");
-        BackupManager.restoreBackup(this, uri, new BackupManager.RestoreCallback() {
+        showBackupProgress("Restoring your library", "Your notebooks and files will appear when everything is ready.");
+        BackupManager.restoreBackup(this, uri, this::updateBackupProgress, new BackupManager.RestoreCallback() {
             @Override
             public void onSuccess(int notebookCount) {
                 runOnUiThread(() -> {

@@ -2,6 +2,8 @@ package org.opennotes.app.ui;
 
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.drawable.GradientDrawable;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -28,6 +30,10 @@ import java.util.Locale;
 import java.util.Set;
 
 public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolder> {
+
+    private static final android.util.LruCache<String, Bitmap> COVER_BITMAPS = new android.util.LruCache<String, Bitmap>(8 * 1024) {
+        @Override protected int sizeOf(String key, Bitmap bitmap) { return bitmap.getByteCount() / 1024; }
+    };
 
     public static final int VIEW_TYPE_NEW_NOTEBOOK = 0;
     public static final int VIEW_TYPE_NOTEBOOK = 1;
@@ -134,6 +140,9 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                         && o.pageCount == n.pageCount
                         && o.isFavorite == n.isFavorite
                         && o.isPinned == n.isPinned
+                        && o.coverStyle == n.coverStyle
+                        && java.util.Objects.equals(o.coverImagePath, n.coverImagePath)
+                        && java.util.Objects.equals(o.coverText, n.coverText)
                         && o.coverColor == n.coverColor
                         && java.util.Objects.equals(o.title, n.title)
                         && java.util.Objects.equals(o.folder, n.folder);
@@ -155,6 +164,9 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
                     || n1.pageCount != n2.pageCount
                     || n1.isFavorite != n2.isFavorite
                     || n1.isPinned != n2.isPinned
+                    || n1.coverStyle != n2.coverStyle
+                    || !java.util.Objects.equals(n1.coverImagePath, n2.coverImagePath)
+                    || !java.util.Objects.equals(n1.coverText, n2.coverText)
                     || n1.coverColor != n2.coverColor
                     || !java.util.Objects.equals(n1.title, n2.title)
                     || !java.util.Objects.equals(n1.folder, n2.folder)) {
@@ -286,12 +298,22 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         holder.iconPinned.setVisibility(nb.isPinned && !isSelectionMode ? View.VISIBLE : View.GONE);
 
         // Cover styling with spine
-        GradientDrawable coverBg = new GradientDrawable();
-        coverBg.setShape(GradientDrawable.RECTANGLE);
-        coverBg.setCornerRadius(16f);
-        coverBg.setColor(nb.coverColor != 0 ? nb.coverColor : 0xFF1E1E24);
-        coverBg.setStroke(1, 0xFF2E2E38);
+        GradientDrawable coverBg = nb.coverStyle >= 0
+                ? NotebookCoverStyles.drawable(nb.coverStyle)
+                : NotebookCoverStyles.legacyDrawable(nb.coverColor != 0 ? nb.coverColor : 0xFF1E1E24);
         holder.coverView.setBackground(coverBg);
+        holder.coverView.setClipToOutline(true);
+        Bitmap coverBitmap = loadCoverBitmap(nb.coverImagePath);
+        if (coverBitmap != null) {
+            holder.coverImage.setImageBitmap(coverBitmap);
+            holder.coverImage.setVisibility(View.VISIBLE);
+        } else {
+            holder.coverImage.setImageDrawable(null);
+            holder.coverImage.setVisibility(View.GONE);
+        }
+        String coverText = nb.coverText != null ? nb.coverText.trim() : "";
+        holder.coverCaption.setText(coverText);
+        holder.coverCaption.setVisibility(coverText.isEmpty() ? View.GONE : View.VISIBLE);
 
         // Favorite icon state
         holder.btnFavorite.setImageResource(nb.isFavorite ? R.drawable.ic_star_filled : R.drawable.ic_star_outline);
@@ -348,6 +370,26 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         }
     }
 
+    private static Bitmap loadCoverBitmap(String path) {
+        if (path == null || path.trim().isEmpty()) return null;
+        Bitmap cached = COVER_BITMAPS.get(path);
+        if (cached != null && !cached.isRecycled()) return cached;
+        java.io.File file = new java.io.File(path);
+        if (!file.isFile()) return null;
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(path, bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+        int sample = 1;
+        while (bounds.outWidth / sample > 900 || bounds.outHeight / sample > 1200) sample *= 2;
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sample;
+        options.inPreferredConfig = Bitmap.Config.RGB_565;
+        Bitmap bitmap = BitmapFactory.decodeFile(path, options);
+        if (bitmap != null) COVER_BITMAPS.put(path, bitmap);
+        return bitmap;
+    }
+
     @Override
     public int getItemCount() {
         if (notebooks == null) return 0;
@@ -373,6 +415,8 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
         ImageView btnMore;
         ImageView checkSelect;
         ImageView iconPinned;
+        ImageView coverImage;
+        TextView coverCaption;
 
         public NotebookViewHolder(@NonNull View itemView) {
             super(itemView);
@@ -385,6 +429,8 @@ public class NotebookAdapter extends RecyclerView.Adapter<RecyclerView.ViewHolde
             btnMore = itemView.findViewById(R.id.btnMore);
             checkSelect = itemView.findViewById(R.id.checkSelect);
             iconPinned = itemView.findViewById(R.id.iconPinned);
+            coverImage = itemView.findViewById(R.id.coverImage);
+            coverCaption = itemView.findViewById(R.id.textCoverCaption);
         }
     }
 }

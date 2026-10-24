@@ -25,6 +25,13 @@
             android:layout_height="@dimen/home_notebook_cover_height"
             android:background="@drawable/bg_notebook_cover">
 
+            <ImageView
+                android:id="@+id/coverImage"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:scaleType="centerCrop"
+                android:visibility="gone" />
+
             <!-- Spine visual accent -->
             <View
                 android:layout_width="16dp"
@@ -81,6 +88,24 @@
                 android:src="@drawable/ic_star_outline"
                 app:tint="@color/text_secondary"
                 android:background="?selectableItemBackgroundBorderless" />
+
+            <TextView
+                android:id="@+id/textCoverCaption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_gravity="center"
+                android:layout_marginHorizontal="20dp"
+                android:gravity="center"
+                android:maxLines="3"
+                android:ellipsize="end"
+                android:textColor="#F8FAFC"
+                android:textSize="18sp"
+                android:textStyle="bold"
+                android:shadowColor="#B3000000"
+                android:shadowDx="0"
+                android:shadowDy="2"
+                android:shadowRadius="6"
+                android:visibility="gone" />
         </FrameLayout>
 
         <!-- Notebook Info Bar -->
