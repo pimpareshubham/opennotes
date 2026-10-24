@@ -388,6 +388,9 @@ public class CanvasView extends View {
     private Map<String, List<TextItem>> textSpacingPreviewGroups;
     private final RectF selectionBounds = new RectF();
     private boolean isMovingSelection = false;
+    // Text insertion remains active between placements, but gestures beginning on
+    // the selected text must still be routed through the selection transform path.
+    private boolean isTextSelectionGesture = false;
     private float lassoMoveStartX, lassoMoveStartY;
     private float selectionMoveDx, selectionMoveDy;
     private String lastAnnouncedSelection = "";
@@ -5800,10 +5803,20 @@ public class CanvasView extends View {
                 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
                 && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0;
 
+        if (action == MotionEvent.ACTION_DOWN) {
+            isTextSelectionGesture = false;
+            if (currentTool == DrawingTool.TEXT && hasLassoSelection
+                    && selectionBounds != null && !selectionBounds.isEmpty()) {
+                float downCanvasX = (event.getX(0) - panOffsetX) / scaleFactor;
+                float downCanvasY = (event.getY(0) - panOffsetY) / scaleFactor + viewportOffsetY;
+                isTextSelectionGesture = isTouchingLassoHandleOrSelection(downCanvasX, downCanvasY);
+            }
+        }
+
         // Check if finger is interacting with lasso selection or handles
         boolean isLassoActiveGesture = isResizingSelection || isRotatingSelection || isMovingSelection;
         boolean isLassoHandleTouch = false;
-        if (currentTool == DrawingTool.LASSO && !hasStylusPointer) {
+        if ((currentTool == DrawingTool.LASSO || isTextSelectionGesture) && !hasStylusPointer) {
             if (isLassoActiveGesture) {
                 isLassoHandleTouch = true;
             } else if (hasLassoSelection && selectionBounds != null && !selectionBounds.isEmpty()) {
@@ -5991,6 +6004,7 @@ public class CanvasView extends View {
                 && (event.getFlags() & MotionEvent.FLAG_CANCELED) != 0;
         if (action == MotionEvent.ACTION_CANCEL || canceledUp) {
             cancelInProgressGesture();
+            isTextSelectionGesture = false;
             return true;
         }
         if (canceledPointerUp) {
@@ -6015,7 +6029,8 @@ public class CanvasView extends View {
 
         // Stylus-only mode rejects all finger drawing, but allows finger lasso manipulation / resizing
         // and two-finger navigation gesture when the stylus is not in contact and outside cooldown.
-        if (isStylusOnly && !hasStylusPointer && !isLassoHandleTouch && currentTool != DrawingTool.LASSO) {
+        if (isStylusOnly && !hasStylusPointer && !isLassoHandleTouch
+                && currentTool != DrawingTool.LASSO && !isTextSelectionGesture) {
             if (pointerCount >= 2 && !isWithinStylusCooldown && !isPalm) {
                 if (activeStroke != null) {
                     cancelInProgressGesture();
@@ -6292,7 +6307,7 @@ public class CanvasView extends View {
         }
 
         // 3. Lasso Tool
-        if (currentTool == DrawingTool.LASSO) {
+        if (currentTool == DrawingTool.LASSO || isTextSelectionGesture) {
             switch (action) {
                 case MotionEvent.ACTION_DOWN:
                     if (hasLassoSelection && !selectionBounds.isEmpty()) {
@@ -6521,6 +6536,7 @@ public class CanvasView extends View {
                             notifyLassoSelection();
                         }
                     }
+                    isTextSelectionGesture = false;
                     return true;
             }
             return true;
