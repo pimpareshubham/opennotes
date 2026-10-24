@@ -35,21 +35,151 @@ public final class PaintBrushRenderer {
         if (stroke == null || stroke.points == null || stroke.points.isEmpty()) return;
         Path shape = stroke.getPressurePath(pressureSensitivity);
         int style = Math.max(0, Math.min(TEXTURE_COUNT - 1, stroke.brushTextureStyle));
-        if (stroke.tool == DrawingTool.BRUSH) {
-            drawFiberOnly(canvas, stroke, shape, fillPaint, grainPaint, style);
-            return;
-        }
+
+        // 1. Neon glow backdrop if neon style is selected
         if (style == 8) drawNeonGlass(canvas, stroke, shape, fillPaint, grainPaint);
+
+        // 2. Solid, rich, viscous paint base coat
         fillPaint.setStyle(Paint.Style.FILL);
         fillPaint.setColor(stroke.color);
-        fillPaint.setAlpha(style == 10 ? 222 : style == 4 ? 188 : style == 7 ? 226 : 246);
+        fillPaint.setAlpha(style == 10 ? 235 : style == 4 ? 200 : style == 7 ? 230 : 255);
         canvas.drawPath(shape, fillPaint);
 
+        // 3. Volumetric 3D Impasto lighting & longitudinal bristle striations (clipped to shape)
         RectF bounds = stroke.getBounds();
-        if (bounds == null || bounds.isEmpty()) return;
+        if (bounds != null && !bounds.isEmpty()) {
+            canvas.save();
+            canvas.clipPath(shape);
+
+            // A. Draw 3D Volumetric Lighting (Upper crest highlight & specular core)
+            drawVolumetricLighting(canvas, stroke, grainPaint);
+
+            // B. Draw Longitudinal Bristle Grooves (shadow valleys between bristles)
+            Path shades = stroke.getBrushShadeStrands();
+            if (shades != null && !shades.isEmpty()) {
+                grainPaint.setShader(null);
+                grainPaint.setColorFilter(null);
+                grainPaint.setStyle(Paint.Style.STROKE);
+                grainPaint.setStrokeCap(Paint.Cap.ROUND);
+                grainPaint.setStrokeJoin(Paint.Join.ROUND);
+                grainPaint.setColor(darken(stroke.color, 0.64f));
+                grainPaint.setAlpha(125);
+                grainPaint.setStrokeWidth(Math.max(0.65f, Math.min(1.85f, stroke.width * 0.045f)));
+                canvas.drawPath(shades, grainPaint);
+            }
+
+            // C. Draw Longitudinal Bristle Ridges (glistening highlights along bristles)
+            Path highlights = stroke.getBrushHighlightStrands();
+            if (highlights != null && !highlights.isEmpty()) {
+                grainPaint.setShader(null);
+                grainPaint.setColorFilter(null);
+                grainPaint.setStyle(Paint.Style.STROKE);
+                grainPaint.setStrokeCap(Paint.Cap.ROUND);
+                grainPaint.setStrokeJoin(Paint.Join.ROUND);
+                grainPaint.setColor(lighten(stroke.color, 1.42f));
+                grainPaint.setAlpha(175);
+                grainPaint.setStrokeWidth(Math.max(0.75f, Math.min(2.10f, stroke.width * 0.052f)));
+                canvas.drawPath(highlights, grainPaint);
+            }
+
+            // D. Apply texture finishes for non-default styles (Linen, Foil, Glitter, etc.)
+            if (style > 0) {
+                applyTextureFinish(canvas, stroke, bounds, grainPaint, style);
+            }
+
+            canvas.restore();
+        }
+
+        // 4. Draw Staggered Bristle Head Marks (natural touch-down contacts at stroke start)
+        Path headFibers = stroke.getBrushEdgeFibers();
+        if (headFibers != null && !headFibers.isEmpty()) {
+            grainPaint.setShader(null);
+            grainPaint.setColorFilter(null);
+            grainPaint.setStyle(Paint.Style.STROKE);
+            grainPaint.setStrokeCap(Paint.Cap.ROUND);
+            grainPaint.setColor(darken(stroke.color, 0.78f));
+            grainPaint.setAlpha(160);
+            grainPaint.setStrokeWidth(Math.max(0.55f, Math.min(1.4f, stroke.width * 0.035f)));
+            canvas.drawPath(headFibers, grainPaint);
+
+            grainPaint.setColor(lighten(stroke.color, 1.25f));
+            grainPaint.setAlpha(140);
+            grainPaint.setStrokeWidth(Math.max(0.45f, Math.min(1.1f, stroke.width * 0.028f)));
+            canvas.drawPath(headFibers, grainPaint);
+        }
+
+        // 5. Draw Sweeping, Feathered, Wispy Tail Swash (Trailing bristle fibers at stroke release)
+        drawFeatheredTailSwash(canvas, stroke, grainPaint, style);
+
+        // Restore paints
+        grainPaint.setStyle(Paint.Style.FILL);
+        grainPaint.setAlpha(255);
+        grainPaint.setShader(null);
+        grainPaint.setColorFilter(null);
+        fillPaint.setStyle(Paint.Style.STROKE);
+        fillPaint.setAlpha(255);
+    }
+
+    private static void drawVolumetricLighting(Canvas canvas, Stroke stroke, Paint paint) {
+        Path mainFibers = stroke.getBrushMainFibers();
+        if (mainFibers == null || mainFibers.isEmpty()) return;
+        paint.setShader(null);
+        paint.setColorFilter(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+
+        // Upper crest highlight (soft, rich volumetric reflection along the top ridge)
+        paint.setColor(lighten(stroke.color, 1.36f));
+        paint.setAlpha(95);
+        paint.setStrokeWidth(Math.max(2.2f, stroke.width * 0.32f));
+        canvas.drawPath(mainFibers, paint);
+
+        // Specular glistening core (sharp wet-paint reflection)
+        paint.setColor(lighten(stroke.color, 1.75f));
+        paint.setAlpha(140);
+        paint.setStrokeWidth(Math.max(0.9f, stroke.width * 0.11f));
+        canvas.drawPath(mainFibers, paint);
+    }
+
+    private static void drawFeatheredTailSwash(Canvas canvas, Stroke stroke, Paint paint, int style) {
+        paint.setShader(null);
+        paint.setColorFilter(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+
+        // 1. Shadow / depth fibers
+        Path tailShades = stroke.getBrushTailShades();
+        if (tailShades != null && !tailShades.isEmpty()) {
+            paint.setColor(darken(stroke.color, 0.68f));
+            paint.setAlpha(145);
+            paint.setStrokeWidth(Math.max(0.55f, Math.min(1.35f, stroke.width * 0.032f)));
+            canvas.drawPath(tailShades, paint);
+        }
+
+        // 2. Main saturated body color fibers
+        Path tailMain = stroke.getBrushTailFibers();
+        if (tailMain != null && !tailMain.isEmpty()) {
+            paint.setColor(stroke.color);
+            paint.setAlpha(220);
+            paint.setStrokeWidth(Math.max(0.70f, Math.min(1.75f, stroke.width * 0.042f)));
+            canvas.drawPath(tailMain, paint);
+        }
+
+        // 3. Luminous highlight fibers
+        Path tailHighlights = stroke.getBrushTailHighlights();
+        if (tailHighlights != null && !tailHighlights.isEmpty()) {
+            paint.setColor(lighten(stroke.color, style == 8 ? 2.0f : 1.38f));
+            paint.setAlpha(style == 8 ? 230 : 185);
+            paint.setStrokeWidth(Math.max(0.50f, Math.min(1.25f, stroke.width * 0.030f)));
+            canvas.drawPath(tailHighlights, paint);
+        }
+    }
+
+    private static void applyTextureFinish(Canvas canvas, Stroke stroke, RectF bounds,
+                                          Paint grainPaint, int style) {
         int darkerColor = darken(stroke.color, style == 5 ? 0.46f : style == 6 ? 0.58f : style == 11 ? 0.54f : 0.70f);
-        canvas.save();
-        canvas.clipPath(shape);
         grainPaint.setStyle(Paint.Style.FILL);
         grainPaint.setShader(textureShader(style));
         grainPaint.setColorFilter(colorFilter(darkerColor));
@@ -63,106 +193,6 @@ public final class PaintBrushRenderer {
         }
         grainPaint.setShader(null);
         grainPaint.setColorFilter(null);
-        grainPaint.setAlpha(255);
-        canvas.restore();
-        drawBristleDetail(canvas, stroke, shape, grainPaint);
-    }
-
-    /** Paint-brush marks are rendered as separated bristle strands only, with feathered ends. */
-    private static void drawFiberOnly(Canvas canvas, Stroke stroke, Path shape,
-                                      Paint glowPaint, Paint fiberPaint, int style) {
-        fiberPaint.setShader(null);
-        fiberPaint.setColorFilter(null);
-        fiberPaint.setStyle(Paint.Style.STROKE);
-        fiberPaint.setStrokeCap(Paint.Cap.ROUND);
-        fiberPaint.setStrokeJoin(Paint.Join.ROUND);
-
-        // Neon glass remains luminous, but its glow is applied to hairs, never a filled silhouette.
-        if (style == 8) {
-            glowPaint.setShader(null);
-            glowPaint.setColorFilter(null);
-            glowPaint.setStyle(Paint.Style.STROKE);
-            glowPaint.setStrokeCap(Paint.Cap.ROUND);
-            glowPaint.setStrokeJoin(Paint.Join.ROUND);
-            glowPaint.setColor(lighten(stroke.color, 1.55f));
-            glowPaint.setAlpha(36);
-            glowPaint.setStrokeWidth(Math.max(2.2f, stroke.width * 0.12f));
-            Path main = stroke.getBrushMainFibers();
-            Path highlights = stroke.getBrushHighlightStrands();
-            if (main != null) canvas.drawPath(main, glowPaint);
-            if (highlights != null) canvas.drawPath(highlights, glowPaint);
-        }
-
-        // Main fibers dominate and remain separated so the paper/background shows through.
-        fiberPaint.setColor(stroke.color);
-        fiberPaint.setAlpha(style == 4 ? 126 : style == 7 ? 158 : 184);
-        fiberPaint.setStrokeWidth(Math.max(0.42f, Math.min(0.78f, stroke.width * 0.032f)));
-        Path main = stroke.getBrushMainFibers();
-        if (main != null) canvas.drawPath(main, fiberPaint);
-
-        fiberPaint.setColor(lighten(stroke.color, style == 8 ? 2.0f : 1.42f));
-        fiberPaint.setAlpha(style == 8 ? 220 : 142);
-        fiberPaint.setStrokeWidth(Math.max(0.38f, Math.min(0.68f, stroke.width * 0.027f)));
-        Path highlights = stroke.getBrushHighlightStrands();
-        if (highlights != null) canvas.drawPath(highlights, fiberPaint);
-
-        fiberPaint.setColor(darken(stroke.color, 0.72f));
-        fiberPaint.setAlpha(118);
-        fiberPaint.setStrokeWidth(Math.max(0.36f, Math.min(0.62f, stroke.width * 0.024f)));
-        Path shades = stroke.getBrushShadeStrands();
-        if (shades != null) canvas.drawPath(shades, fiberPaint);
-
-        // Irregular loose bristles break up the ends and sides like a real brush cut.
-        fiberPaint.setColor(lighten(stroke.color, 1.22f));
-        fiberPaint.setAlpha(142);
-        fiberPaint.setStrokeWidth(Math.max(0.34f, Math.min(0.58f, stroke.width * 0.022f)));
-        Path fibers = stroke.getBrushEdgeFibers();
-        if (fibers != null) canvas.drawPath(fibers, fiberPaint);
-
-        Path tails = stroke.getBrushTailFibers();
-        if (tails != null) {
-            fiberPaint.setColor(lighten(stroke.color, style == 8 ? 2.0f : 1.28f));
-            fiberPaint.setAlpha(style == 8 ? 170 : 104);
-            fiberPaint.setStrokeWidth(Math.max(0.24f, Math.min(0.42f, stroke.width * 0.016f)));
-            fiberPaint.setStrokeCap(Paint.Cap.BUTT);
-            canvas.drawPath(tails, fiberPaint);
-        }
-
-        fiberPaint.setStyle(Paint.Style.FILL);
-        fiberPaint.setAlpha(255);
-        glowPaint.setStyle(Paint.Style.FILL);
-        glowPaint.setAlpha(255);
-    }
-
-    private static void drawBristleDetail(Canvas canvas, Stroke stroke, Path shape, Paint paint) {
-        paint.setShader(null);
-        paint.setColorFilter(null);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeCap(Paint.Cap.ROUND);
-        paint.setStrokeJoin(Paint.Join.ROUND);
-
-        canvas.save();
-        canvas.clipPath(shape);
-        paint.setColor(lighten(stroke.color, 1.24f));
-        paint.setAlpha(98);
-        paint.setStrokeWidth(Math.max(0.52f, Math.min(1.45f, stroke.width * 0.065f)));
-        Path highlights = stroke.getBrushHighlightStrands();
-        if (highlights != null) canvas.drawPath(highlights, paint);
-
-        paint.setColor(darken(stroke.color, 0.68f));
-        paint.setAlpha(62);
-        paint.setStrokeWidth(Math.max(0.38f, Math.min(1.0f, stroke.width * 0.045f)));
-        Path shades = stroke.getBrushShadeStrands();
-        if (shades != null) canvas.drawPath(shades, paint);
-        canvas.restore();
-
-        paint.setColor(lighten(stroke.color, 1.20f));
-        paint.setAlpha(98);
-        paint.setStrokeWidth(Math.max(0.34f, Math.min(0.82f, stroke.width * 0.038f)));
-        Path fibers = stroke.getBrushEdgeFibers();
-        if (fibers != null) canvas.drawPath(fibers, paint);
-        paint.setStyle(Paint.Style.FILL);
-        paint.setAlpha(255);
     }
 
     private static int textureAlpha(int style) {
@@ -296,17 +326,27 @@ public final class PaintBrushRenderer {
 
     private static int darken(int color, float amount) {
         int a = (color >>> 24) & 0xFF;
-        int r = Math.round(((color >>> 16) & 0xFF) * amount);
-        int g = Math.round(((color >>> 8) & 0xFF) * amount);
-        int b = Math.round((color & 0xFF) * amount);
+        int r = Math.max(0, Math.min(255, Math.round(((color >>> 16) & 0xFF) * amount)));
+        int g = Math.max(0, Math.min(255, Math.round(((color >>> 8) & 0xFF) * amount)));
+        int b = Math.max(0, Math.min(255, Math.round((color & 0xFF) * amount)));
         return (a << 24) | (r << 16) | (g << 8) | b;
     }
 
     private static int lighten(int color, float amount) {
         int a = (color >>> 24) & 0xFF;
-        int r = Math.min(255, Math.round(((color >>> 16) & 0xFF) * amount));
-        int g = Math.min(255, Math.round(((color >>> 8) & 0xFF) * amount));
-        int b = Math.min(255, Math.round((color & 0xFF) * amount));
+        int r = (color >>> 16) & 0xFF;
+        int g = (color >>> 8) & 0xFF;
+        int b = color & 0xFF;
+        if (amount > 1.0f) {
+            float t = amount - 1.0f;
+            r = Math.min(255, Math.round(r + (255 - r) * Math.min(1.0f, t * 0.70f)));
+            g = Math.min(255, Math.round(g + (255 - g) * Math.min(1.0f, t * 0.70f)));
+            b = Math.min(255, Math.round(b + (255 - b) * Math.min(1.0f, t * 0.70f)));
+        } else {
+            r = Math.max(0, Math.round(r * amount));
+            g = Math.max(0, Math.round(g * amount));
+            b = Math.max(0, Math.round(b * amount));
+        }
         return (a << 24) | (r << 16) | (g << 8) | b;
     }
 

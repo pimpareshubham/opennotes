@@ -45,6 +45,8 @@ public class Stroke {
     private transient android.graphics.Path cachedBrushEdgeFibers;
     private transient android.graphics.Path cachedBrushMainFibers;
     private transient android.graphics.Path cachedBrushTailFibers;
+    private transient android.graphics.Path cachedBrushTailHighlights;
+    private transient android.graphics.Path cachedBrushTailShades;
     private transient boolean pressurePathDirty = true;
     private transient float pressurePathSensitivity = Float.NaN;
 
@@ -60,6 +62,8 @@ public class Stroke {
         if (cachedBrushEdgeFibers != null) cachedBrushEdgeFibers.reset();
         if (cachedBrushMainFibers != null) cachedBrushMainFibers.reset();
         if (cachedBrushTailFibers != null) cachedBrushTailFibers.reset();
+        if (cachedBrushTailHighlights != null) cachedBrushTailHighlights.reset();
+        if (cachedBrushTailShades != null) cachedBrushTailShades.reset();
     }
 
     public android.graphics.RectF getBounds() {
@@ -90,6 +94,8 @@ public class Stroke {
     public android.graphics.Path getBrushEdgeFibers() { return cachedBrushEdgeFibers; }
     public android.graphics.Path getBrushMainFibers() { return cachedBrushMainFibers; }
     public android.graphics.Path getBrushTailFibers() { return cachedBrushTailFibers; }
+    public android.graphics.Path getBrushTailHighlights() { return cachedBrushTailHighlights; }
+    public android.graphics.Path getBrushTailShades() { return cachedBrushTailShades; }
 
     private void buildPressurePath(float sensitivity) {
         android.graphics.Path path = new android.graphics.Path();
@@ -323,12 +329,32 @@ public class Stroke {
         }
         path.lineTo(rightX[0], rightY[0]);
 
-        // Start Cap (Smooth Tapered Tip from Right to Left at Stroke Start)
+        // Start Cap (Smooth Tapered Tip or Natural Flat-Bristle Landing)
         DrawingPoint firstPt = filtered.get(0);
         float startTipRadius = Math.max(0.6f, widths[0] * 0.5f);
         float startTipX = firstPt.x - tanX[0] * startTipRadius;
         float startTipY = firstPt.y - tanY[0] * startTipRadius;
-        path.quadTo(startTipX, startTipY, leftX[0], leftY[0]);
+        if (tool == DrawingTool.BRUSH) {
+            // Natural flat-bristle touch down: staggered bristle notches across the start width
+            int bristleSteps = Math.max(6, Math.min(16, (int) (widths[0] / 2.2f)));
+            float prevX = rightX[0];
+            float prevY = rightY[0];
+            for (int s = 1; s <= bristleSteps; s++) {
+                float frac = (float) s / bristleSteps;
+                float targetX = rightX[0] + (leftX[0] - rightX[0]) * frac;
+                float targetY = rightY[0] + (leftY[0] - rightY[0]) * frac;
+                float stagger = (0.25f + 0.75f * ((edgeNoise(s, firstPt.x, firstPt.y, 443) + 1f) * 0.5f))
+                        * Math.min(widths[0] * 0.22f, 3.2f);
+                float notchX = (prevX + targetX) * 0.5f - tanX[0] * stagger;
+                float notchY = (prevY + targetY) * 0.5f - tanY[0] * stagger;
+                path.lineTo(notchX, notchY);
+                path.lineTo(targetX, targetY);
+                prevX = targetX;
+                prevY = targetY;
+            }
+        } else {
+            path.quadTo(startTipX, startTipY, leftX[0], leftY[0]);
+        }
 
         path.close();
 
@@ -350,24 +376,24 @@ public class Stroke {
                                        float[] tanX, float[] tanY, int count) {
         if (cachedBrushMainFibers == null) cachedBrushMainFibers = new android.graphics.Path();
         if (cachedBrushTailFibers == null) cachedBrushTailFibers = new android.graphics.Path();
+        if (cachedBrushTailHighlights == null) cachedBrushTailHighlights = new android.graphics.Path();
+        if (cachedBrushTailShades == null) cachedBrushTailShades = new android.graphics.Path();
         if (cachedBrushHighlightStrands == null) cachedBrushHighlightStrands = new android.graphics.Path();
         if (cachedBrushShadeStrands == null) cachedBrushShadeStrands = new android.graphics.Path();
         if (cachedBrushEdgeFibers == null) cachedBrushEdgeFibers = new android.graphics.Path();
         cachedBrushMainFibers.reset();
         cachedBrushTailFibers.reset();
+        cachedBrushTailHighlights.reset();
+        cachedBrushTailShades.reset();
         cachedBrushHighlightStrands.reset();
         cachedBrushShadeStrands.reset();
         cachedBrushEdgeFibers.reset();
         if (tool != DrawingTool.BRUSH || count < 2) return;
 
-        // A brush mark is made exclusively from individual bristles: no filled ribbon.
-        // Dense, slightly irregular strands keep visible paper/background gaps between hairs.
         float maxWidth = 0f;
         for (float value : widths) maxWidth = Math.max(maxWidth, value);
         int density = Math.max(1, Math.min(10, brushFiberDensity));
-        int laneCount = Math.max(18, Math.min(1200,
-                (int) Math.ceil(maxWidth / 0.96f) * density));
-        int strandSamples = Math.min(count, 72);
+
         float[] cumulativeLength = new float[count];
         for (int i = 1; i < count; i++) {
             DrawingPoint a = filtered.get(i - 1), b = filtered.get(i);
@@ -375,112 +401,140 @@ public class Stroke {
                     + (float) Math.hypot(b.x - a.x, b.y - a.y);
         }
         float totalLength = cumulativeLength[count - 1];
+        if (totalLength < 0.001f) return;
+
+        // 1. Upper crest 3D impasto lighting spline (tracing upper ridge of wet paint)
+        int mainSamples = Math.min(count, 54);
+        float lastMainX = 0f, lastMainY = 0f;
+        boolean mainStarted = false;
+        for (int sample = 0; sample < mainSamples; sample++) {
+            int i = Math.round(sample * (count - 1f) / Math.max(1f, mainSamples - 1f));
+            DrawingPoint pt = filtered.get(i);
+            float halfW = widths[i] * 0.5f;
+            float nx = -tanY[i], ny = tanX[i];
+            float x = pt.x + nx * (halfW * 0.40f);
+            float y = pt.y + ny * (halfW * 0.40f);
+            if (!mainStarted) {
+                cachedBrushMainFibers.moveTo(x, y);
+                mainStarted = true;
+            } else {
+                cachedBrushMainFibers.quadTo(lastMainX, lastMainY, (lastMainX + x) * 0.5f, (lastMainY + y) * 0.5f);
+            }
+            lastMainX = x;
+            lastMainY = y;
+        }
+        if (mainStarted) cachedBrushMainFibers.lineTo(lastMainX, lastMainY);
+
+        // 2. Longitudinal bristle striations (groove shadows and highlight ridges across the body)
+        int laneCount = Math.max(16, Math.min(32, 14 + density * 2));
+        int strandSamples = Math.min(count, 54);
         for (int lane = 0; lane < laneCount; lane++) {
-            final int laneId = lane;
-            float across = laneCount == 1 ? 0f : (lane / (laneCount - 1f)) * 1.94f - 0.97f;
-            float seed = edgeNoise(lane, filtered.get(0).x, filtered.get(0).y, 781);
-            // Randomize each bristle's exact start and finish to create a feathered brush cut.
-            // A little variation makes the loaded-brush edge bristled without producing isolated tabs.
-            float startAt = Math.max(0f, seed * 0.02f + (lane % 7) * 0.003f) * totalLength;
-            float endAt = totalLength * (0.96f + 0.04f * (0.5f + 0.5f * edgeNoise(lane, filtered.get(count - 1).x, filtered.get(count - 1).y, 991)));
-            android.graphics.Path strands = (lane % 5 == 0)
-                    ? cachedBrushShadeStrands
-                    : ((lane % 3 == 0) ? cachedBrushHighlightStrands : cachedBrushMainFibers);
+            float across = laneCount == 1 ? 0f : (lane / (laneCount - 1f)) * 1.66f - 0.83f;
+            float startAt = Math.max(0f, (edgeNoise(lane, filtered.get(0).x, filtered.get(0).y, 311) + 1f) * 0.015f) * totalLength;
+            float endAt = totalLength * (0.88f + 0.11f * ((edgeNoise(lane, filtered.get(count - 1).x, filtered.get(count - 1).y, 773) + 1f) * 0.5f));
+            android.graphics.Path target = (lane % 2 == 0) ? cachedBrushHighlightStrands : cachedBrushShadeStrands;
             boolean started = false;
             float lastX = 0f, lastY = 0f;
             for (int sample = 0; sample < strandSamples; sample++) {
                 int i = Math.round(sample * (count - 1f) / Math.max(1f, strandSamples - 1f));
                 float traveled = cumulativeLength[i];
                 if (traveled < startAt || traveled > endAt) continue;
-                DrawingPoint point = filtered.get(i);
-                float halfWidth = Math.max(0f, widths[i] * 0.5f);
-                float normalX = -tanY[i];
-                float normalY = tanX[i];
-                float waviness = (float) Math.sin(i * 0.11f + laneId * 1.91f) * halfWidth * 0.012f;
-                float irregularity = edgeNoise(i, point.x, point.y, laneId) * Math.min(0.42f, halfWidth * 0.025f);
-                float offset = halfWidth * across + waviness + irregularity;
-                float x = point.x + normalX * offset;
-                float y = point.y + normalY * offset;
-                if (!started) { strands.moveTo(x, y); started = true; }
-                else strands.quadTo(lastX, lastY, (lastX + x) * 0.5f, (lastY + y) * 0.5f);
-                lastX = x; lastY = y;
+                DrawingPoint pt = filtered.get(i);
+                float halfW = widths[i] * 0.5f;
+                float nx = -tanY[i], ny = tanX[i];
+                float waviness = (float) Math.sin(i * 0.14f + lane * 1.93f) * halfW * 0.018f;
+                float irreg = edgeNoise(i, pt.x, pt.y, lane * 23) * Math.min(0.40f, halfW * 0.022f);
+                float offset = halfW * across + waviness + irreg;
+                float x = pt.x + nx * offset;
+                float y = pt.y + ny * offset;
+                if (!started) {
+                    target.moveTo(x, y);
+                    started = true;
+                } else {
+                    target.quadTo(lastX, lastY, (lastX + x) * 0.5f, (lastY + y) * 0.5f);
+                }
+                lastX = x;
+                lastY = y;
             }
-            if (started) strands.lineTo(lastX, lastY);
+            if (started) target.lineTo(lastX, lastY);
         }
 
-        // Fine individual hairs escape both end cuts as well as the long sides.
-        int fiberSamples = Math.min(150, Math.max(0, count - 2));
-        for (int sample = 0; sample < fiberSamples; sample++) {
-            int i = 1 + (fiberSamples == 1 ? 0
-                    : Math.round(sample * (count - 3f) / (fiberSamples - 1f)));
-            DrawingPoint point = filtered.get(i);
-            float halfWidth = Math.max(0f, widths[i] * 0.5f);
-            float alongStroke = cumulativeLength[i] / Math.max(1f, totalLength);
-            // Loose side bristles belong along the body; keep them out of the first and last 12%.
-            if (alongStroke < 0.12f || alongStroke > 0.88f) continue;
-            float fiberLength = Math.min(2.2f, 0.8f + widths[i] * 0.05f);
-            float normalX = -tanY[i];
-            float normalY = tanX[i];
-            for (int side = -1; side <= 1; side += 2) {
-                float x = point.x + normalX * halfWidth * side;
-                float y = point.y + normalY * halfWidth * side;
-                float strength = 0.35f + (edgeNoise(i, point.x, point.y, side * 53) + 1f) * 0.325f;
-                if (strength < 0.48f) continue;
-                float along = fiberLength * strength;
-                float flare = Math.max(0.18f, widths[i] * 0.018f) * strength;
-                cachedBrushEdgeFibers.moveTo(x, y);
-                cachedBrushEdgeFibers.lineTo(
-                        x + tanX[i] * along + normalX * side * flare,
-                        y + tanY[i] * along + normalY * side * flare);
-            }
+        // 3. Staggered bristle contact marks at the stroke head
+        int headFibers = Math.max(10, Math.min(22, (int) (maxWidth / 1.6f)));
+        float startTanX = tanX[0], startTanY = tanY[0];
+        float startNormalX = -startTanY, startNormalY = startTanX;
+        float startHalfW = widths[0] * 0.5f;
+        for (int h = 0; h < headFibers; h++) {
+            float across = headFibers == 1 ? 0f : (h / (headFibers - 1f)) * 1.74f - 0.87f;
+            float stagger = (0.35f + 0.65f * ((edgeNoise(h, filtered.get(0).x, filtered.get(0).y, 881) + 1f) * 0.5f))
+                    * Math.min(maxWidth * 0.22f, 4.2f);
+            float baseStartX = filtered.get(0).x + startNormalX * (startHalfW * across);
+            float baseStartY = filtered.get(0).y + startNormalY * (startHalfW * across);
+            cachedBrushEdgeFibers.moveTo(baseStartX - startTanX * stagger, baseStartY - startTanY * stagger);
+            cachedBrushEdgeFibers.lineTo(baseStartX + startTanX * (stagger * 0.85f), baseStartY + startTanY * (stagger * 0.85f));
         }
 
-        // Fine bristles trail beyond the painted body after the lifted tip, as in a real brush swash.
-        int tailCount = Math.max(28, Math.min(160, laneCount / 5));
-        float endX = filtered.get(count - 1).x;
-        float endY = filtered.get(count - 1).y;
-        float endTanX = tanX[count - 1];
-        float endTanY = tanY[count - 1];
+        // 4. Sweeping, feathered, wispy trailing bristle swash at stroke release
+        int tailCount = Math.max(20, Math.min(36, 18 + density * 2));
+        int endIdx = count - 1;
+        float endX = filtered.get(endIdx).x;
+        float endY = filtered.get(endIdx).y;
+        float endTanX = tanX[endIdx];
+        float endTanY = tanY[endIdx];
+        float endNormalX = -endTanY;
+        float endNormalY = endTanX;
+
+        int prevIdx = Math.max(0, count - 4);
+        float curvature = (tanX[prevIdx] * tanY[endIdx] - tanY[prevIdx] * tanX[endIdx]);
+        float curveScale = Math.max(-0.55f, Math.min(0.55f, curvature * 2.2f));
+
         for (int fiber = 0; fiber < tailCount; fiber++) {
             float noise = edgeNoise(fiber, endX, endY, 1711);
-            float startFraction = 0.78f + 0.16f * ((noise + 1f) * 0.5f);
+            float startFraction = 0.70f + 0.18f * ((noise + 1f) * 0.5f);
             float startDistance = totalLength * startFraction;
             int startIndex = 0;
             while (startIndex < count - 1 && cumulativeLength[startIndex] < startDistance) startIndex++;
+
             DrawingPoint startPoint = filtered.get(startIndex);
             float startHalfWidth = Math.max(0.15f, widths[startIndex] * 0.5f);
-            float across = ((fiber + 0.5f) / tailCount) * 1.7f - 0.85f;
+            float across = tailCount == 1 ? 0f : (fiber / (tailCount - 1f)) * 1.76f - 0.88f;
             float normalX = -tanY[startIndex];
             float normalY = tanX[startIndex];
             float x = startPoint.x + normalX * startHalfWidth * across;
             float y = startPoint.y + normalY * startHalfWidth * across;
-            cachedBrushTailFibers.moveTo(x, y);
-            float fiberEndX = x;
-            float fiberEndY = y;
+
+            android.graphics.Path target = (fiber % 3 == 0)
+                    ? cachedBrushTailHighlights
+                    : ((fiber % 4 == 2) ? cachedBrushTailShades : cachedBrushTailFibers);
+
+            target.moveTo(x, y);
+            float fiberEndX = x, fiberEndY = y;
             for (int i = startIndex + 1; i < count; i++) {
-                float halfWidth = Math.max(0.08f, widths[i] * 0.5f);
+                float halfW = Math.max(0.08f, widths[i] * 0.5f);
                 float nx = -tanY[i], ny = tanX[i];
-                float laneWobble = edgeNoise(fiber, filtered.get(i).x, filtered.get(i).y, 1801) * Math.min(0.5f, halfWidth * 0.025f);
-                float px = filtered.get(i).x + nx * (halfWidth * across + laneWobble);
-                float py = filtered.get(i).y + ny * (halfWidth * across + laneWobble);
-                cachedBrushTailFibers.lineTo(px, py);
+                float laneWobble = edgeNoise(fiber, filtered.get(i).x, filtered.get(i).y, 1801) * Math.min(0.4f, halfW * 0.02f);
+                float px = filtered.get(i).x + nx * (halfW * across + laneWobble);
+                float py = filtered.get(i).y + ny * (halfW * across + laneWobble);
+                target.lineTo(px, py);
                 fiberEndX = px;
                 fiberEndY = py;
             }
-            float lengthScale = 0.12f + 0.88f * ((edgeNoise(fiber, endX, endY, 1913) + 1f) * 0.5f);
-            float tailLength = Math.min(maxWidth * 1.35f, Math.max(3f, maxWidth * lengthScale));
-            // Keep the release tangent-aligned, then introduce only a gentle, smooth fan.
-            float fan = edgeNoise(fiber, endX, endY, 2017)
-                    * Math.min(maxWidth * 0.10f, tailLength * 0.16f);
-            float endNormalX = -endTanY, endNormalY = endTanX;
-            float control1X = fiberEndX + endTanX * tailLength * 0.34f;
-            float control1Y = fiberEndY + endTanY * tailLength * 0.34f;
-            float control2X = fiberEndX + endTanX * tailLength * 0.72f + endNormalX * fan * 0.35f;
-            float control2Y = fiberEndY + endTanY * tailLength * 0.72f + endNormalY * fan * 0.35f;
-            float tailEndX = fiberEndX + endTanX * tailLength + endNormalX * fan;
-            float tailEndY = fiberEndY + endTanY * tailLength + endNormalY * fan;
-            cachedBrushTailFibers.cubicTo(control1X, control1Y,
-                    control2X, control2Y, tailEndX, tailEndY);
+
+            float lengthNoise = (edgeNoise(fiber, endX, endY, 2039) + 1f) * 0.5f;
+            float centerBias = 1.0f - Math.abs(across) * 0.35f;
+            float tailLength = Math.max(8f, maxWidth * (0.85f + centerBias * (0.8f + lengthNoise * 1.35f)));
+
+            float fan = across * (tailLength * 0.16f) + edgeNoise(fiber, endX, endY, 2677) * (tailLength * 0.07f);
+            float sweep = curveScale * tailLength * 0.60f;
+
+            float ctrl1X = fiberEndX + endTanX * (tailLength * 0.35f) + endNormalX * (fan * 0.20f + sweep * 0.25f);
+            float ctrl1Y = fiberEndY + endTanY * (tailLength * 0.35f) + endNormalY * (fan * 0.20f + sweep * 0.25f);
+            float ctrl2X = fiberEndX + endTanX * (tailLength * 0.72f) + endNormalX * (fan * 0.70f + sweep * 0.70f);
+            float ctrl2Y = fiberEndY + endTanY * (tailLength * 0.72f) + endNormalY * (fan * 0.70f + sweep * 0.70f);
+            float tipX = fiberEndX + endTanX * tailLength + endNormalX * (fan + sweep);
+            float tipY = fiberEndY + endTanY * tailLength + endNormalY * (fan + sweep);
+
+            target.cubicTo(ctrl1X, ctrl1Y, ctrl2X, ctrl2Y, tipX, tipY);
         }
     }
 
