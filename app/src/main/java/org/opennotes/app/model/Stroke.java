@@ -262,6 +262,24 @@ public class Stroke {
             rightY[i] = pt.y - normY * halfW;
         }
 
+        // Give paint strokes a naturally bristled silhouette. This is baked into the cached
+        // pressure outline, so the edge detail is generated once per stroke edit, not per frame.
+        if (tool == DrawingTool.BRUSH && count > 2) {
+            for (int i = 0; i < count; i++) {
+                float endSoftness = Math.min(1f, Math.min(i, count - 1 - i) * 0.65f);
+                if (endSoftness <= 0f) continue;
+                float normalX = -tanY[i];
+                float normalY = tanX[i];
+                float edgeAmplitude = Math.min(2.4f, Math.max(0.35f, widths[i] * 0.075f)) * endSoftness;
+                float leftFray = edgeNoise(i, filtered.get(i).x, filtered.get(i).y, 0x31) * edgeAmplitude;
+                float rightFray = edgeNoise(i, filtered.get(i).x, filtered.get(i).y, 0x67) * edgeAmplitude;
+                leftX[i] += normalX * leftFray;
+                leftY[i] += normalY * leftFray;
+                rightX[i] -= normalX * rightFray;
+                rightY[i] -= normalY * rightFray;
+            }
+        }
+
         // 7. Construct Single Continuous Smooth Bezier Envelope
         // No circles inside the stroke! No segmented joints!
         path.moveTo(leftX[0], leftY[0]);
@@ -300,6 +318,16 @@ public class Stroke {
 
         cachedPressurePath = path;
         pressurePathDirty = false;
+    }
+
+    private static float edgeNoise(int index, float x, float y, int salt) {
+        int hash = Float.floatToIntBits(x * 0.071f + y * 0.037f);
+        hash ^= index * 0x45d9f3b;
+        hash ^= salt * 0x27d4eb2d;
+        hash = (hash ^ (hash >>> 16)) * 0x45d9f3b;
+        hash = (hash ^ (hash >>> 16)) * 0x45d9f3b;
+        hash ^= hash >>> 16;
+        return ((hash & 0xFFFF) / 32767.5f) - 1f;
     }
 
     private static float smoothStep(float value) {
@@ -462,7 +490,7 @@ public class Stroke {
         }
 
         Stroke stroke = new Stroke(color, width, tool);
-        stroke.brushTextureStyle = Math.max(0, Math.min(10, obj.optInt("brushTextureStyle", 0)));
+        stroke.brushTextureStyle = Math.max(0, Math.min(11, obj.optInt("brushTextureStyle", 0)));
         String lineStyleName = obj.optString("lineStyle", LineStyle.SOLID.name());
         try {
             stroke.lineStyle = LineStyle.valueOf(lineStyleName);

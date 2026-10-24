@@ -4286,7 +4286,7 @@ public class CanvasView extends View {
     public int getBrushTextureStyle() { return brushTextureStyle; }
 
     public void setBrushTextureStyle(int style) {
-        brushTextureStyle = Math.max(0, Math.min(10, style));
+        brushTextureStyle = Math.max(0, Math.min(PaintBrushRenderer.TEXTURE_COUNT - 1, style));
         invalidate();
     }
 

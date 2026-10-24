@@ -19,7 +19,8 @@ import java.util.Random;
 public final class PaintBrushRenderer {
     public static final String[] TEXTURE_NAMES = {
             "Silky Bristle", "Linen Canvas", "Chalk Dust", "Soft Pastel", "Watercolor Wash",
-            "Metallic Foil", "Satin Ribbon", "Frosted Glass", "Neon Glass", "Prism Shimmer", "Velvet Marker"
+            "Metallic Foil", "Satin Ribbon", "Frosted Glass", "Neon Glass", "Prism Shimmer", "Velvet Marker",
+            "Diamond Glitter"
     };
     public static final int TEXTURE_COUNT = TEXTURE_NAMES.length;
     private static final BitmapShader[] TEXTURE_SHADERS = new BitmapShader[TEXTURE_COUNT];
@@ -41,7 +42,7 @@ public final class PaintBrushRenderer {
 
         RectF bounds = stroke.getBounds();
         if (bounds == null || bounds.isEmpty()) return;
-        int darkerColor = darken(stroke.color, style == 5 ? 0.46f : style == 6 ? 0.58f : 0.70f);
+        int darkerColor = darken(stroke.color, style == 5 ? 0.46f : style == 6 ? 0.58f : style == 11 ? 0.54f : 0.70f);
         canvas.save();
         canvas.clipPath(shape);
         grainPaint.setStyle(Paint.Style.FILL);
@@ -49,10 +50,10 @@ public final class PaintBrushRenderer {
         grainPaint.setColorFilter(colorFilter(darkerColor));
         grainPaint.setAlpha(textureAlpha(style));
         canvas.drawRect(bounds, grainPaint);
-        if (style == 5 || style == 6 || style == 8 || style == 9) {
-            grainPaint.setShader(textureShader((style + 3) % TEXTURE_COUNT));
-            grainPaint.setColorFilter(colorFilter(lighten(stroke.color, style == 8 ? 1.75f : 1.28f)));
-            grainPaint.setAlpha(style == 8 ? 52 : 36);
+        if (style == 5 || style == 6 || style == 8 || style == 9 || style == 11) {
+            grainPaint.setShader(style == 11 ? textureShader(11) : textureShader((style + 3) % TEXTURE_COUNT));
+            grainPaint.setColorFilter(colorFilter(lighten(stroke.color, style == 8 ? 1.75f : style == 11 ? 2.2f : 1.28f)));
+            grainPaint.setAlpha(style == 8 ? 52 : style == 11 ? 188 : 36);
             canvas.drawRect(bounds, grainPaint);
         }
         grainPaint.setShader(null);
@@ -74,6 +75,7 @@ public final class PaintBrushRenderer {
             case 8: return 26;
             case 9: return 52;
             case 10: return 20;
+            case 11: return 118;
             default: return 72;
         }
     }
@@ -122,6 +124,36 @@ public final class PaintBrushRenderer {
         Random random = new Random(0x51A7B00BL + style * 977L);
         Paint grain = new Paint(Paint.ANTI_ALIAS_FLAG);
         grain.setColor(0xFFFFFFFF);
+        if (style == 11) {
+            grain.setStyle(Paint.Style.STROKE);
+            grain.setStrokeWidth(0.9f);
+            for (int y = -12; y < size + 12; y += 16) {
+                for (int x = -12; x < size + 12; x += 16) {
+                    int alpha = 35 + random.nextInt(72);
+                    grain.setAlpha(alpha);
+                    Path diamond = new Path();
+                    diamond.moveTo(x + 8f, y + 1f);
+                    diamond.lineTo(x + 15f, y + 8f);
+                    diamond.lineTo(x + 8f, y + 15f);
+                    diamond.lineTo(x + 1f, y + 8f);
+                    diamond.close();
+                    canvas.drawPath(diamond, grain);
+                }
+            }
+            grain.setStyle(Paint.Style.FILL);
+            for (int i = 0; i < 22; i++) {
+                float x = random.nextFloat() * size;
+                float y = random.nextFloat() * size;
+                float radius = 0.8f + random.nextFloat() * 1.6f;
+                grain.setAlpha(120 + random.nextInt(120));
+                canvas.drawCircle(x, y, radius, grain);
+                grain.setAlpha(175);
+                grain.setStrokeWidth(0.7f);
+                canvas.drawLine(x - radius * 2.2f, y, x + radius * 2.2f, y, grain);
+                canvas.drawLine(x, y - radius * 2.2f, x, y + radius * 2.2f, grain);
+            }
+            return bitmap;
+        }
         if (style == 1) {
             grain.setAlpha(42);
             grain.setStrokeWidth(0.42f);
@@ -131,7 +163,7 @@ public final class PaintBrushRenderer {
             }
             return bitmap;
         }
-        int strandCount = new int[]{58, 0, 190, 125, 36, 45, 32, 74, 24, 52, 22}[style];
+        int strandCount = new int[]{58, 0, 190, 125, 36, 45, 32, 74, 24, 52, 22, 0}[style];
         for (int i = 0; i < strandCount; i++) {
             int alpha = style == 2 ? 34 + random.nextInt(90)
                     : style == 4 ? 10 + random.nextInt(20)
