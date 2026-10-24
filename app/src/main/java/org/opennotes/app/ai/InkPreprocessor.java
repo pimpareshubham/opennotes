@@ -22,6 +22,7 @@ public final class InkPreprocessor {
             if (clean.isEmpty()) continue;
             Stroke copy = new Stroke(stroke.color, stroke.width, stroke.tool);
             copy.lineStyle = stroke.lineStyle;
+            copy.brushTextureStyle = stroke.brushTextureStyle;
             for (DrawingPoint point : clean) {
                 copy.addPoint(point.x, point.y, point.pressure, point.timeMillis);
                 copy.addRecognitionPoint(point.x, point.y, point.pressure, point.timeMillis);

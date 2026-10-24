@@ -14,6 +14,8 @@ public class Stroke {
     public int color;
     public float width;
     public DrawingTool tool;
+    /** Paint brush texture captured when this stroke was drawn. */
+    public int brushTextureStyle = 0;
 
     public enum LineStyle {
         SOLID,
@@ -433,6 +435,7 @@ public class Stroke {
         obj.put("width", (double) width);
         obj.put("tool", tool.name());
         obj.put("lineStyle", lineStyle != null ? lineStyle.name() : LineStyle.SOLID.name());
+        obj.put("brushTextureStyle", brushTextureStyle);
 
         JSONArray arr = new JSONArray();
         for (DrawingPoint pt : points) {
@@ -459,6 +462,7 @@ public class Stroke {
         }
 
         Stroke stroke = new Stroke(color, width, tool);
+        stroke.brushTextureStyle = Math.max(0, Math.min(10, obj.optInt("brushTextureStyle", 0)));
         String lineStyleName = obj.optString("lineStyle", LineStyle.SOLID.name());
         try {
             stroke.lineStyle = LineStyle.valueOf(lineStyleName);

@@ -543,6 +543,7 @@ public class CanvasView extends View {
     private Paint fountainPaint;
     private Paint brushPaint;
     private Paint brushGrainPaint;
+    private int brushTextureStyle;
     private Paint highlighterPaint;
     private Paint templateLinePaint;
     private Paint templateMarginPaint;
@@ -4282,6 +4283,13 @@ public class CanvasView extends View {
         PaintBrushRenderer.draw(canvas, stroke, pressureSensitivity, brushPaint, brushGrainPaint);
     }
 
+    public int getBrushTextureStyle() { return brushTextureStyle; }
+
+    public void setBrushTextureStyle(int style) {
+        brushTextureStyle = Math.max(0, Math.min(10, style));
+        invalidate();
+    }
+
     private void drawRotationIcon(Canvas canvas, float cx, float cy, float r) {
         float strokeW = Math.max(1.8f, 2.2f / Math.max(0.5f, scaleFactor));
         selectionRotateIconPaint.setStrokeWidth(strokeW);
@@ -4959,6 +4967,7 @@ public class CanvasView extends View {
     private Stroke cloneStroke(Stroke source, float dx, float dy) {
         Stroke clone = new Stroke(source.color, source.width, source.tool);
         clone.lineStyle = source.lineStyle;
+        clone.brushTextureStyle = source.brushTextureStyle;
         if (source.points != null) {
             for (DrawingPoint point : source.points) {
                 clone.addPoint(point.x + dx, point.y + dy, point.pressure, point.timeMillis);
@@ -6635,6 +6644,7 @@ public class CanvasView extends View {
                 smoothedPressure = pressure;
                 resetStrokeFilter(canvasX, localDownY, event.getEventTime());
                 activeStroke = new Stroke(currentColor, currentStrokeWidth, currentTool);
+                if (currentTool == DrawingTool.BRUSH) activeStroke.brushTextureStyle = brushTextureStyle;
                 activeInputPointerId = event.getPointerId(inputPointerIndex);
                 if (currentTool == DrawingTool.HIGHLIGHTER && straightHighlighterEnabled) {
                     highlighterLockAxis = 0;

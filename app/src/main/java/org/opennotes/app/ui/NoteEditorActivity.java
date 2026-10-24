@@ -84,6 +84,7 @@ import org.opennotes.app.model.PaperTemplate;
 import org.opennotes.app.model.ShapeItem;
 import org.opennotes.app.model.Stroke;
 import org.opennotes.app.model.TextItem;
+import org.opennotes.app.ui.PaintBrushRenderer;
 import org.opennotes.app.util.ErrorDialog;
 import org.opennotes.app.util.HandwritingRecognitionEngine;
 import org.opennotes.app.util.TypefaceManager;
@@ -219,6 +220,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private CardView cardToolProperties;
     private TextView textToolPropertyTitle;
     private LinearLayout layoutNibSelector;
+    private LinearLayout layoutBrushTexturePicker, layoutBrushTextureOptions;
     private TextView btnNibFine, btnNibMedium, btnNibBold;
     private SeekBar seekStrokeThickness;
     private TextView textThicknessValue;
@@ -573,6 +575,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         cardToolProperties = findViewById(R.id.cardToolProperties);
         textToolPropertyTitle = findViewById(R.id.textToolPropertyTitle);
         layoutNibSelector = findViewById(R.id.layoutNibSelector);
+        layoutBrushTexturePicker = findViewById(R.id.layoutBrushTexturePicker);
+        layoutBrushTextureOptions = findViewById(R.id.layoutBrushTextureOptions);
+        buildBrushTextureOptions();
         btnNibFine = findViewById(R.id.btnNibFine);
         btnNibMedium = findViewById(R.id.btnNibMedium);
         btnNibBold = findViewById(R.id.btnNibBold);
@@ -2316,12 +2321,59 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
     }
 
+    private void buildBrushTextureOptions() {
+        if (layoutBrushTextureOptions == null) return;
+        layoutBrushTextureOptions.removeAllViews();
+        for (int i = 0; i < PaintBrushRenderer.TEXTURE_NAMES.length; i++) {
+            final int style = i;
+            TextView option = new TextView(this);
+            option.setText(PaintBrushRenderer.TEXTURE_NAMES[i]);
+            option.setTextSize(11f);
+            option.setGravity(Gravity.CENTER);
+            option.setSingleLine(true);
+            option.setPadding(dpToPx(10), 0, dpToPx(10), 0);
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, dpToPx(32));
+            params.setMargins(0, 0, dpToPx(6), 0);
+            layoutBrushTextureOptions.addView(option, params);
+            option.setOnClickListener(v -> {
+                if (canvasView == null) return;
+                canvasView.setBrushTextureStyle(style);
+                getSharedPreferences("paint_brush_texture_prefs", MODE_PRIVATE).edit()
+                        .putInt("texture_" + notebookId, style).apply();
+                refreshBrushTextureOptionState();
+            });
+        }
+        refreshBrushTextureOptionState();
+    }
+
+    private void refreshBrushTextureOptionState() {
+        if (layoutBrushTextureOptions == null) return;
+        int selected = canvasView != null ? canvasView.getBrushTextureStyle() : 0;
+        for (int i = 0; i < layoutBrushTextureOptions.getChildCount(); i++) {
+            View child = layoutBrushTextureOptions.getChildAt(i);
+            boolean active = i == selected;
+            GradientDrawable background = new GradientDrawable();
+            background.setColor(active ? 0x3338BDF8 : 0xFF252633);
+            background.setCornerRadius(dpToPx(16));
+            background.setStroke(dpToPx(active ? 2 : 1), active ? 0xFF38BDF8 : 0xFF444654);
+            child.setBackground(background);
+            if (child instanceof TextView) {
+                ((TextView) child).setTextColor(active ? 0xFF7DD3FC : 0xFFD1D5DB);
+            }
+        }
+    }
+
     public void openToolPropertiesCard(String title) {
         if (cardToolProperties == null) return;
         if (textToolPropertyTitle != null && title != null) {
             textToolPropertyTitle.setText(title);
         }
         boolean laserTool = canvasView.getTool() == DrawingTool.LASER;
+        if (layoutBrushTexturePicker != null) {
+            layoutBrushTexturePicker.setVisibility(canvasView.getTool() == DrawingTool.BRUSH
+                    ? View.VISIBLE : View.GONE);
+        }
         if (layoutPressureSensitivity != null) {
             layoutPressureSensitivity.setVisibility(laserTool ? View.GONE : View.VISIBLE);
             if (!laserTool && canvasView != null) {
@@ -2743,6 +2795,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
 
     private void restoreNotebookConfig(long targetNotebookId) {
         if (targetNotebookId <= 0 || canvasView == null) return;
+        int savedBrushTexture = getSharedPreferences("paint_brush_texture_prefs", MODE_PRIVATE)
+                .getInt("texture_" + targetNotebookId, 0);
+        canvasView.setBrushTextureStyle(savedBrushTexture);
+        refreshBrushTextureOptionState();
         NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, targetNotebookId);
         if (config == null) {
             restoreUserSettings();
