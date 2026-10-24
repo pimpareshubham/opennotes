@@ -45,7 +45,7 @@ public final class NotebookCoverStyles {
         GradientDrawable gradient = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[]{color, blend(color, 0xFF000000, 0.24f)});
         gradient.setCornerRadius(18f);
-        gradient.setStroke(1, 0x3322FFFFFF);
+        gradient.setStroke(1, 0x33FFFFFF);
         return gradient;
     }
 

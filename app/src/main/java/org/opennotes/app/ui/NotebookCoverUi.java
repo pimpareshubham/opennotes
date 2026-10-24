@@ -41,7 +41,7 @@ public final class NotebookCoverUi {
             card.addView(label, labelLp);
             GradientDrawable stroke = NotebookCoverStyles.drawable(i);
             if (i == selected) stroke.setStroke(Math.round(3*d), 0xFF38BDF8);
-            else stroke.setStroke(Math.round(1*d), 0x668FFFFFFF);
+            else stroke.setStroke(Math.round(1*d), 0x66FFFFFF);
             card.setBackground(stroke);
             card.setContentDescription(NotebookCoverStyles.NAMES[i] + " cover");
             card.setOnClickListener(v -> onSelected.accept(style));

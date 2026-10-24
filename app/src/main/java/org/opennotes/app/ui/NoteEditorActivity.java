@@ -1510,7 +1510,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
             for (int i = 0; i < layoutColorButtons.getChildCount(); i++) {
                 ((GradientDrawable) layoutColorButtons.getChildAt(i).getBackground()).setStroke(
                         Math.round((i == style ? 3 : 1) * getResources().getDisplayMetrics().density),
-                        i == style ? 0xFF38BDF8 : 0x668FFFFFFF);
+                        i == style ? 0xFF38BDF8 : 0x66FFFFFF);
             }
             updatePreview.run();
         });
@@ -1520,7 +1520,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 selectedCoverStyle[0] = -1;
                 for (int i = 0; i < layoutColorButtons.getChildCount(); i++) {
                     ((GradientDrawable) layoutColorButtons.getChildAt(i).getBackground()).setStroke(
-                            Math.round(getResources().getDisplayMetrics().density), 0x668FFFFFFF);
+                            Math.round(getResources().getDisplayMetrics().density), 0x66FFFFFF);
                 }
                 updatePreview.run();
             };

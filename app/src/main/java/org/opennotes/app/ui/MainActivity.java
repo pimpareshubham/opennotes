@@ -582,7 +582,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             for (int i = 0; i < layoutColorButtons.getChildCount(); i++) {
                 ((GradientDrawable) layoutColorButtons.getChildAt(i).getBackground()).setStroke(
                         Math.round((i == style ? 3 : 1) * getResources().getDisplayMetrics().density),
-                        i == style ? 0xFF38BDF8 : 0x668FFFFFFF);
+                        i == style ? 0xFF38BDF8 : 0x66FFFFFF);
             }
             updatePreview.run();
         });
@@ -592,7 +592,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 selectedCoverStyle[0] = -1;
                 for (int i = 0; i < layoutColorButtons.getChildCount(); i++) {
                     ((GradientDrawable) layoutColorButtons.getChildAt(i).getBackground()).setStroke(
-                            Math.round(getResources().getDisplayMetrics().density), 0x668FFFFFFF);
+                            Math.round(getResources().getDisplayMetrics().density), 0x66FFFFFF);
                 }
                 updatePreview.run();
             };
@@ -838,7 +838,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         preview.addView(title, new FrameLayout.LayoutParams(-1, -1));
         TextView captionPreview = new TextView(this);
-        captionPreview.setTextColor(0xFFEFFFFFFF);
+        captionPreview.setTextColor(0xEFFFFFFF);
         captionPreview.setGravity(Gravity.CENTER);
         captionPreview.setTextSize(10);
         FrameLayout.LayoutParams captionLp = new FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
@@ -895,7 +895,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 for (int j = 0; j < grid.getChildCount(); j++) {
                     View child = grid.getChildAt(j);
                     ((GradientDrawable) child.getBackground()).setStroke(Math.round(j == style ? 3*d : 1*d),
-                            j == style ? 0xFF38BDF8 : 0x668FFFFFFF);
+                            j == style ? 0xFF38BDF8 : 0x66FFFFFF);
                 }
                 updateCoverEditorPreview(preview, photo, captionPreview, selected[0], coverColor[0], null,
                         caption.getText().toString());
