@@ -12,6 +12,7 @@ import android.graphics.Shader;
 import android.util.LruCache;
 
 import org.opennotes.app.model.Stroke;
+import org.opennotes.app.model.DrawingTool;
 
 import java.util.Random;
 
@@ -34,6 +35,10 @@ public final class PaintBrushRenderer {
         if (stroke == null || stroke.points == null || stroke.points.isEmpty()) return;
         Path shape = stroke.getPressurePath(pressureSensitivity);
         int style = Math.max(0, Math.min(TEXTURE_COUNT - 1, stroke.brushTextureStyle));
+        if (stroke.tool == DrawingTool.BRUSH) {
+            drawFiberOnly(canvas, stroke, shape, fillPaint, grainPaint, style);
+            return;
+        }
         if (style == 8) drawNeonGlass(canvas, stroke, shape, fillPaint, grainPaint);
         fillPaint.setStyle(Paint.Style.FILL);
         fillPaint.setColor(stroke.color);
@@ -61,6 +66,63 @@ public final class PaintBrushRenderer {
         grainPaint.setAlpha(255);
         canvas.restore();
         drawBristleDetail(canvas, stroke, shape, grainPaint);
+    }
+
+    /** Paint-brush marks are rendered as separated bristle strands only, with feathered ends. */
+    private static void drawFiberOnly(Canvas canvas, Stroke stroke, Path shape,
+                                      Paint glowPaint, Paint fiberPaint, int style) {
+        fiberPaint.setShader(null);
+        fiberPaint.setColorFilter(null);
+        fiberPaint.setStyle(Paint.Style.STROKE);
+        fiberPaint.setStrokeCap(Paint.Cap.ROUND);
+        fiberPaint.setStrokeJoin(Paint.Join.ROUND);
+
+        // Neon glass remains luminous, but its glow is applied to hairs, never a filled silhouette.
+        if (style == 8) {
+            glowPaint.setShader(null);
+            glowPaint.setColorFilter(null);
+            glowPaint.setStyle(Paint.Style.STROKE);
+            glowPaint.setStrokeCap(Paint.Cap.ROUND);
+            glowPaint.setStrokeJoin(Paint.Join.ROUND);
+            glowPaint.setColor(lighten(stroke.color, 1.55f));
+            glowPaint.setAlpha(36);
+            glowPaint.setStrokeWidth(Math.max(2.2f, stroke.width * 0.12f));
+            Path main = stroke.getBrushMainFibers();
+            Path highlights = stroke.getBrushHighlightStrands();
+            if (main != null) canvas.drawPath(main, glowPaint);
+            if (highlights != null) canvas.drawPath(highlights, glowPaint);
+        }
+
+        // Main fibers dominate and remain separated so the paper/background shows through.
+        fiberPaint.setColor(stroke.color);
+        fiberPaint.setAlpha(style == 4 ? 126 : style == 7 ? 158 : 184);
+        fiberPaint.setStrokeWidth(Math.max(0.42f, Math.min(0.78f, stroke.width * 0.032f)));
+        Path main = stroke.getBrushMainFibers();
+        if (main != null) canvas.drawPath(main, fiberPaint);
+
+        fiberPaint.setColor(lighten(stroke.color, style == 8 ? 2.0f : 1.42f));
+        fiberPaint.setAlpha(style == 8 ? 220 : 142);
+        fiberPaint.setStrokeWidth(Math.max(0.38f, Math.min(0.68f, stroke.width * 0.027f)));
+        Path highlights = stroke.getBrushHighlightStrands();
+        if (highlights != null) canvas.drawPath(highlights, fiberPaint);
+
+        fiberPaint.setColor(darken(stroke.color, 0.72f));
+        fiberPaint.setAlpha(118);
+        fiberPaint.setStrokeWidth(Math.max(0.36f, Math.min(0.62f, stroke.width * 0.024f)));
+        Path shades = stroke.getBrushShadeStrands();
+        if (shades != null) canvas.drawPath(shades, fiberPaint);
+
+        // Irregular loose bristles break up the ends and sides like a real brush cut.
+        fiberPaint.setColor(lighten(stroke.color, 1.22f));
+        fiberPaint.setAlpha(142);
+        fiberPaint.setStrokeWidth(Math.max(0.34f, Math.min(0.58f, stroke.width * 0.022f)));
+        Path fibers = stroke.getBrushEdgeFibers();
+        if (fibers != null) canvas.drawPath(fibers, fiberPaint);
+
+        fiberPaint.setStyle(Paint.Style.FILL);
+        fiberPaint.setAlpha(255);
+        glowPaint.setStyle(Paint.Style.FILL);
+        glowPaint.setAlpha(255);
     }
 
     private static void drawBristleDetail(Canvas canvas, Stroke stroke, Path shape, Paint paint) {

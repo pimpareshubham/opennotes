@@ -41,6 +41,7 @@ public class Stroke {
     private transient android.graphics.Path cachedBrushHighlightStrands;
     private transient android.graphics.Path cachedBrushShadeStrands;
     private transient android.graphics.Path cachedBrushEdgeFibers;
+    private transient android.graphics.Path cachedBrushMainFibers;
     private transient boolean pressurePathDirty = true;
     private transient float pressurePathSensitivity = Float.NaN;
 
@@ -54,6 +55,7 @@ public class Stroke {
         if (cachedBrushHighlightStrands != null) cachedBrushHighlightStrands.reset();
         if (cachedBrushShadeStrands != null) cachedBrushShadeStrands.reset();
         if (cachedBrushEdgeFibers != null) cachedBrushEdgeFibers.reset();
+        if (cachedBrushMainFibers != null) cachedBrushMainFibers.reset();
     }
 
     public android.graphics.RectF getBounds() {
@@ -82,6 +84,7 @@ public class Stroke {
     public android.graphics.Path getBrushHighlightStrands() { return cachedBrushHighlightStrands; }
     public android.graphics.Path getBrushShadeStrands() { return cachedBrushShadeStrands; }
     public android.graphics.Path getBrushEdgeFibers() { return cachedBrushEdgeFibers; }
+    public android.graphics.Path getBrushMainFibers() { return cachedBrushMainFibers; }
 
     private void buildPressurePath(float sensitivity) {
         android.graphics.Path path = new android.graphics.Path();
@@ -99,6 +102,7 @@ public class Stroke {
             float w0 = getPressureWidth(p0.pressure, sensitivity) * 0.35f;
             float singleRadius = Math.max(0.8f, w0 * 0.5f);
             path.addCircle(p0.x, p0.y, singleRadius, android.graphics.Path.Direction.CW);
+            if (tool == DrawingTool.BRUSH) buildBrushDabFibers(p0, singleRadius);
             cachedPressurePath = path;
             pressurePathDirty = false;
             return;
@@ -124,6 +128,7 @@ public class Stroke {
             float w0 = getPressureWidth(p0.pressure, sensitivity) * 0.35f;
             float singleRadius = Math.max(0.8f, w0 * 0.5f);
             path.addCircle(p0.x, p0.y, singleRadius, android.graphics.Path.Direction.CW);
+            if (tool == DrawingTool.BRUSH) buildBrushDabFibers(p0, singleRadius);
             cachedPressurePath = path;
             pressurePathDirty = false;
             return;
@@ -197,7 +202,7 @@ public class Stroke {
                             ? Math.min(totalLength * 0.42f, Math.max(4f, width * 2f))
                             : taperLength;
                     float fromEnd = smoothStep(Math.min(1f, (totalLength - traveled) / endTaperLength));
-                    if (tool == DrawingTool.BRUSH) fromStart = 0.52f + fromStart * 0.48f;
+                    if (tool == DrawingTool.BRUSH) fromStart = 0.08f + fromStart * 0.92f;
                     widths[i] *= Math.min(fromStart, fromEnd);
                 }
             }
@@ -332,46 +337,63 @@ public class Stroke {
 
     private void buildBrushTexturePaths(List<DrawingPoint> filtered, float[] widths,
                                        float[] tanX, float[] tanY, int count) {
+        if (cachedBrushMainFibers == null) cachedBrushMainFibers = new android.graphics.Path();
         if (cachedBrushHighlightStrands == null) cachedBrushHighlightStrands = new android.graphics.Path();
         if (cachedBrushShadeStrands == null) cachedBrushShadeStrands = new android.graphics.Path();
         if (cachedBrushEdgeFibers == null) cachedBrushEdgeFibers = new android.graphics.Path();
+        cachedBrushMainFibers.reset();
         cachedBrushHighlightStrands.reset();
         cachedBrushShadeStrands.reset();
         cachedBrushEdgeFibers.reset();
-        if (tool != DrawingTool.BRUSH || count < 3) return;
+        if (tool != DrawingTool.BRUSH || count < 2) return;
 
-        int strandSamples = Math.min(count, 144);
-        for (int lane = 0; lane < 23; lane++) {
-            float across = (lane - 11f) / 13f;
-            android.graphics.Path strands = (lane % 4 == 0)
-                    ? cachedBrushShadeStrands : cachedBrushHighlightStrands;
+        // A brush mark is made exclusively from individual bristles: no filled ribbon.
+        // Dense, slightly irregular strands keep visible paper/background gaps between hairs.
+        float maxWidth = 0f;
+        for (float value : widths) maxWidth = Math.max(maxWidth, value);
+        int laneCount = Math.max(18, Math.min(180, (int) Math.ceil(maxWidth / 0.96f)));
+        int strandSamples = Math.min(count, 160);
+        float[] cumulativeLength = new float[count];
+        for (int i = 1; i < count; i++) {
+            DrawingPoint a = filtered.get(i - 1), b = filtered.get(i);
+            cumulativeLength[i] = cumulativeLength[i - 1]
+                    + (float) Math.hypot(b.x - a.x, b.y - a.y);
+        }
+        float totalLength = cumulativeLength[count - 1];
+        for (int lane = 0; lane < laneCount; lane++) {
+            final int laneId = lane;
+            float across = laneCount == 1 ? 0f : (lane / (laneCount - 1f)) * 1.94f - 0.97f;
+            float seed = edgeNoise(lane, filtered.get(0).x, filtered.get(0).y, 781);
+            // Randomize each bristle's exact start and finish to create a feathered brush cut.
+            float startAt = Math.max(0f, seed * 0.028f + (lane % 7) * 0.003f) * totalLength;
+            float endAt = totalLength * (0.955f + 0.045f * (0.5f + 0.5f * edgeNoise(lane, filtered.get(count - 1).x, filtered.get(count - 1).y, 991)));
+            android.graphics.Path strands = (lane % 5 == 0)
+                    ? cachedBrushShadeStrands
+                    : ((lane % 3 == 0) ? cachedBrushHighlightStrands : cachedBrushMainFibers);
             boolean started = false;
             float lastX = 0f, lastY = 0f;
             for (int sample = 0; sample < strandSamples; sample++) {
-                int i = strandSamples == 1 ? 0
-                        : Math.round(sample * (count - 1f) / (strandSamples - 1f));
+                int i = Math.round(sample * (count - 1f) / Math.max(1f, strandSamples - 1f));
+                float traveled = cumulativeLength[i];
+                if (traveled < startAt || traveled > endAt) continue;
                 DrawingPoint point = filtered.get(i);
                 float halfWidth = Math.max(0f, widths[i] * 0.5f);
                 float normalX = -tanY[i];
                 float normalY = tanX[i];
-                float waviness = (float) Math.sin(i * 0.19f + lane * 1.73f) * halfWidth * 0.018f;
-                float offset = halfWidth * across + waviness;
+                float waviness = (float) Math.sin(i * 0.11f + laneId * 1.91f) * halfWidth * 0.012f;
+                float irregularity = edgeNoise(i, point.x, point.y, laneId) * Math.min(0.42f, halfWidth * 0.025f);
+                float offset = halfWidth * across + waviness + irregularity;
                 float x = point.x + normalX * offset;
                 float y = point.y + normalY * offset;
-                if (!started) {
-                    strands.moveTo(x, y);
-                    started = true;
-                } else {
-                    strands.quadTo(lastX, lastY, (lastX + x) * 0.5f, (lastY + y) * 0.5f);
-                }
-                lastX = x;
-                lastY = y;
+                if (!started) { strands.moveTo(x, y); started = true; }
+                else strands.quadTo(lastX, lastY, (lastX + x) * 0.5f, (lastY + y) * 0.5f);
+                lastX = x; lastY = y;
             }
             if (started) strands.lineTo(lastX, lastY);
         }
 
-        // Fine individual hairs escape the paint boundary and trail along the stroke direction.
-        int fiberSamples = Math.min(240, Math.max(0, count - 2));
+        // Fine individual hairs escape both end cuts as well as the long sides.
+        int fiberSamples = Math.min(360, Math.max(0, count - 2));
         for (int sample = 0; sample < fiberSamples; sample++) {
             int i = 1 + (fiberSamples == 1 ? 0
                     : Math.round(sample * (count - 3f) / (fiberSamples - 1f)));
@@ -392,6 +414,26 @@ public class Stroke {
                         x + tanX[i] * along + normalX * side * flare,
                         y + tanY[i] * along + normalY * side * flare);
             }
+        }
+    }
+
+    private void buildBrushDabFibers(DrawingPoint point, float radius) {
+        if (cachedBrushMainFibers == null) cachedBrushMainFibers = new android.graphics.Path();
+        if (cachedBrushHighlightStrands == null) cachedBrushHighlightStrands = new android.graphics.Path();
+        if (cachedBrushShadeStrands == null) cachedBrushShadeStrands = new android.graphics.Path();
+        cachedBrushMainFibers.reset();
+        cachedBrushHighlightStrands.reset();
+        cachedBrushShadeStrands.reset();
+        int fibers = Math.max(14, Math.min(48, (int) (radius * 2.2f)));
+        for (int i = 0; i < fibers; i++) {
+            double angle = Math.PI * 2.0 * i / fibers;
+            float inner = radius * (0.10f + (edgeNoise(i, point.x, point.y, 122) + 1f) * 0.13f);
+            float outer = radius * (0.64f + (edgeNoise(i, point.x, point.y, 126) + 1f) * 0.20f);
+            float dx = (float) Math.cos(angle), dy = (float) Math.sin(angle);
+            android.graphics.Path target = i % 5 == 0 ? cachedBrushShadeStrands
+                    : i % 3 == 0 ? cachedBrushHighlightStrands : cachedBrushMainFibers;
+            target.moveTo(point.x + dx * inner, point.y + dy * inner);
+            target.lineTo(point.x + dx * outer, point.y + dy * outer);
         }
     }
 
