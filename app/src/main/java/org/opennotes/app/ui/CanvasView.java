@@ -5912,9 +5912,7 @@ public class CanvasView extends View {
                         if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
                             float dy = (touchY - handPanStartY) / scaleFactor;
                             viewportOffsetY = handInitialViewportY - dy;
-                            if (scaleFactor > 1.05f) {
-                                panOffsetX = handInitialPanX + (touchX - handPanStartX);
-                            }
+                            panOffsetX = handInitialPanX + (touchX - handPanStartX);
                             clampViewport();
                             checkAndUpdateActivePage();
                         } else {
