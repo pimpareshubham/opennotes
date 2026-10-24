@@ -16,6 +16,8 @@ public class Stroke {
     public DrawingTool tool;
     /** Paint brush texture captured when this stroke was drawn. */
     public int brushTextureStyle = 0;
+    /** Captured fiber density multiplier, from 1x through 10x. */
+    public int brushFiberDensity = 10;
 
     public enum LineStyle {
         SOLID,
@@ -202,7 +204,11 @@ public class Stroke {
                             ? Math.min(totalLength * 0.42f, Math.max(4f, width * 2f))
                             : taperLength;
                     float fromEnd = smoothStep(Math.min(1f, (totalLength - traveled) / endTaperLength));
-                    if (tool == DrawingTool.BRUSH) fromStart = 0.08f + fromStart * 0.92f;
+                    if (tool == DrawingTool.BRUSH) {
+                        // Keep a small flat brush cut at each end instead of collapsing into a shoe-like point.
+                        fromStart = 0.38f + fromStart * 0.62f;
+                        fromEnd = 0.38f + fromEnd * 0.62f;
+                    }
                     widths[i] *= Math.min(fromStart, fromEnd);
                 }
             }
@@ -351,8 +357,10 @@ public class Stroke {
         // Dense, slightly irregular strands keep visible paper/background gaps between hairs.
         float maxWidth = 0f;
         for (float value : widths) maxWidth = Math.max(maxWidth, value);
-        int laneCount = Math.max(18, Math.min(180, (int) Math.ceil(maxWidth / 0.96f)));
-        int strandSamples = Math.min(count, 160);
+        int density = Math.max(1, Math.min(10, brushFiberDensity));
+        int laneCount = Math.max(18, Math.min(1200,
+                (int) Math.ceil(maxWidth / 0.96f) * density));
+        int strandSamples = Math.min(count, 72);
         float[] cumulativeLength = new float[count];
         for (int i = 1; i < count; i++) {
             DrawingPoint a = filtered.get(i - 1), b = filtered.get(i);
@@ -365,8 +373,8 @@ public class Stroke {
             float across = laneCount == 1 ? 0f : (lane / (laneCount - 1f)) * 1.94f - 0.97f;
             float seed = edgeNoise(lane, filtered.get(0).x, filtered.get(0).y, 781);
             // Randomize each bristle's exact start and finish to create a feathered brush cut.
-            float startAt = Math.max(0f, seed * 0.028f + (lane % 7) * 0.003f) * totalLength;
-            float endAt = totalLength * (0.955f + 0.045f * (0.5f + 0.5f * edgeNoise(lane, filtered.get(count - 1).x, filtered.get(count - 1).y, 991)));
+            float startAt = Math.max(0f, seed * 0.04f + (lane % 7) * 0.005f) * totalLength;
+            float endAt = totalLength * (0.88f + 0.12f * (0.5f + 0.5f * edgeNoise(lane, filtered.get(count - 1).x, filtered.get(count - 1).y, 991)));
             android.graphics.Path strands = (lane % 5 == 0)
                     ? cachedBrushShadeStrands
                     : ((lane % 3 == 0) ? cachedBrushHighlightStrands : cachedBrushMainFibers);
@@ -393,13 +401,13 @@ public class Stroke {
         }
 
         // Fine individual hairs escape both end cuts as well as the long sides.
-        int fiberSamples = Math.min(360, Math.max(0, count - 2));
+        int fiberSamples = Math.min(150, Math.max(0, count - 2));
         for (int sample = 0; sample < fiberSamples; sample++) {
             int i = 1 + (fiberSamples == 1 ? 0
                     : Math.round(sample * (count - 3f) / (fiberSamples - 1f)));
             DrawingPoint point = filtered.get(i);
             float halfWidth = Math.max(0f, widths[i] * 0.5f);
-            float fiberLength = Math.min(8f, 2.0f + widths[i] * 0.20f);
+            float fiberLength = Math.min(3.4f, 1.0f + widths[i] * 0.08f);
             float normalX = -tanY[i];
             float normalY = tanX[i];
             for (int side = -1; side <= 1; side += 2) {
@@ -408,7 +416,7 @@ public class Stroke {
                 float strength = 0.35f + (edgeNoise(i, point.x, point.y, side * 53) + 1f) * 0.325f;
                 if (strength < 0.48f) continue;
                 float along = fiberLength * strength;
-                float flare = Math.max(0.35f, widths[i] * 0.045f) * strength;
+                float flare = Math.max(0.18f, widths[i] * 0.018f) * strength;
                 cachedBrushEdgeFibers.moveTo(x, y);
                 cachedBrushEdgeFibers.lineTo(
                         x + tanX[i] * along + normalX * side * flare,
@@ -571,6 +579,7 @@ public class Stroke {
         obj.put("tool", tool.name());
         obj.put("lineStyle", lineStyle != null ? lineStyle.name() : LineStyle.SOLID.name());
         obj.put("brushTextureStyle", brushTextureStyle);
+        obj.put("brushFiberDensity", Math.max(1, Math.min(10, brushFiberDensity)));
 
         JSONArray arr = new JSONArray();
         for (DrawingPoint pt : points) {
@@ -598,6 +607,7 @@ public class Stroke {
 
         Stroke stroke = new Stroke(color, width, tool);
         stroke.brushTextureStyle = Math.max(0, Math.min(11, obj.optInt("brushTextureStyle", 0)));
+        stroke.brushFiberDensity = Math.max(1, Math.min(10, obj.optInt("brushFiberDensity", 10)));
         String lineStyleName = obj.optString("lineStyle", LineStyle.SOLID.name());
         try {
             stroke.lineStyle = LineStyle.valueOf(lineStyleName);

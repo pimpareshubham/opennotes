@@ -809,6 +809,37 @@
                     android:textSize="12sp"
                     android:layout_marginBottom="6dp" />
 
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal"
+                    android:layout_marginBottom="4dp">
+                    <TextView
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_weight="1"
+                        android:text="Fiber density"
+                        android:textColor="@color/text_secondary"
+                        android:textSize="12sp" />
+                    <TextView
+                        android:id="@+id/textBrushFiberDensity"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="10×"
+                        android:textColor="#7DD3FC"
+                        android:textSize="12sp"
+                        android:minWidth="42dp"
+                        android:gravity="end" />
+                </LinearLayout>
+                <SeekBar
+                    android:id="@+id/seekBrushFiberDensity"
+                    android:layout_width="match_parent"
+                    android:layout_height="36dp"
+                    android:max="9"
+                    android:progress="9"
+                    android:contentDescription="Brush fiber density, 1 to 10 times" />
+
                 <HorizontalScrollView
                     android:layout_width="match_parent"
                     android:layout_height="40dp"

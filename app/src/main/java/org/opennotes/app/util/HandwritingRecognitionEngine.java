@@ -601,6 +601,7 @@ public final class HandwritingRecognitionEngine {
 
             Stroke copy = new Stroke(source.color, source.width, source.tool);
             copy.brushTextureStyle = source.brushTextureStyle;
+            copy.brushFiberDensity = source.brushFiberDensity;
             for (DrawingPoint pt : processed) {
                 float dx = pt.x - cx;
                 float dy = pt.y - cy;

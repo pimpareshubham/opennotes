@@ -221,6 +221,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private TextView textToolPropertyTitle;
     private LinearLayout layoutNibSelector;
     private LinearLayout layoutBrushTexturePicker, layoutBrushTextureOptions;
+    private SeekBar seekBrushFiberDensity;
+    private TextView textBrushFiberDensity;
     private TextView btnNibFine, btnNibMedium, btnNibBold;
     private SeekBar seekStrokeThickness;
     private TextView textThicknessValue;
@@ -577,6 +579,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         layoutNibSelector = findViewById(R.id.layoutNibSelector);
         layoutBrushTexturePicker = findViewById(R.id.layoutBrushTexturePicker);
         layoutBrushTextureOptions = findViewById(R.id.layoutBrushTextureOptions);
+        seekBrushFiberDensity = findViewById(R.id.seekBrushFiberDensity);
+        textBrushFiberDensity = findViewById(R.id.textBrushFiberDensity);
         buildBrushTextureOptions();
         btnNibFine = findViewById(R.id.btnNibFine);
         btnNibMedium = findViewById(R.id.btnNibMedium);
@@ -597,6 +601,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         layoutPenBoxDock = findViewById(R.id.layoutPenBoxDock);
         dividerPenBox = findViewById(R.id.dividerPenBox);
         textStraightLineTitle = findViewById(R.id.textStraightLineTitle);
+        setupBrushFiberDensityControl();
         loadPenBoxPresets();
         renderPenBoxDock();
 
@@ -2347,6 +2352,42 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         refreshBrushTextureOptionState();
     }
 
+    private void setupBrushFiberDensityControl() {
+        if (seekBrushFiberDensity == null) return;
+        seekBrushFiberDensity.setMax(9);
+        int density = getSharedPreferences("paint_brush_fiber_prefs", MODE_PRIVATE)
+                .getInt("density_" + notebookId, 10);
+        density = Math.max(1, Math.min(10, density));
+        seekBrushFiberDensity.setProgress(density - 1);
+        if (canvasView != null) canvasView.setBrushFiberDensity(density);
+        updateBrushFiberDensityLabel(density);
+        seekBrushFiberDensity.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (!fromUser) return;
+                int selectedDensity = progress + 1;
+                if (canvasView != null) canvasView.setBrushFiberDensity(selectedDensity);
+                updateBrushFiberDensityLabel(selectedDensity);
+                getSharedPreferences("paint_brush_fiber_prefs", MODE_PRIVATE).edit()
+                        .putInt("density_" + notebookId, selectedDensity).apply();
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) {}
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
+    }
+
+    private void updateBrushFiberDensityLabel(int density) {
+        if (textBrushFiberDensity != null) textBrushFiberDensity.setText(density + "×");
+    }
+
+    private void restoreBrushFiberDensity(long targetNotebookId) {
+        int density = getSharedPreferences("paint_brush_fiber_prefs", MODE_PRIVATE)
+                .getInt("density_" + targetNotebookId, 10);
+        density = Math.max(1, Math.min(10, density));
+        if (canvasView != null) canvasView.setBrushFiberDensity(density);
+        if (seekBrushFiberDensity != null) seekBrushFiberDensity.setProgress(density - 1);
+        updateBrushFiberDensityLabel(density);
+    }
+
     private void refreshBrushTextureOptionState() {
         if (layoutBrushTextureOptions == null) return;
         int selected = canvasView != null ? canvasView.getBrushTextureStyle() : 0;
@@ -2799,6 +2840,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .getInt("texture_" + targetNotebookId, 0);
         canvasView.setBrushTextureStyle(savedBrushTexture);
         refreshBrushTextureOptionState();
+        restoreBrushFiberDensity(targetNotebookId);
         NotebookConfigManager.NotebookConfig config = NotebookConfigManager.loadConfig(this, targetNotebookId);
         if (config == null) {
             restoreUserSettings();

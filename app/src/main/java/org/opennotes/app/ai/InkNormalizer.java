@@ -305,6 +305,7 @@ public class InkNormalizer {
             Stroke copy = new Stroke(stroke.color, stroke.width, stroke.tool);
             copy.lineStyle = stroke.lineStyle;
             copy.brushTextureStyle = stroke.brushTextureStyle;
+            copy.brushFiberDensity = stroke.brushFiberDensity;
             List<DrawingPoint> points = stroke.getRecognitionPoints();
             if (points == null || points.isEmpty()) points = stroke.points;
             if (points == null) continue;
