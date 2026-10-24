@@ -38,6 +38,9 @@ public class Stroke {
     private transient boolean pathDirty = true;
     private transient boolean boundsDirty = true;
     private transient android.graphics.Path cachedPressurePath;
+    private transient android.graphics.Path cachedBrushHighlightStrands;
+    private transient android.graphics.Path cachedBrushShadeStrands;
+    private transient android.graphics.Path cachedBrushEdgeFibers;
     private transient boolean pressurePathDirty = true;
     private transient float pressurePathSensitivity = Float.NaN;
 
@@ -48,6 +51,9 @@ public class Stroke {
         cachedBounds = null;
         pressurePathDirty = true;
         cachedPressurePath = null;
+        if (cachedBrushHighlightStrands != null) cachedBrushHighlightStrands.reset();
+        if (cachedBrushShadeStrands != null) cachedBrushShadeStrands.reset();
+        if (cachedBrushEdgeFibers != null) cachedBrushEdgeFibers.reset();
     }
 
     public android.graphics.RectF getBounds() {
@@ -72,6 +78,10 @@ public class Stroke {
         }
         return cachedPressurePath;
     }
+
+    public android.graphics.Path getBrushHighlightStrands() { return cachedBrushHighlightStrands; }
+    public android.graphics.Path getBrushShadeStrands() { return cachedBrushShadeStrands; }
+    public android.graphics.Path getBrushEdgeFibers() { return cachedBrushEdgeFibers; }
 
     private void buildPressurePath(float sensitivity) {
         android.graphics.Path path = new android.graphics.Path();
@@ -119,19 +129,21 @@ public class Stroke {
             return;
         }
 
-        // Calm small sample-to-sample direction changes before building the fountain nib outline.
+        // Calm small sample-to-sample direction changes before building the fountain nib or paint outline.
         // Recognition keeps the original samples; this only improves how the ink is rendered.
-        if (tool == DrawingTool.FOUNTAIN && count > 3) {
+        if ((tool == DrawingTool.FOUNTAIN || tool == DrawingTool.BRUSH) && count > 3) {
             List<DrawingPoint> smoothed = new ArrayList<>(count);
             smoothed.add(filtered.get(0));
+            float neighborWeight = tool == DrawingTool.BRUSH ? 0.25f : 0.18f;
+            float centerWeight = 1f - neighborWeight * 2f;
             for (int i = 1; i < count - 1; i++) {
                 DrawingPoint before = filtered.get(i - 1);
                 DrawingPoint point = filtered.get(i);
                 DrawingPoint after = filtered.get(i + 1);
                 smoothed.add(new DrawingPoint(
-                        before.x * 0.18f + point.x * 0.64f + after.x * 0.18f,
-                        before.y * 0.18f + point.y * 0.64f + after.y * 0.18f,
-                        before.pressure * 0.18f + point.pressure * 0.64f + after.pressure * 0.18f,
+                        before.x * neighborWeight + point.x * centerWeight + after.x * neighborWeight,
+                        before.y * neighborWeight + point.y * centerWeight + after.y * neighborWeight,
+                        before.pressure * neighborWeight + point.pressure * centerWeight + after.pressure * neighborWeight,
                         point.timeMillis));
             }
             smoothed.add(filtered.get(count - 1));
@@ -181,7 +193,11 @@ public class Stroke {
                         traveled += (float) Math.hypot(point.x - before.x, point.y - before.y);
                     }
                     float fromStart = smoothStep(Math.min(1f, traveled / taperLength));
-                    float fromEnd = smoothStep(Math.min(1f, (totalLength - traveled) / taperLength));
+                    float endTaperLength = tool == DrawingTool.BRUSH
+                            ? Math.min(totalLength * 0.42f, Math.max(4f, width * 2f))
+                            : taperLength;
+                    float fromEnd = smoothStep(Math.min(1f, (totalLength - traveled) / endTaperLength));
+                    if (tool == DrawingTool.BRUSH) fromStart = 0.52f + fromStart * 0.48f;
                     widths[i] *= Math.min(fromStart, fromEnd);
                 }
             }
@@ -262,23 +278,7 @@ public class Stroke {
             rightY[i] = pt.y - normY * halfW;
         }
 
-        // Give paint strokes a naturally bristled silhouette. This is baked into the cached
-        // pressure outline, so the edge detail is generated once per stroke edit, not per frame.
-        if (tool == DrawingTool.BRUSH && count > 2) {
-            for (int i = 0; i < count; i++) {
-                float endSoftness = Math.min(1f, Math.min(i, count - 1 - i) * 0.65f);
-                if (endSoftness <= 0f) continue;
-                float normalX = -tanY[i];
-                float normalY = tanX[i];
-                float edgeAmplitude = Math.min(2.4f, Math.max(0.35f, widths[i] * 0.075f)) * endSoftness;
-                float leftFray = edgeNoise(i, filtered.get(i).x, filtered.get(i).y, 0x31) * edgeAmplitude;
-                float rightFray = edgeNoise(i, filtered.get(i).x, filtered.get(i).y, 0x67) * edgeAmplitude;
-                leftX[i] += normalX * leftFray;
-                leftY[i] += normalY * leftFray;
-                rightX[i] -= normalX * rightFray;
-                rightY[i] -= normalY * rightFray;
-            }
-        }
+        buildBrushTexturePaths(filtered, widths, tanX, tanY, count);
 
         // 7. Construct Single Continuous Smooth Bezier Envelope
         // No circles inside the stroke! No segmented joints!
@@ -328,6 +328,71 @@ public class Stroke {
         hash = (hash ^ (hash >>> 16)) * 0x45d9f3b;
         hash ^= hash >>> 16;
         return ((hash & 0xFFFF) / 32767.5f) - 1f;
+    }
+
+    private void buildBrushTexturePaths(List<DrawingPoint> filtered, float[] widths,
+                                       float[] tanX, float[] tanY, int count) {
+        if (cachedBrushHighlightStrands == null) cachedBrushHighlightStrands = new android.graphics.Path();
+        if (cachedBrushShadeStrands == null) cachedBrushShadeStrands = new android.graphics.Path();
+        if (cachedBrushEdgeFibers == null) cachedBrushEdgeFibers = new android.graphics.Path();
+        cachedBrushHighlightStrands.reset();
+        cachedBrushShadeStrands.reset();
+        cachedBrushEdgeFibers.reset();
+        if (tool != DrawingTool.BRUSH || count < 3) return;
+
+        int strandSamples = Math.min(count, 144);
+        for (int lane = 0; lane < 23; lane++) {
+            float across = (lane - 11f) / 13f;
+            android.graphics.Path strands = (lane % 4 == 0)
+                    ? cachedBrushShadeStrands : cachedBrushHighlightStrands;
+            boolean started = false;
+            float lastX = 0f, lastY = 0f;
+            for (int sample = 0; sample < strandSamples; sample++) {
+                int i = strandSamples == 1 ? 0
+                        : Math.round(sample * (count - 1f) / (strandSamples - 1f));
+                DrawingPoint point = filtered.get(i);
+                float halfWidth = Math.max(0f, widths[i] * 0.5f);
+                float normalX = -tanY[i];
+                float normalY = tanX[i];
+                float waviness = (float) Math.sin(i * 0.19f + lane * 1.73f) * halfWidth * 0.018f;
+                float offset = halfWidth * across + waviness;
+                float x = point.x + normalX * offset;
+                float y = point.y + normalY * offset;
+                if (!started) {
+                    strands.moveTo(x, y);
+                    started = true;
+                } else {
+                    strands.quadTo(lastX, lastY, (lastX + x) * 0.5f, (lastY + y) * 0.5f);
+                }
+                lastX = x;
+                lastY = y;
+            }
+            if (started) strands.lineTo(lastX, lastY);
+        }
+
+        // Fine individual hairs escape the paint boundary and trail along the stroke direction.
+        int fiberSamples = Math.min(240, Math.max(0, count - 2));
+        for (int sample = 0; sample < fiberSamples; sample++) {
+            int i = 1 + (fiberSamples == 1 ? 0
+                    : Math.round(sample * (count - 3f) / (fiberSamples - 1f)));
+            DrawingPoint point = filtered.get(i);
+            float halfWidth = Math.max(0f, widths[i] * 0.5f);
+            float fiberLength = Math.min(8f, 2.0f + widths[i] * 0.20f);
+            float normalX = -tanY[i];
+            float normalY = tanX[i];
+            for (int side = -1; side <= 1; side += 2) {
+                float x = point.x + normalX * halfWidth * side;
+                float y = point.y + normalY * halfWidth * side;
+                float strength = 0.35f + (edgeNoise(i, point.x, point.y, side * 53) + 1f) * 0.325f;
+                if (strength < 0.48f) continue;
+                float along = fiberLength * strength;
+                float flare = Math.max(0.35f, widths[i] * 0.045f) * strength;
+                cachedBrushEdgeFibers.moveTo(x, y);
+                cachedBrushEdgeFibers.lineTo(
+                        x + tanX[i] * along + normalX * side * flare,
+                        y + tanY[i] * along + normalY * side * flare);
+            }
+        }
     }
 
     private static float smoothStep(float value) {

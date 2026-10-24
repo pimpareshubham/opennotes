@@ -60,6 +60,38 @@ public final class PaintBrushRenderer {
         grainPaint.setColorFilter(null);
         grainPaint.setAlpha(255);
         canvas.restore();
+        drawBristleDetail(canvas, stroke, shape, grainPaint);
+    }
+
+    private static void drawBristleDetail(Canvas canvas, Stroke stroke, Path shape, Paint paint) {
+        paint.setShader(null);
+        paint.setColorFilter(null);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+
+        canvas.save();
+        canvas.clipPath(shape);
+        paint.setColor(lighten(stroke.color, 1.24f));
+        paint.setAlpha(98);
+        paint.setStrokeWidth(Math.max(0.52f, Math.min(1.45f, stroke.width * 0.065f)));
+        Path highlights = stroke.getBrushHighlightStrands();
+        if (highlights != null) canvas.drawPath(highlights, paint);
+
+        paint.setColor(darken(stroke.color, 0.68f));
+        paint.setAlpha(62);
+        paint.setStrokeWidth(Math.max(0.38f, Math.min(1.0f, stroke.width * 0.045f)));
+        Path shades = stroke.getBrushShadeStrands();
+        if (shades != null) canvas.drawPath(shades, paint);
+        canvas.restore();
+
+        paint.setColor(lighten(stroke.color, 1.20f));
+        paint.setAlpha(98);
+        paint.setStrokeWidth(Math.max(0.34f, Math.min(0.82f, stroke.width * 0.038f)));
+        Path fibers = stroke.getBrushEdgeFibers();
+        if (fibers != null) canvas.drawPath(fibers, paint);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setAlpha(255);
     }
 
     private static int textureAlpha(int style) {
