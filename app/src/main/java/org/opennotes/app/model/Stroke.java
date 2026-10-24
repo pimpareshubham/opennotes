@@ -210,7 +210,9 @@ public class Stroke {
                     if (tool == DrawingTool.BRUSH) {
                         // A loaded brush begins broad; lifting pressure narrows the painted body into a tail.
                         fromStart = 0.78f + fromStart * 0.22f;
-                        fromEnd = 0.04f + fromEnd * 0.96f;
+                        // Preserve a broad release edge so the trailing bristles fan out gradually,
+                        // rather than collapsing into a pinched knot before their tails begin.
+                        fromEnd = 0.22f + fromEnd * 0.78f;
                     }
                     widths[i] *= Math.min(fromStart, fromEnd);
                 }
@@ -453,6 +455,8 @@ public class Stroke {
             float x = startPoint.x + normalX * startHalfWidth * across;
             float y = startPoint.y + normalY * startHalfWidth * across;
             cachedBrushTailFibers.moveTo(x, y);
+            float fiberEndX = x;
+            float fiberEndY = y;
             for (int i = startIndex + 1; i < count; i++) {
                 float halfWidth = Math.max(0.08f, widths[i] * 0.5f);
                 float nx = -tanY[i], ny = tanX[i];
@@ -460,13 +464,23 @@ public class Stroke {
                 float px = filtered.get(i).x + nx * (halfWidth * across + laneWobble);
                 float py = filtered.get(i).y + ny * (halfWidth * across + laneWobble);
                 cachedBrushTailFibers.lineTo(px, py);
+                fiberEndX = px;
+                fiberEndY = py;
             }
             float lengthScale = 0.12f + 0.88f * ((edgeNoise(fiber, endX, endY, 1913) + 1f) * 0.5f);
             float tailLength = Math.min(maxWidth * 1.35f, Math.max(3f, maxWidth * lengthScale));
-            float fan = edgeNoise(fiber, endX, endY, 2017) * maxWidth * 0.12f;
-            cachedBrushTailFibers.lineTo(
-                    endX + endTanX * tailLength - endTanY * fan,
-                    endY + endTanY * tailLength + endTanX * fan);
+            // Keep the release tangent-aligned, then introduce only a gentle, smooth fan.
+            float fan = edgeNoise(fiber, endX, endY, 2017)
+                    * Math.min(maxWidth * 0.10f, tailLength * 0.16f);
+            float endNormalX = -endTanY, endNormalY = endTanX;
+            float control1X = fiberEndX + endTanX * tailLength * 0.34f;
+            float control1Y = fiberEndY + endTanY * tailLength * 0.34f;
+            float control2X = fiberEndX + endTanX * tailLength * 0.72f + endNormalX * fan * 0.35f;
+            float control2Y = fiberEndY + endTanY * tailLength * 0.72f + endNormalY * fan * 0.35f;
+            float tailEndX = fiberEndX + endTanX * tailLength + endNormalX * fan;
+            float tailEndY = fiberEndY + endTanY * tailLength + endNormalY * fan;
+            cachedBrushTailFibers.cubicTo(control1X, control1Y,
+                    control2X, control2Y, tailEndX, tailEndY);
         }
     }
 
