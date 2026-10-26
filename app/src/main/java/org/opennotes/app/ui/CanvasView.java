@@ -69,6 +69,7 @@ import java.util.IdentityHashMap;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -433,14 +434,26 @@ public class CanvasView extends View {
         }
     };
 
-    // Dynamic vector zoom tile for razor-sharp PDF rendering at any zoom level (e.g. 753%)
-    private Bitmap activePdfZoomTile = null;
-    private final RectF activePdfZoomTileCanvasRect = new RectF();
-    private String activePdfZoomTilePageRef = null;
-    private float activePdfZoomTileScale = 0f;
-    private boolean isPdfZoomTileRendering = false;
+    // Keep zoom tiles for multiple visible PDF pages; continuous scroll can show
+    // the bottom of one page and the top of the next at the same time.
+    private static final class PdfZoomTile {
+        final Bitmap bitmap;
+        final RectF canvasRect;
+        final float scale;
+
+        PdfZoomTile(Bitmap bitmap, RectF canvasRect, float scale) {
+            this.bitmap = bitmap;
+            this.canvasRect = new RectF(canvasRect);
+            this.scale = scale;
+        }
+    }
+    private final Map<String, PdfZoomTile> pdfZoomTiles =
+            new LinkedHashMap<String, PdfZoomTile>(8, 0.75f, true);
+    private final Map<String, Runnable> pendingPdfZoomTileRunnables = new HashMap<>();
+    private final Set<String> renderingPdfZoomTiles = new HashSet<>();
+    private int pdfZoomTileGeneration = 0;
+    private static final int MAX_CACHED_PDF_ZOOM_TILES = 4;
     private final Handler zoomTileHandler = new Handler(Looper.getMainLooper());
-    private Runnable pendingZoomTileRunnable = null;
 
     // Scrollbar indicator
     private final Paint scrollbarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -3233,10 +3246,9 @@ public class CanvasView extends View {
 
         // 2. High-zoom vector viewport tile (zero quality limits, 100% razor sharp at 753% or any zoom)
         if (img.isBackground && scaleFactor > 1.20f && PdfPageRenderer.isPdfPageReference(img.imagePath)) {
-            if (activePdfZoomTile != null && !activePdfZoomTile.isRecycled()
-                    && img.imagePath.equals(activePdfZoomTilePageRef)
-                    && !activePdfZoomTileCanvasRect.isEmpty()) {
-                canvas.drawBitmap(activePdfZoomTile, null, activePdfZoomTileCanvasRect, paintToUse);
+            PdfZoomTile tile = pdfZoomTiles.get(img.imagePath);
+            if (tile != null && tile.bitmap != null && !tile.bitmap.isRecycled()) {
+                canvas.drawBitmap(tile.bitmap, null, tile.canvasRect, paintToUse);
             }
             schedulePdfZoomTileUpdate(img, pageDocTop);
         }
@@ -3268,21 +3280,25 @@ public class CanvasView extends View {
         final float localB = visDocB - pageDocTop;
 
         // Check if existing zoom tile already covers this area closely at similar scale
-        if (activePdfZoomTile != null && !activePdfZoomTile.isRecycled()
-                && img.imagePath.equals(activePdfZoomTilePageRef)
-                && Math.abs(activePdfZoomTileScale - currentScale) / currentScale < 0.12f
-                && activePdfZoomTileCanvasRect.contains(localL, localT, localR, localB)) {
+        PdfZoomTile currentTile = pdfZoomTiles.get(img.imagePath);
+        if (currentTile != null && currentTile.bitmap != null && !currentTile.bitmap.isRecycled()
+                && Math.abs(currentTile.scale - currentScale) / currentScale < 0.12f
+                && currentTile.canvasRect.contains(localL, localT, localR, localB)) {
             return;
         }
 
-        if (pendingZoomTileRunnable != null) {
-            zoomTileHandler.removeCallbacks(pendingZoomTileRunnable);
+        if (renderingPdfZoomTiles.contains(img.imagePath)) {
+            return;
         }
+        Runnable previous = pendingPdfZoomTileRunnables.remove(img.imagePath);
+        if (previous != null) zoomTileHandler.removeCallbacks(previous);
+        final int generation = pdfZoomTileGeneration;
 
-        pendingZoomTileRunnable = new Runnable() {
+        Runnable tileRunnable = new Runnable() {
             @Override
             public void run() {
-                if (isPdfZoomTileRendering) return;
+                pendingPdfZoomTileRunnables.remove(img.imagePath);
+                if (generation != pdfZoomTileGeneration || renderingPdfZoomTiles.contains(img.imagePath)) return;
                 final int viewW = getWidth();
                 final int viewH = getHeight();
                 if (viewW <= 0 || viewH <= 0) return;
@@ -3307,7 +3323,7 @@ public class CanvasView extends View {
                 final float imgW = img.width;
                 final float imgH = img.height;
 
-                isPdfZoomTileRendering = true;
+                renderingPdfZoomTiles.add(path);
                 backgroundRenderer.execute(new Runnable() {
                     @Override
                     public void run() {
@@ -3326,15 +3342,26 @@ public class CanvasView extends View {
                         post(new Runnable() {
                             @Override
                             public void run() {
-                                isPdfZoomTileRendering = false;
+                                renderingPdfZoomTiles.remove(path);
+                                if (generation != pdfZoomTileGeneration) {
+                                    if (resultTile != null && !resultTile.isRecycled()) resultTile.recycle();
+                                    postInvalidateOnAnimation();
+                                    return;
+                                }
                                 if (resultTile != null) {
-                                    Bitmap old = activePdfZoomTile;
-                                    activePdfZoomTile = resultTile;
-                                    activePdfZoomTileCanvasRect.set(tileCanvasRect);
-                                    activePdfZoomTilePageRef = path;
-                                    activePdfZoomTileScale = currentScale;
-                                    if (old != null && old != resultTile) {
-                                        old.recycle();
+                                    PdfZoomTile old = pdfZoomTiles.put(path,
+                                            new PdfZoomTile(resultTile, tileCanvasRect, currentScale));
+                                    if (old != null && old.bitmap != resultTile && !old.bitmap.isRecycled()) {
+                                        old.bitmap.recycle();
+                                    }
+                                    while (pdfZoomTiles.size() > MAX_CACHED_PDF_ZOOM_TILES) {
+                                        Iterator<Map.Entry<String, PdfZoomTile>> iterator = pdfZoomTiles.entrySet().iterator();
+                                        if (!iterator.hasNext()) break;
+                                        PdfZoomTile evicted = iterator.next().getValue();
+                                        iterator.remove();
+                                        if (evicted.bitmap != null && !evicted.bitmap.isRecycled()) {
+                                            evicted.bitmap.recycle();
+                                        }
                                     }
                                     postInvalidateOnAnimation();
                                 }
@@ -3345,23 +3372,21 @@ public class CanvasView extends View {
             }
         };
 
+        pendingPdfZoomTileRunnables.put(img.imagePath, tileRunnable);
         // Debounce by 60ms to avoid unnecessary work during active touch fling/pinch
-        zoomTileHandler.postDelayed(pendingZoomTileRunnable, 60);
+        zoomTileHandler.postDelayed(tileRunnable, 60);
     }
 
     public void clearPdfZoomTile() {
-        if (pendingZoomTileRunnable != null) {
-            zoomTileHandler.removeCallbacks(pendingZoomTileRunnable);
-            pendingZoomTileRunnable = null;
+        pdfZoomTileGeneration++;
+        for (Runnable runnable : pendingPdfZoomTileRunnables.values()) {
+            zoomTileHandler.removeCallbacks(runnable);
         }
-        if (activePdfZoomTile != null && !activePdfZoomTile.isRecycled()) {
-            activePdfZoomTile.recycle();
-            activePdfZoomTile = null;
+        pendingPdfZoomTileRunnables.clear();
+        for (PdfZoomTile tile : pdfZoomTiles.values()) {
+            if (tile.bitmap != null && !tile.bitmap.isRecycled()) tile.bitmap.recycle();
         }
-        activePdfZoomTileCanvasRect.setEmpty();
-        activePdfZoomTilePageRef = null;
-        activePdfZoomTileScale = 0f;
-        isPdfZoomTileRendering = false;
+        pdfZoomTiles.clear();
     }
 
     private void requestAsyncImageLoad(final ImageItem img) {
