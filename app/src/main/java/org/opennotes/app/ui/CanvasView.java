@@ -3370,10 +3370,11 @@ public class CanvasView extends View {
         if (pendingRenderRequests.contains(path)) return;
         pendingRenderRequests.add(path);
 
-        // Keep the scrolling preview at the page's canvas size so several PDF pages
-        // fit in the bitmap cache. Zoomed areas are rendered directly from the PDF below.
-        final int targetW = Math.max(1, Math.round(img.width));
-        final int targetH = Math.max(1, Math.round(img.height));
+        // Render the preview close to its on-screen pixel width for clear text at fit-to-page.
+        // At higher zoom, viewport tiles render directly from the PDF and carry the extra detail.
+        final float previewScale = Math.min(2f, Math.max(1f, scaleFactor));
+        final int targetW = Math.max(1, Math.round(img.width * previewScale));
+        final int targetH = Math.max(1, Math.round(img.height * previewScale));
         final Context appContext = getContext().getApplicationContext();
 
         backgroundRenderer.execute(new Runnable() {
