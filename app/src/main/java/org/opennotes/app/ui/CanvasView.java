@@ -3236,7 +3236,7 @@ public class CanvasView extends View {
             Paint placeholderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             placeholderPaint.setColor(isPdfAmoledDarkMode ? 0xFF000000 : 0xFFFFFFFF);
             canvas.drawRect(img.getBounds(), placeholderPaint);
-            if (!isPdfBackground || scaleFactor <= 1.20f) {
+            if (!isPdfBackground) {
                 // Request asynchronous decode / PDF render in background thread pool
                 requestAsyncImageLoad(img);
             }
@@ -3246,8 +3246,8 @@ public class CanvasView extends View {
         }
 
         Paint paintToUse = (img.isBackground && isPdfAmoledDarkMode) ? amoledBitmapPaint : bitmapPaint;
-        // Overlay a page-specific high-resolution vector tile when available.
-        if (isPdfBackground && scaleFactor > 1.20f) {
+        // Render every visible PDF viewport directly from its vector source, including fit-to-page.
+        if (isPdfBackground) {
             PdfZoomTile tile = pdfZoomTiles.get(img.imagePath);
             if (tile != null && tile.bitmap != null && !tile.bitmap.isRecycled()) {
                 canvas.drawBitmap(tile.bitmap, null, tile.canvasRect, paintToUse);
@@ -3259,7 +3259,7 @@ public class CanvasView extends View {
     private void schedulePdfZoomTileUpdate(final ImageItem img, final float pageDocTop) {
         if (img == null || img.imagePath == null) return;
         final float currentScale = scaleFactor;
-        if (currentScale <= 1.20f) return;
+        if (currentScale <= 0f) return;
 
         // Calculate document-space bounds of image
         float imgDocLeft = img.x;
@@ -3292,8 +3292,9 @@ public class CanvasView extends View {
         if (renderingPdfZoomTiles.contains(img.imagePath)) {
             return;
         }
-        Runnable previous = pendingPdfZoomTileRunnables.remove(img.imagePath);
-        if (previous != null) zoomTileHandler.removeCallbacks(previous);
+        // Let an already scheduled tile finish. Its completion invalidates the view,
+        // which then requests a fresh tile for the latest viewport if needed.
+        if (pendingPdfZoomTileRunnables.containsKey(img.imagePath)) return;
         final int generation = pdfZoomTileGeneration;
 
         Runnable tileRunnable = new Runnable() {
@@ -3350,6 +3351,9 @@ public class CanvasView extends View {
                                     postInvalidateOnAnimation();
                                     return;
                                 }
+                                // Start the full-page fallback only after the visible vector
+                                // tile has rendered, so it cannot hold up viewport clarity.
+                                if (imageCache.get(path) == null) requestAsyncImageLoad(img);
                                 if (resultTile != null) {
                                     PdfZoomTile old = pdfZoomTiles.put(path,
                                             new PdfZoomTile(resultTile, tileCanvasRect, currentScale));
@@ -3375,8 +3379,8 @@ public class CanvasView extends View {
         };
 
         pendingPdfZoomTileRunnables.put(img.imagePath, tileRunnable);
-        // Debounce by 60ms to avoid unnecessary work during active touch fling/pinch
-        zoomTileHandler.postDelayed(tileRunnable, 60);
+        // Start promptly; while rendering, the previous tile or page preview remains visible.
+        zoomTileHandler.postDelayed(tileRunnable, 16);
     }
 
     public void clearPdfZoomTile() {
