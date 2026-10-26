@@ -426,7 +426,7 @@ public class CanvasView extends View {
 
     // Bitmap LRU cache for fast, memory-safe rendering of on-page images and PDF pages
     private final android.util.LruCache<String, Bitmap> imageCache = new android.util.LruCache<String, Bitmap>(
-            Math.max(16 * 1024 * 1024, (int) (Runtime.getRuntime().maxMemory() / 4))) {
+            Math.max(32 * 1024 * 1024, (int) (Runtime.getRuntime().maxMemory() / 3))) {
         @Override
         protected int sizeOf(String key, Bitmap bitmap) {
             return bitmap != null ? bitmap.getByteCount() : 1;
@@ -3654,6 +3654,18 @@ public class CanvasView extends View {
                 float pageW = getPageWidth(page);
 
                 if (pageTop + pageH < visibleViewport.top || pageTop > visibleViewport.bottom) {
+                    // Render the immediately adjacent pages before they enter view so
+                    // scrolling does not expose a blank placeholder while they load.
+                    if (pIdx == startIdx || pIdx == endIdx) {
+                        if (page.images != null) {
+                            for (ImageItem img : page.images) {
+                                if (img != null && img.isBackground
+                                        && PdfPageRenderer.isPdfPageReference(img.imagePath)) {
+                                    requestAsyncImageLoad(img);
+                                }
+                            }
+                        }
+                    }
                     continue;
                 }
 
