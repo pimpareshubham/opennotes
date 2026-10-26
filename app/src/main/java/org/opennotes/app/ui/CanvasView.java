@@ -3370,11 +3370,10 @@ public class CanvasView extends View {
         if (pendingRenderRequests.contains(path)) return;
         pendingRenderRequests.add(path);
 
-        int screenW = getWidth() > 0 ? getWidth() : 1440;
-        float density = getResources().getDisplayMetrics().density;
-        // Ultra-high base resolution: at least 2880px wide (or screen width * density) without artificial caps
-        final int targetW = Math.max(2880, Math.round(screenW * Math.max(2.0f, density)));
-        final int targetH = Math.round(targetW * (img.height / Math.max(1f, img.width)));
+        // Keep the scrolling preview at the page's canvas size so several PDF pages
+        // fit in the bitmap cache. Zoomed areas are rendered directly from the PDF below.
+        final int targetW = Math.max(1, Math.round(img.width));
+        final int targetH = Math.max(1, Math.round(img.height));
         final Context appContext = getContext().getApplicationContext();
 
         backgroundRenderer.execute(new Runnable() {
