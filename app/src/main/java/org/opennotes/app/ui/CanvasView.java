@@ -452,7 +452,9 @@ public class CanvasView extends View {
     private final Map<String, Runnable> pendingPdfZoomTileRunnables = new HashMap<>();
     private final Set<String> renderingPdfZoomTiles = new HashSet<>();
     private int pdfZoomTileGeneration = 0;
-    private static final int MAX_CACHED_PDF_ZOOM_TILES = 4;
+    private final long maxPdfZoomTileBytes = Math.max(32L * 1024 * 1024,
+            Runtime.getRuntime().maxMemory() / 8);
+    private long cachedPdfZoomTileBytes = 0L;
     private final Handler zoomTileHandler = new Handler(Looper.getMainLooper());
 
     // Scrollbar indicator
@@ -3358,14 +3360,23 @@ public class CanvasView extends View {
                                     PdfZoomTile old = pdfZoomTiles.put(path,
                                             new PdfZoomTile(resultTile, tileCanvasRect, currentScale));
                                     if (old != null && old.bitmap != resultTile && !old.bitmap.isRecycled()) {
+                                        cachedPdfZoomTileBytes -= old.bitmap.getByteCount();
                                         old.bitmap.recycle();
                                     }
-                                    while (pdfZoomTiles.size() > MAX_CACHED_PDF_ZOOM_TILES) {
+                                    cachedPdfZoomTileBytes += resultTile.getByteCount();
+                                    while (cachedPdfZoomTileBytes > maxPdfZoomTileBytes && pdfZoomTiles.size() > 1) {
                                         Iterator<Map.Entry<String, PdfZoomTile>> iterator = pdfZoomTiles.entrySet().iterator();
                                         if (!iterator.hasNext()) break;
-                                        PdfZoomTile evicted = iterator.next().getValue();
+                                        Map.Entry<String, PdfZoomTile> eldest = iterator.next();
+                                        if (path.equals(eldest.getKey()) && iterator.hasNext()) {
+                                            eldest = iterator.next();
+                                        } else if (path.equals(eldest.getKey())) {
+                                            break;
+                                        }
+                                        PdfZoomTile evicted = eldest.getValue();
                                         iterator.remove();
                                         if (evicted.bitmap != null && !evicted.bitmap.isRecycled()) {
+                                            cachedPdfZoomTileBytes -= evicted.bitmap.getByteCount();
                                             evicted.bitmap.recycle();
                                         }
                                     }
@@ -3393,6 +3404,7 @@ public class CanvasView extends View {
             if (tile.bitmap != null && !tile.bitmap.isRecycled()) tile.bitmap.recycle();
         }
         pdfZoomTiles.clear();
+        cachedPdfZoomTileBytes = 0L;
     }
 
     private void requestAsyncImageLoad(final ImageItem img) {
