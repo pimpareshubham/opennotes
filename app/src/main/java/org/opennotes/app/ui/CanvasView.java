@@ -433,6 +433,15 @@ public class CanvasView extends View {
         }
     };
 
+    // Dynamic vector zoom tile for razor-sharp PDF rendering at any zoom level (e.g. 753%)
+    private Bitmap activePdfZoomTile = null;
+    private final RectF activePdfZoomTileCanvasRect = new RectF();
+    private String activePdfZoomTilePageRef = null;
+    private float activePdfZoomTileScale = 0f;
+    private boolean isPdfZoomTileRendering = false;
+    private final Handler zoomTileHandler = new Handler(Looper.getMainLooper());
+    private Runnable pendingZoomTileRunnable = null;
+
     // Scrollbar indicator
     private final Paint scrollbarPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
@@ -977,6 +986,7 @@ public class CanvasView extends View {
         viewportOffsetY = 0f;
         clearSelection();
         clearLaserTrail();
+        clearPdfZoomTile();
         cancelPendingAutoConversion();
         undoStack.clear();
         redoStack.clear();
@@ -3201,6 +3211,10 @@ public class CanvasView extends View {
     }
 
     private void drawImage(Canvas canvas, ImageItem img) {
+        drawImage(canvas, img, 0f);
+    }
+
+    private void drawImage(Canvas canvas, ImageItem img, float pageDocTop) {
         if (img == null || img.imagePath == null) return;
         Bitmap bmp = imageCache.get(img.imagePath);
         if (bmp == null || bmp.isRecycled()) {
@@ -3214,7 +3228,140 @@ public class CanvasView extends View {
         }
 
         Paint paintToUse = (img.isBackground && isPdfAmoledDarkMode) ? amoledBitmapPaint : bitmapPaint;
+        // 1. Draw base high-resolution bitmap (0ms delay, buttery-smooth 120 FPS panning)
         canvas.drawBitmap(bmp, null, img.getBounds(), paintToUse);
+
+        // 2. High-zoom vector viewport tile (zero quality limits, 100% razor sharp at 753% or any zoom)
+        if (img.isBackground && scaleFactor > 1.20f && PdfPageRenderer.isPdfPageReference(img.imagePath)) {
+            if (activePdfZoomTile != null && !activePdfZoomTile.isRecycled()
+                    && img.imagePath.equals(activePdfZoomTilePageRef)
+                    && !activePdfZoomTileCanvasRect.isEmpty()) {
+                canvas.drawBitmap(activePdfZoomTile, null, activePdfZoomTileCanvasRect, paintToUse);
+            }
+            schedulePdfZoomTileUpdate(img, pageDocTop);
+        }
+    }
+
+    private void schedulePdfZoomTileUpdate(final ImageItem img, final float pageDocTop) {
+        if (img == null || img.imagePath == null) return;
+        final float currentScale = scaleFactor;
+        if (currentScale <= 1.20f) return;
+
+        // Calculate document-space bounds of image
+        float imgDocLeft = img.x;
+        float imgDocTop = pageDocTop + img.y;
+        float imgDocRight = img.x + img.width;
+        float imgDocBottom = pageDocTop + img.y + img.height;
+
+        // Intersection with visible viewport in document space
+        final float visDocL = Math.max(imgDocLeft, visibleViewport.left);
+        final float visDocT = Math.max(imgDocTop, visibleViewport.top);
+        final float visDocR = Math.min(imgDocRight, visibleViewport.right);
+        final float visDocB = Math.min(imgDocBottom, visibleViewport.bottom);
+
+        if (visDocL >= visDocR || visDocT >= visDocB) return;
+
+        // Convert intersection to local page coordinates
+        final float localL = visDocL - img.x;
+        final float localT = visDocT - pageDocTop;
+        final float localR = visDocR - img.x;
+        final float localB = visDocB - pageDocTop;
+
+        // Check if existing zoom tile already covers this area closely at similar scale
+        if (activePdfZoomTile != null && !activePdfZoomTile.isRecycled()
+                && img.imagePath.equals(activePdfZoomTilePageRef)
+                && Math.abs(activePdfZoomTileScale - currentScale) / currentScale < 0.12f
+                && activePdfZoomTileCanvasRect.contains(localL, localT, localR, localB)) {
+            return;
+        }
+
+        if (pendingZoomTileRunnable != null) {
+            zoomTileHandler.removeCallbacks(pendingZoomTileRunnable);
+        }
+
+        pendingZoomTileRunnable = new Runnable() {
+            @Override
+            public void run() {
+                if (isPdfZoomTileRendering) return;
+                final int viewW = getWidth();
+                final int viewH = getHeight();
+                if (viewW <= 0 || viewH <= 0) return;
+
+                // Expand viewport bounds slightly (12%) for smooth panning margins
+                float marginX = (localR - localL) * 0.12f;
+                float marginY = (localB - localT) * 0.12f;
+                final RectF tileCanvasRect = new RectF(
+                        Math.max(0f, localL - marginX),
+                        Math.max(0f, localT - marginY),
+                        Math.min(img.width, localR + marginX),
+                        Math.min(img.height, localB + marginY)
+                );
+
+                final int destW = Math.max(1, Math.round(tileCanvasRect.width() * currentScale));
+                final int destH = Math.max(1, Math.round(tileCanvasRect.height() * currentScale));
+                final String path = img.imagePath;
+                final float srcL = tileCanvasRect.left;
+                final float srcT = tileCanvasRect.top;
+                final float srcR = tileCanvasRect.right;
+                final float srcB = tileCanvasRect.bottom;
+                final float imgW = img.width;
+                final float imgH = img.height;
+
+                isPdfZoomTileRendering = true;
+                backgroundRenderer.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        Bitmap tile = null;
+                        try {
+                            tile = PdfPageRenderer.renderPageRegion(
+                                    path, destW, destH,
+                                    srcL, srcT, srcR, srcB,
+                                    imgW, imgH,
+                                    android.graphics.pdf.PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY);
+                        } catch (Throwable t) {
+                            Log.w("CanvasView", "Failed to render PDF zoom tile: " + path, t);
+                        }
+
+                        final Bitmap resultTile = tile;
+                        post(new Runnable() {
+                            @Override
+                            public void run() {
+                                isPdfZoomTileRendering = false;
+                                if (resultTile != null) {
+                                    Bitmap old = activePdfZoomTile;
+                                    activePdfZoomTile = resultTile;
+                                    activePdfZoomTileCanvasRect.set(tileCanvasRect);
+                                    activePdfZoomTilePageRef = path;
+                                    activePdfZoomTileScale = currentScale;
+                                    if (old != null && old != resultTile) {
+                                        old.recycle();
+                                    }
+                                    postInvalidateOnAnimation();
+                                }
+                            }
+                        });
+                    }
+                });
+            }
+        };
+
+        // Debounce by 60ms to avoid unnecessary work during active touch fling/pinch
+        zoomTileHandler.postDelayed(pendingZoomTileRunnable, 60);
+    }
+
+    public void clearPdfZoomTile() {
+        if (pendingZoomTileRunnable != null) {
+            zoomTileHandler.removeCallbacks(pendingZoomTileRunnable);
+            pendingZoomTileRunnable = null;
+        }
+        if (activePdfZoomTile != null && !activePdfZoomTile.isRecycled()) {
+            activePdfZoomTile.recycle();
+            activePdfZoomTile = null;
+        }
+        activePdfZoomTileCanvasRect.setEmpty();
+        activePdfZoomTilePageRef = null;
+        activePdfZoomTileScale = 0f;
+        isPdfZoomTileRendering = false;
     }
 
     private void requestAsyncImageLoad(final ImageItem img) {
@@ -3223,8 +3370,11 @@ public class CanvasView extends View {
         if (pendingRenderRequests.contains(path)) return;
         pendingRenderRequests.add(path);
 
-        final int targetW = (int) img.width;
-        final int targetH = (int) img.height;
+        int screenW = getWidth() > 0 ? getWidth() : 1440;
+        float density = getResources().getDisplayMetrics().density;
+        // Ultra-high base resolution: at least 2880px wide (or screen width * density) without artificial caps
+        final int targetW = Math.max(2880, Math.round(screenW * Math.max(2.0f, density)));
+        final int targetH = Math.round(targetW * (img.height / Math.max(1f, img.width)));
         final Context appContext = getContext().getApplicationContext();
 
         backgroundRenderer.execute(new Runnable() {
@@ -3242,7 +3392,7 @@ public class CanvasView extends View {
                             BitmapFactory.decodeFile(path, opts);
                             opts.inSampleSize = 1;
                             int maxDim = Math.max(opts.outWidth, opts.outHeight);
-                            while (maxDim / opts.inSampleSize > 2048) {
+                            while (maxDim / opts.inSampleSize > 4096) {
                                 opts.inSampleSize *= 2;
                             }
                             opts.inJustDecodeBounds = false;
@@ -3521,7 +3671,7 @@ public class CanvasView extends View {
                 if (page.images != null) {
                     for (ImageItem img : page.images) {
                         if (img != null && img.isBackground) {
-                            drawImage(canvas, img);
+                            drawImage(canvas, img, pageTop);
                         }
                     }
                 }
@@ -3532,7 +3682,7 @@ public class CanvasView extends View {
                     for (ImageItem img : page.images) {
                         if (img != null && !img.isBackground) {
                             if (isTransformingSelection() && page == lassoSelectionPage && selectedImageSet.contains(img)) continue;
-                            drawImage(canvas, img);
+                            drawImage(canvas, img, pageTop);
                         }
                     }
                 }

@@ -141,17 +141,13 @@ public final class PdfPageRenderer {
             if (origW <= 0) origW = 595;
             if (origH <= 0) origH = 842;
 
-            // Target dimensions for crisp rendering
+            // Target dimensions for crisp rendering without artificial quality limits
             float scale;
             if (targetWidth > 0) {
                 scale = (float) targetWidth / origW;
             } else {
-                scale = 1440f / origW;
-            }
-            // Limit max dimension to 2560px for memory safety on mobile GPU
-            float maxDim = Math.max(origW * scale, origH * scale);
-            if (maxDim > 2560f) {
-                scale = 2560f / Math.max(origW, origH);
+                // High-resolution baseline: 300 DPI or 2880px wide
+                scale = Math.max(2880f / origW, 300f / 72f);
             }
             int bmpW = Math.max(1, Math.round(origW * scale));
             int bmpH = Math.max(1, Math.round(origH * scale));
@@ -163,6 +159,85 @@ public final class PdfPageRenderer {
         } catch (Throwable t) {
             Log.e(TAG, "Failed to render PDF page on demand: " + reference, t);
             // On failure, clear cached renderer so subsequent attempts start freshly
+            closeRenderer();
+            return null;
+        } finally {
+            if (page != null) {
+                try { page.close(); } catch (Throwable ignored) {}
+            }
+        }
+    }
+
+    /**
+     * Renders an exact sub-region of a PDF page at exact screen pixel density.
+     * Used for high-zoom (e.g. 753%) vector viewport rendering with zero blurriness.
+     */
+    @Nullable
+    public static synchronized Bitmap renderPageRegion(String reference,
+                                                       int destWidth, int destHeight,
+                                                       float srcLeft, float srcTop,
+                                                       float srcRight, float srcBottom,
+                                                       float pageWidthUnits, float pageHeightUnits,
+                                                       int renderMode) {
+        if (destWidth <= 0 || destHeight <= 0) return null;
+        String pdfPath = extractPdfPath(reference);
+        int pageIndex = extractPageIndex(reference);
+
+        File pdfFile = new File(pdfPath);
+        if (!pdfFile.exists() || !pdfFile.canRead()) {
+            Log.w(TAG, "PDF file does not exist or cannot be read: " + pdfPath);
+            return null;
+        }
+
+        PdfRenderer.Page page = null;
+        try {
+            if (sCachedRenderer != null && !pdfPath.equals(sCachedPdfPath)) {
+                closeRenderer();
+            }
+            if (sCachedRenderer == null) {
+                sCachedPfd = ParcelFileDescriptor.open(pdfFile, ParcelFileDescriptor.MODE_READ_ONLY);
+                sCachedRenderer = new PdfRenderer(sCachedPfd);
+                sCachedPdfPath = pdfPath;
+            }
+            PdfRenderer renderer = sCachedRenderer;
+            if (pageIndex < 0 || pageIndex >= renderer.getPageCount()) {
+                Log.w(TAG, "Invalid page index: " + pageIndex + ", total: " + renderer.getPageCount());
+                return null;
+            }
+            page = renderer.openPage(pageIndex);
+            int origW = page.getWidth();
+            int origH = page.getHeight();
+            if (origW <= 0) origW = 595;
+            if (origH <= 0) origH = 842;
+
+            // Map canvas source rect to PDF point coordinates [0..origW, 0..origH]
+            float unitToPdfX = (pageWidthUnits > 0) ? ((float) origW / pageWidthUnits) : 1f;
+            float unitToPdfY = (pageHeightUnits > 0) ? ((float) origH / pageHeightUnits) : 1f;
+
+            float pdfSrcL = Math.max(0f, srcLeft * unitToPdfX);
+            float pdfSrcT = Math.max(0f, srcTop * unitToPdfY);
+            float pdfSrcR = Math.min((float) origW, srcRight * unitToPdfX);
+            float pdfSrcB = Math.min((float) origH, srcBottom * unitToPdfY);
+
+            float pdfSrcW = pdfSrcR - pdfSrcL;
+            float pdfSrcH = pdfSrcB - pdfSrcT;
+            if (pdfSrcW <= 0.01f || pdfSrcH <= 0.01f) return null;
+
+            int bmpW = Math.max(1, destWidth);
+            int bmpH = Math.max(1, destHeight);
+
+            Bitmap bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888);
+            bitmap.eraseColor(Color.WHITE);
+
+            // Matrix transforms PDF page space [pdfSrcL..pdfSrcR, pdfSrcT..pdfSrcB] to bitmap space [0..bmpW, 0..bmpH]
+            android.graphics.Matrix matrix = new android.graphics.Matrix();
+            matrix.postTranslate(-pdfSrcL, -pdfSrcT);
+            matrix.postScale((float) bmpW / pdfSrcW, (float) bmpH / pdfSrcH);
+
+            page.render(bitmap, null, matrix, renderMode);
+            return bitmap;
+        } catch (Throwable t) {
+            Log.e(TAG, "Failed to render PDF page region: " + reference, t);
             closeRenderer();
             return null;
         } finally {

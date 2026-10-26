@@ -93,7 +93,9 @@ public class PdfExporter {
                         try {
                             Bitmap bmp;
                             if (PdfPageRenderer.isPdfPageReference(img.imagePath)) {
-                                bmp = PdfPageRenderer.renderPageForExport(context, img.imagePath, (int) img.width, (int) img.height);
+                                int targetExpW = Math.max(pageWidth, Math.round(img.width * uniformScale));
+                                int targetExpH = Math.max(pageHeight, Math.round(img.height * uniformScale));
+                                bmp = PdfPageRenderer.renderPageForExport(context, img.imagePath, targetExpW, targetExpH);
                             } else {
                                 File imgFile = new File(img.imagePath);
                                 if (!imgFile.exists()) continue;
