@@ -3229,23 +3229,25 @@ public class CanvasView extends View {
 
     private void drawImage(Canvas canvas, ImageItem img, float pageDocTop) {
         if (img == null || img.imagePath == null) return;
+        boolean isPdfBackground = img.isBackground && PdfPageRenderer.isPdfPageReference(img.imagePath);
         Bitmap bmp = imageCache.get(img.imagePath);
         if (bmp == null || bmp.isRecycled()) {
             // Draw placeholder immediately in 0ms so the UI thread NEVER drops a frame during rapid scrolling / fling
             Paint placeholderPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
             placeholderPaint.setColor(isPdfAmoledDarkMode ? 0xFF000000 : 0xFFFFFFFF);
             canvas.drawRect(img.getBounds(), placeholderPaint);
-            // Request asynchronous decode / PDF render in background thread pool
-            requestAsyncImageLoad(img);
-            return;
+            if (!isPdfBackground || scaleFactor <= 1.20f) {
+                // Request asynchronous decode / PDF render in background thread pool
+                requestAsyncImageLoad(img);
+            }
+        } else {
+            Paint paintToUse = (img.isBackground && isPdfAmoledDarkMode) ? amoledBitmapPaint : bitmapPaint;
+            canvas.drawBitmap(bmp, null, img.getBounds(), paintToUse);
         }
 
         Paint paintToUse = (img.isBackground && isPdfAmoledDarkMode) ? amoledBitmapPaint : bitmapPaint;
-        // 1. Draw base high-resolution bitmap (0ms delay, buttery-smooth 120 FPS panning)
-        canvas.drawBitmap(bmp, null, img.getBounds(), paintToUse);
-
-        // 2. High-zoom vector viewport tile (zero quality limits, 100% razor sharp at 753% or any zoom)
-        if (img.isBackground && scaleFactor > 1.20f && PdfPageRenderer.isPdfPageReference(img.imagePath)) {
+        // Overlay a page-specific high-resolution vector tile when available.
+        if (isPdfBackground && scaleFactor > 1.20f) {
             PdfZoomTile tile = pdfZoomTiles.get(img.imagePath);
             if (tile != null && tile.bitmap != null && !tile.bitmap.isRecycled()) {
                 canvas.drawBitmap(tile.bitmap, null, tile.canvasRect, paintToUse);
@@ -3395,11 +3397,11 @@ public class CanvasView extends View {
         if (pendingRenderRequests.contains(path)) return;
         pendingRenderRequests.add(path);
 
-        // Render the preview close to its on-screen pixel width for clear text at fit-to-page.
-        // At higher zoom, viewport tiles render directly from the PDF and carry the extra detail.
-        final float previewScale = Math.min(2f, Math.max(1f, scaleFactor));
-        final int targetW = Math.max(1, Math.round(img.width * previewScale));
-        final int targetH = Math.max(1, Math.round(img.height * previewScale));
+        // Keep the fallback preview at device display resolution, independent of the
+        // zoom level when it is first requested. Vector tiles handle higher zoom.
+        int displayWidth = getWidth() > 0 ? getWidth() : Math.round(img.width);
+        final int targetW = Math.max(Math.round(img.width), displayWidth);
+        final int targetH = Math.max(1, Math.round(targetW * (img.height / Math.max(1f, img.width))));
         final Context appContext = getContext().getApplicationContext();
 
         backgroundRenderer.execute(new Runnable() {
