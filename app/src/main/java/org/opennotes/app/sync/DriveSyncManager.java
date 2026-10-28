@@ -277,14 +277,36 @@ public final class DriveSyncManager {
                     if (matchedRemote != null) matchedRemoteSyncIds.add(matchedRemote.syncId);
                 }
 
-                int totalSteps = Math.max(1, totalLocal + remoteBySyncId.size() - matchedRemoteSyncIds.size());
+                int totalSteps = 0;
+                for (Notebook localNb : localNotebooks) {
+                    if (localNb == null) continue;
+                    GoogleDriveApiClient.DriveFile remoteFile = remoteBySyncId.get(localNb.syncId);
+                    if (remoteFile == null) {
+                        totalSteps++;
+                        continue;
+                    }
+                    long lastSynced = settings.getNotebookLastSyncedTime(localNb.syncId);
+                    boolean remoteIsNewer = remoteFile.updatedAt > localNb.updatedAt + 2000L
+                            && remoteFile.updatedAt > lastSynced + 2000L;
+                    boolean localIsNewer = localNb.updatedAt > remoteFile.updatedAt + 2000L;
+                    boolean localDirty = localNb.updatedAt > lastSynced + 1000L;
+                    if (remoteIsNewer || (localDirty && localIsNewer)) totalSteps++;
+                }
+                for (GoogleDriveApiClient.DriveFile rf : remoteBySyncId.values()) {
+                    if (rf != null && rf.syncId != null
+                            && !matchedRemoteSyncIds.contains(rf.syncId)
+                            && !deletedSyncIds.contains(rf.syncId)) {
+                        totalSteps++;
+                    }
+                }
+
+                int completedSteps = 0;
                 Set<String> processedSyncIds = new HashSet<>();
 
                 for (int i = 0; i < totalLocal; i++) {
                     Notebook localNb = localNotebooks.get(i);
                     if (localNb == null) continue;
 
-                    int stepNum = i + 1;
                     GoogleDriveApiClient.DriveFile remoteFile = remoteBySyncId.get(localNb.syncId);
                     // If remote file not found by syncId, check if a remote file matches by title so we link them instead of creating a duplicate
                     if (remoteFile == null && localNb.title != null && !localNb.title.trim().isEmpty()) {
@@ -305,6 +327,7 @@ public final class DriveSyncManager {
 
                     if (remoteFile == null) {
                         // Notebook does not exist in Drive -> upload
+                        int stepNum = ++completedSteps;
                         notifyProgress("Uploading \"" + localNb.title + "\" (" + stepNum + "/" + totalSteps + ")…",
                                 stepNum, totalSteps, singleListener);
                         File tempArchive = null;
@@ -334,6 +357,7 @@ public final class DriveSyncManager {
 
                         if (remoteIsNewer) {
                             // Remote is newer -> download and update local notebook
+                            int stepNum = ++completedSteps;
                             notifyProgress("Downloading updated \"" + localNb.title + "\" (" + stepNum + "/" + totalSteps + ")…",
                                     stepNum, totalSteps, singleListener);
                             File tempDown = new File(appContext.getCacheDir(), "down_" + localNb.syncId + "_" + System.nanoTime() + ".tmp");
@@ -352,6 +376,7 @@ public final class DriveSyncManager {
                             }
                         } else if (localDirty && localIsNewer) {
                             // Local was modified since last sync and is newer than remote -> update remote file
+                            int stepNum = ++completedSteps;
                             notifyProgress("Updating \"" + localNb.title + "\" in Drive (" + stepNum + "/" + totalSteps + ")…",
                                     stepNum, totalSteps, singleListener);
                             File tempArchive = null;
@@ -371,9 +396,7 @@ public final class DriveSyncManager {
                                 }
                             }
                         } else {
-                            // Both are already synchronized; report progress so progress bar advances
-                            notifyProgress("Checking \"" + localNb.title + "\" (" + stepNum + "/" + totalSteps + ")…",
-                                    stepNum, totalSteps, singleListener);
+                            // Both are already synchronized; only transfer operations count toward progress.
                             long syncTimestamp = Math.max(localUpdated, remoteUpdated);
                             if (lastSynced < syncTimestamp) {
                                 settings.setNotebookLastSyncedTime(localNb.syncId, syncTimestamp);
@@ -384,7 +407,6 @@ public final class DriveSyncManager {
                 }
 
                 // 5. Download remote notebooks created on other devices
-                int remoteIndex = 0;
                 for (GoogleDriveApiClient.DriveFile rf : remoteBySyncId.values()) {
                     if (rf == null || rf.syncId == null || rf.syncId.trim().isEmpty()) continue;
                     if (processedSyncIds.contains(rf.syncId)) continue;
@@ -399,8 +421,7 @@ public final class DriveSyncManager {
                         String rfTitle = extractTitleFromFileName(rf.name, rf.syncId);
 
                         // Download note
-                        remoteIndex++;
-                        int currentStep = totalLocal + remoteIndex;
+                        int currentStep = ++completedSteps;
                         notifyProgress("Downloading note: \"" + (rfTitle.isEmpty() ? rf.name : rfTitle) + "\" (" + currentStep + "/" + totalSteps + ")…",
                                 currentStep, totalSteps, singleListener);
                         File tempDown = new File(appContext.getCacheDir(), "import_" + System.nanoTime() + ".tmp");
