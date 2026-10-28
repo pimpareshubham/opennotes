@@ -335,8 +335,7 @@
                     app:trackThickness="8dp"
                     app:trackCornerRadius="4dp"
                     app:trackColor="#26384D"
-                    app:indicatorColor="@color/accent"
-                    app:indeterminateAnimationType="contiguous" />
+                    app:indicatorColor="@color/accent" />
 
                 <!-- Details Footer -->
                 <LinearLayout
