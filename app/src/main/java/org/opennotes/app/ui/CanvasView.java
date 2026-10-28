@@ -315,6 +315,12 @@ public class CanvasView extends View {
     private boolean isTwoFingerInteracting = false;
     private long lastTwoFingerEndTime = 0L;
     private ValueAnimator activeScrollAnimator = null;
+    private ValueAnimator mouseScrollAnimator = null;
+    private ValueAnimator mousePanAnimator = null;
+    private float mouseTargetViewportOffsetY = -1f;
+    private float mouseTargetPanX = 0f;
+    private float mouseTargetPanY = 0f;
+    private long lastMousePageFlipTime = 0L;
 
     // Multi-page & Continuous Vertical Scroll state
     private List<Page> allPages;
@@ -3512,19 +3518,173 @@ public class CanvasView extends View {
         if (event.isFromSource(InputDevice.SOURCE_CLASS_POINTER)
                 && event.getAction() == MotionEvent.ACTION_SCROLL) {
             float vScroll = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
-            if (vScroll != 0f && isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
-                float scrollDelta = -vScroll * dp(64f) / scaleFactor;
-                viewportOffsetY += scrollDelta;
-                clampViewport();
-                checkAndUpdateActivePage();
+            float hScroll = event.getAxisValue(MotionEvent.AXIS_HSCROLL);
+
+            // Ctrl + Wheel: Smooth Zoom centered at mouse cursor
+            boolean isCtrl = (event.getMetaState() & android.view.KeyEvent.META_CTRL_ON) != 0;
+            if (isCtrl && vScroll != 0f) {
+                float zoomFactor = vScroll > 0 ? 1.10f : (1f / 1.10f);
+                zoomAround(scaleFactor * zoomFactor, event.getX(), event.getY());
                 invalidate();
-                if (changeListener != null) {
-                    changeListener.onScrollChanged(viewportOffsetY, getMaxScrollY());
-                }
+                notifyZoomChange();
+                notifyLassoSelection();
                 return true;
+            }
+
+            if (vScroll != 0f || hScroll != 0f) {
+                if (isContinuousVerticalScroll && allPages != null && allPages.size() > 1) {
+                    smoothScrollContinuousByMouse(-vScroll);
+                    return true;
+                } else if (isInfinite || scaleFactor > 1.05f) {
+                    smoothPanByMouse(-hScroll, -vScroll);
+                    return true;
+                } else if (isSwipePageEnabled && vScroll != 0f) {
+                    long now = SystemClock.uptimeMillis();
+                    if (now - lastMousePageFlipTime > 350L) {
+                        lastMousePageFlipTime = now;
+                        if (vScroll < 0) {
+                            triggerSwipeNextPage();
+                        } else {
+                            triggerSwipePrevPage();
+                        }
+                    }
+                    return true;
+                }
             }
         }
         return super.onGenericMotionEvent(event);
+    }
+
+    private void smoothScrollContinuousByMouse(float scrollDeltaUnits) {
+        if (allPages == null || allPages.size() <= 1) return;
+
+        setInputFrameRatePreference(true);
+        if (scroller != null && !scroller.isFinished()) {
+            scroller.abortAnimation();
+        }
+
+        float currentY = viewportOffsetY;
+        float maxScrollY = getMaxScrollY();
+        float deltaY = scrollDeltaUnits * (dp(96f) / scaleFactor);
+
+        float currentTarget = (mouseScrollAnimator != null && mouseScrollAnimator.isRunning() && mouseTargetViewportOffsetY >= 0f)
+                ? mouseTargetViewportOffsetY
+                : currentY;
+
+        // If reversing direction during scroll, reset target anchor to current position
+        if ((deltaY > 0 && currentTarget < currentY) || (deltaY < 0 && currentTarget > currentY)) {
+            currentTarget = currentY;
+        }
+
+        float newTarget = Math.max(0f, Math.min(maxScrollY, currentTarget + deltaY));
+        mouseTargetViewportOffsetY = newTarget;
+
+        float remaining = newTarget - currentY;
+        if (Math.abs(remaining) < 0.5f) {
+            viewportOffsetY = newTarget;
+            clampViewport();
+            checkAndUpdateActivePage();
+            postInvalidateOnAnimation();
+            if (changeListener != null) {
+                changeListener.onScrollChanged(viewportOffsetY, maxScrollY);
+            }
+            return;
+        }
+
+        if (mouseScrollAnimator != null) {
+            mouseScrollAnimator.cancel();
+        }
+
+        long duration = (long) Math.min(320L, Math.max(160L, 140L + Math.abs(remaining) * 0.25f));
+        mouseScrollAnimator = ValueAnimator.ofFloat(currentY, newTarget);
+        mouseScrollAnimator.setDuration(duration);
+        mouseScrollAnimator.setInterpolator(new DecelerateInterpolator(1.8f));
+        mouseScrollAnimator.addUpdateListener(animation -> {
+            viewportOffsetY = (float) animation.getAnimatedValue();
+            clampViewport();
+            checkAndUpdateActivePage();
+            postInvalidateOnAnimation();
+            if (changeListener != null) {
+                changeListener.onScrollChanged(viewportOffsetY, getMaxScrollY());
+            }
+        });
+        mouseScrollAnimator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (mouseScrollAnimator == animation) {
+                    mouseScrollAnimator = null;
+                    mouseTargetViewportOffsetY = -1f;
+                    if (!handPanDragging && !manualTwoFingerPanConfirmed && (scroller == null || scroller.isFinished())) {
+                        setInputFrameRatePreference(false);
+                    }
+                }
+            }
+
+            @Override
+            public void onAnimationCancel(Animator animation) {
+                if (mouseScrollAnimator == animation) {
+                    mouseScrollAnimator = null;
+                }
+            }
+        });
+        mouseScrollAnimator.start();
+    }
+
+    private void smoothPanByMouse(float deltaXUnits, float deltaYUnits) {
+        setInputFrameRatePreference(true);
+        if (scroller != null && !scroller.isFinished()) {
+            scroller.abortAnimation();
+        }
+
+        float deltaX = deltaXUnits * (dp(96f) / scaleFactor);
+        float deltaY = deltaYUnits * (dp(96f) / scaleFactor);
+
+        float startPanX = panOffsetX;
+        float startPanY = panOffsetY;
+        float targetPanX = (mousePanAnimator != null && mousePanAnimator.isRunning())
+                ? mouseTargetPanX + deltaX
+                : startPanX + deltaX;
+        float targetPanY = (mousePanAnimator != null && mousePanAnimator.isRunning())
+                ? mouseTargetPanY + deltaY
+                : startPanY + deltaY;
+
+        mouseTargetPanX = targetPanX;
+        mouseTargetPanY = targetPanY;
+
+        if (mousePanAnimator != null) {
+            mousePanAnimator.cancel();
+        }
+
+        long duration = 180L;
+        mousePanAnimator = ValueAnimator.ofFloat(0f, 1f);
+        mousePanAnimator.setDuration(duration);
+        mousePanAnimator.setInterpolator(new DecelerateInterpolator(1.8f));
+        mousePanAnimator.addUpdateListener(animation -> {
+            float fraction = animation.getAnimatedFraction();
+            panOffsetX = startPanX + (targetPanX - startPanX) * fraction;
+            panOffsetY = startPanY + (targetPanY - startPanY) * fraction;
+            postInvalidateOnAnimation();
+            notifyLassoSelection();
+        });
+        mousePanAnimator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (mousePanAnimator == animation) {
+                    mousePanAnimator = null;
+                    if (!handPanDragging && !manualTwoFingerPanConfirmed && (scroller == null || scroller.isFinished())) {
+                        setInputFrameRatePreference(false);
+                    }
+                }
+            }
+
+            @Override
+            public void onAnimationCancel(Animator animation) {
+                if (mousePanAnimator == animation) {
+                    mousePanAnimator = null;
+                }
+            }
+        });
+        mousePanAnimator.start();
     }
 
     private void clampViewport() {
@@ -6006,6 +6166,15 @@ public class CanvasView extends View {
         recordMotionEventForPrediction(event);
 
         if (action == MotionEvent.ACTION_DOWN) {
+            if (mouseScrollAnimator != null && mouseScrollAnimator.isRunning()) {
+                mouseScrollAnimator.cancel();
+                mouseScrollAnimator = null;
+                mouseTargetViewportOffsetY = -1f;
+            }
+            if (mousePanAnimator != null && mousePanAnimator.isRunning()) {
+                mousePanAnimator.cancel();
+                mousePanAnimator = null;
+            }
             setInputFrameRatePreference(true);
         } else if (action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL) {
             setInputFrameRatePreference(false);
@@ -7335,6 +7504,14 @@ public class CanvasView extends View {
         if (activeScrollAnimator != null) {
             activeScrollAnimator.cancel();
             activeScrollAnimator = null;
+        }
+        if (mouseScrollAnimator != null) {
+            mouseScrollAnimator.cancel();
+            mouseScrollAnimator = null;
+        }
+        if (mousePanAnimator != null) {
+            mousePanAnimator.cancel();
+            mousePanAnimator = null;
         }
         if (activeZoomAnimator != null) {
             activeZoomAnimator.cancel();
