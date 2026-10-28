@@ -437,9 +437,19 @@ public final class DriveSyncManager {
         currentProgress = 0;
         currentTotal = 0;
         mainHandler.post(() -> {
-            if (singleListener != null) singleListener.onSyncStarted();
+            if (singleListener != null) {
+                try {
+                    singleListener.onSyncStarted();
+                } catch (Throwable t) {
+                    Log.w(TAG, "Error invoking singleListener.onSyncStarted", t);
+                }
+            }
             for (SyncListener l : listeners) {
-                l.onSyncStarted();
+                try {
+                    l.onSyncStarted();
+                } catch (Throwable t) {
+                    Log.w(TAG, "Error invoking listener.onSyncStarted", t);
+                }
             }
         });
     }
@@ -449,9 +459,19 @@ public final class DriveSyncManager {
         currentProgress = current;
         currentTotal = total;
         mainHandler.post(() -> {
-            if (singleListener != null) singleListener.onSyncProgress(stage, current, total);
+            if (singleListener != null) {
+                try {
+                    singleListener.onSyncProgress(stage, current, total);
+                } catch (Throwable t) {
+                    Log.w(TAG, "Error invoking singleListener.onSyncProgress", t);
+                }
+            }
             for (SyncListener l : listeners) {
-                l.onSyncProgress(stage, current, total);
+                try {
+                    l.onSyncProgress(stage, current, total);
+                } catch (Throwable t) {
+                    Log.w(TAG, "Error invoking listener.onSyncProgress", t);
+                }
             }
         });
     }
@@ -460,9 +480,19 @@ public final class DriveSyncManager {
         currentStage = "All notes up to date";
         currentProgress = Math.max(1, currentTotal);
         mainHandler.post(() -> {
-            if (singleListener != null) singleListener.onSyncCompleted(uploaded, downloaded, deleted);
+            if (singleListener != null) {
+                try {
+                    singleListener.onSyncCompleted(uploaded, downloaded, deleted);
+                } catch (Throwable t) {
+                    Log.w(TAG, "Error invoking singleListener.onSyncCompleted", t);
+                }
+            }
             for (SyncListener l : listeners) {
-                l.onSyncCompleted(uploaded, downloaded, deleted);
+                try {
+                    l.onSyncCompleted(uploaded, downloaded, deleted);
+                } catch (Throwable t) {
+                    Log.w(TAG, "Error invoking listener.onSyncCompleted", t);
+                }
             }
         });
     }
@@ -470,9 +500,19 @@ public final class DriveSyncManager {
     private void notifyError(String error, @Nullable SyncListener singleListener) {
         currentStage = "Failed: " + error;
         mainHandler.post(() -> {
-            if (singleListener != null) singleListener.onSyncError(error);
+            if (singleListener != null) {
+                try {
+                    singleListener.onSyncError(error);
+                } catch (Throwable t) {
+                    Log.w(TAG, "Error invoking singleListener.onSyncError", t);
+                }
+            }
             for (SyncListener l : listeners) {
-                l.onSyncError(error);
+                try {
+                    l.onSyncError(error);
+                } catch (Throwable t) {
+                    Log.w(TAG, "Error invoking listener.onSyncError", t);
+                }
             }
         });
     }

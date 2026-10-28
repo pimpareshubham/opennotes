@@ -67,6 +67,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 
 public class MainActivity extends AppCompatActivity implements NotebookAdapter.OnNotebookClickListener {
 
@@ -141,11 +142,13 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     private TextView backupProgressPercent;
 
     private AlertDialog googleDriveSyncDialog;
+    private final DriveSyncManager.SyncListener[] dialogSyncListenerHolder = new DriveSyncManager.SyncListener[1];
 
     private final DriveSyncManager.SyncListener mainSyncListener = new DriveSyncManager.SyncListener() {
         @Override
         public void onSyncStarted() {
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 updateCloudSyncIcon();
                 com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                 if (topBar != null) {
@@ -158,6 +161,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         @Override
         public void onSyncProgress(String stage, int current, int total) {
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 updateCloudSyncIcon();
                 com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                 if (topBar != null) {
@@ -176,6 +180,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         @Override
         public void onSyncCompleted(int uploaded, int downloaded, int deleted) {
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 updateCloudSyncIcon();
                 com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                 if (topBar != null) {
@@ -192,6 +197,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         @Override
         public void onSyncError(String errorMessage) {
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 updateCloudSyncIcon();
                 com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                 if (topBar != null) {
@@ -294,61 +300,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             btnMenuMore.setOnClickListener(v -> showSettingsMenu());
         }
 
-        DriveSyncManager.getInstance().addListener(new DriveSyncManager.SyncListener() {
-            @Override
-            public void onSyncStarted() {
-                runOnUiThread(() -> {
-                    updateCloudSyncIcon();
-                    com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
-                    if (topBar != null) {
-                        topBar.setVisibility(View.VISIBLE);
-                        topBar.setIndeterminate(true);
-                    }
-                });
-            }
 
-            @Override
-            public void onSyncProgress(String stage, int current, int total) {
-                runOnUiThread(() -> {
-                    com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
-                    if (topBar != null) {
-                        topBar.setVisibility(View.VISIBLE);
-                        if (total > 0) {
-                            int pct = Math.min(100, Math.max(0, (current * 100) / total));
-                            topBar.setIndeterminate(false);
-                            topBar.setProgressCompat(pct, true);
-                        } else {
-                            topBar.setIndeterminate(true);
-                        }
-                    }
-                });
-            }
-
-            @Override
-            public void onSyncCompleted(int uploaded, int downloaded, int deleted) {
-                runOnUiThread(() -> {
-                    updateCloudSyncIcon();
-                    com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
-                    if (topBar != null) {
-                        topBar.setIndeterminate(false);
-                        topBar.setProgressCompat(100, true);
-                        topBar.postDelayed(() -> topBar.setVisibility(View.GONE), 1200);
-                    }
-                    loadNotebooks();
-                });
-            }
-
-            @Override
-            public void onSyncError(String errorMessage) {
-                runOnUiThread(() -> {
-                    updateCloudSyncIcon();
-                    com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
-                    if (topBar != null) {
-                        topBar.setVisibility(View.GONE);
-                    }
-                });
-            }
-        });
 
         recyclerView.post(this::offerHandwritingModelSetup);
         handlePdfIntent(getIntent());
@@ -531,13 +483,23 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         });
     }
 
+    private void executeIoTask(Runnable task) {
+        if (task == null || isFinishing() || isDestroyed()) return;
+        if (notebookIoExecutor.isShutdown() || notebookIoExecutor.isTerminated()) return;
+        try {
+            notebookIoExecutor.execute(task);
+        } catch (RejectedExecutionException ignored) {}
+    }
+
     private void loadNotebooks() {
+        if (isFinishing() || isDestroyed()) return;
+        if (notebookIoExecutor.isShutdown() || notebookIoExecutor.isTerminated()) return;
         final int generation = ++notebookLoadGeneration;
         final String folder = currentFolder;
         final boolean favoritesOnly = isFavoritesOnly;
         final String searchQuery = currentSearchQuery;
         final boolean isSearching = searchQuery != null && !searchQuery.trim().isEmpty();
-        notebookIoExecutor.execute(() -> {
+        executeIoTask(() -> {
             List<Notebook> result = dbHelper.getAllNotebooks(folder, favoritesOnly, searchQuery);
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed() || generation != notebookLoadGeneration) return;
@@ -797,7 +759,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 newNb.folder = currentFolder;
             }
             dialog.dismiss();
-            notebookIoExecutor.execute(() -> {
+            executeIoTask(() -> {
                 long id = dbHelper.insertNotebook(newNb);
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
@@ -878,7 +840,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         ThemeUtils.styleDialog(dialog, this);
         dialog.show();
 
-        notebookIoExecutor.execute(() -> {
+        executeIoTask(() -> {
             try {
                 long notebookId = PdfImporter.importPdf(this, pdfUri, customTitle, (current, total) -> {
                     runOnUiThread(() -> {
@@ -926,7 +888,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         notebook.isFavorite = !notebook.isFavorite;
         final long id = notebook.id;
         final boolean fav = notebook.isFavorite;
-        notebookIoExecutor.execute(() -> dbHelper.setFavorite(id, fav));
+        executeIoTask(() -> dbHelper.setFavorite(id, fav));
         loadNotebooks();
     }
 
@@ -950,7 +912,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                         false, () -> {
                             notebook.isPinned = !notebook.isPinned;
                             final boolean pinned = notebook.isPinned;
-                            notebookIoExecutor.execute(() -> dbHelper.setPinned(notebook.id, pinned));
+                            executeIoTask(() -> dbHelper.setPinned(notebook.id, pinned));
                             loadNotebooks();
                             Toast.makeText(this, pinned ? "Notebook pinned to top" : "Notebook unpinned", Toast.LENGTH_SHORT).show();
                         })
@@ -1090,7 +1052,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                     notebook.coverColor = coverColor[0];
                     notebook.coverImagePath = imagePath[0];
                     notebook.coverText = caption.getText().toString().trim();
-                    notebookIoExecutor.execute(() -> dbHelper.updateNotebook(notebook));
+                    executeIoTask(() -> dbHelper.updateNotebook(notebook));
                     loadNotebooks();
                 }).create();
         ThemeUtils.styleDialog(dialog, this);
@@ -1133,7 +1095,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                     String newTitle = input.getText().toString().trim();
                     if (!newTitle.isEmpty()) {
                         notebook.title = newTitle;
-                        notebookIoExecutor.execute(() -> dbHelper.updateNotebook(notebook));
+                        executeIoTask(() -> dbHelper.updateNotebook(notebook));
                         loadNotebooks();
                     }
                 })
@@ -1144,7 +1106,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     }
 
     private void duplicateNotebook(Notebook notebook) {
-        notebookIoExecutor.execute(() -> {
+        executeIoTask(() -> {
             dbHelper.duplicateNotebook(notebook.id);
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
@@ -1180,7 +1142,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 .setTitle(R.string.delete)
                 .setMessage("Delete \"" + notebook.title + "\"? All pages will be permanently deleted.")
                 .setPositiveButton(R.string.delete, (d, which) -> {
-                    notebookIoExecutor.execute(() -> dbHelper.deleteNotebook(notebook.id));
+                    executeIoTask(() -> dbHelper.deleteNotebook(notebook.id));
                     loadNotebooks();
                     Toast.makeText(this, "Notebook deleted", Toast.LENGTH_SHORT).show();
                 })
@@ -1280,7 +1242,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 .setMessage("Delete " + count + (count == 1 ? " notebook?" : " notebooks?")
                         + " All pages will be permanently deleted.")
                 .setPositiveButton(R.string.delete, (d, which) -> {
-                    notebookIoExecutor.execute(() -> {
+                    executeIoTask(() -> {
                         for (Long id : selectedIds) {
                             dbHelper.deleteNotebook(id);
                         }
@@ -1305,7 +1267,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
 
         Toast.makeText(this, "Exporting " + count + (count == 1 ? " notebook" : " notebooks") + " to PDF…", Toast.LENGTH_SHORT).show();
 
-        notebookIoExecutor.execute(() -> {
+        executeIoTask(() -> {
             ArrayList<Uri> uris = new ArrayList<>();
             for (Long id : selectedIds) {
                 try {
@@ -1610,6 +1572,15 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     @Override
     protected void onDestroy() {
         searchDebounceHandler.removeCallbacksAndMessages(null);
+        DriveSyncManager.getInstance().removeListener(mainSyncListener);
+        if (dialogSyncListenerHolder[0] != null) {
+            DriveSyncManager.getInstance().removeListener(dialogSyncListenerHolder[0]);
+            dialogSyncListenerHolder[0] = null;
+        }
+        if (googleDriveSyncDialog != null && googleDriveSyncDialog.isShowing()) {
+            googleDriveSyncDialog.dismiss();
+            googleDriveSyncDialog = null;
+        }
         notebookIoExecutor.shutdown();
         super.onDestroy();
     }
@@ -1720,7 +1691,10 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         com.google.android.material.button.MaterialButton btnSyncNow = dialogView.findViewById(R.id.btnSyncNow);
         View btnSignOut = dialogView.findViewById(R.id.btnSignOut);
 
-        final DriveSyncManager.SyncListener[] dialogSyncListenerHolder = new DriveSyncManager.SyncListener[1];
+        if (dialogSyncListenerHolder[0] != null) {
+            DriveSyncManager.getInstance().removeListener(dialogSyncListenerHolder[0]);
+            dialogSyncListenerHolder[0] = null;
+        }
 
         if (isConnected) {
             layoutSignedOut.setVisibility(View.GONE);
@@ -1756,6 +1730,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 @Override
                 public void onSyncStarted() {
                     runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
                         if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.VISIBLE);
                         if (btnSyncNow != null) btnSyncNow.setEnabled(false);
                         if (textSyncStatusStage != null) textSyncStatusStage.setText("Starting synchronization…");
@@ -1772,6 +1747,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 @Override
                 public void onSyncProgress(String stage, int current, int total) {
                     runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
                         if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.VISIBLE);
                         if (btnSyncNow != null) btnSyncNow.setEnabled(false);
                         if (textSyncStatusStage != null) textSyncStatusStage.setText(stage);
@@ -1798,6 +1774,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 @Override
                 public void onSyncCompleted(int uploadedCount, int downloadedCount, int deletedCount) {
                     runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
                         if (progressSync != null) {
                             progressSync.setIndeterminate(false);
                             progressSync.setProgressCompat(100, true);
@@ -1812,6 +1789,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                         updateCloudSyncIcon();
                         if (layoutSyncProgress != null) {
                             layoutSyncProgress.postDelayed(() -> {
+                                if (isFinishing() || isDestroyed()) return;
                                 if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.GONE);
                                 if (btnSyncNow != null) btnSyncNow.setEnabled(true);
                             }, 1200);
@@ -1830,6 +1808,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                 @Override
                 public void onSyncError(String errorMessage) {
                     runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
                         if (textSyncStatusStage != null) textSyncStatusStage.setText("Sync failed: " + errorMessage);
                         if (textSyncStatusPill != null) {
                             textSyncStatusPill.setText("● Error");
@@ -1839,6 +1818,7 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                         updateCloudSyncIcon();
                         if (layoutSyncProgress != null) {
                             layoutSyncProgress.postDelayed(() -> {
+                                if (isFinishing() || isDestroyed()) return;
                                 if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.GONE);
                             }, 2500);
                         }

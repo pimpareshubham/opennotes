@@ -299,10 +299,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private long recordStartTime = 0;
     private AlertDialog googleDriveSyncDialog;
     private ActivityResultLauncher<Intent> googleSignInLauncher;
+    private final DriveSyncManager.SyncListener[] dialogSyncListenerHolder = new DriveSyncManager.SyncListener[1];
     private final DriveSyncManager.SyncListener editorSyncListener = new DriveSyncManager.SyncListener() {
         @Override
         public void onSyncStarted() {
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 updateCloudSyncIcon();
                 com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                 if (topBar != null) {
@@ -315,6 +317,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         @Override
         public void onSyncProgress(String stage, int current, int total) {
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 updateCloudSyncIcon();
                 com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                 if (topBar != null) {
@@ -333,12 +336,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         @Override
         public void onSyncCompleted(int uploaded, int downloaded, int deleted) {
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 updateCloudSyncIcon();
                 com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                 if (topBar != null) {
                     topBar.setIndeterminate(false);
                     topBar.setProgressCompat(100, true);
-                    topBar.postDelayed(() -> topBar.setVisibility(View.GONE), 1200);
+                    topBar.postDelayed(() -> {
+                        if (isFinishing() || isDestroyed()) return;
+                        topBar.setVisibility(View.GONE);
+                    }, 1200);
                 }
             });
         }
@@ -346,6 +353,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         @Override
         public void onSyncError(String errorMessage) {
             runOnUiThread(() -> {
+                if (isFinishing() || isDestroyed()) return;
                 updateCloudSyncIcon();
                 com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                 if (topBar != null) {
@@ -2158,6 +2166,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             @Override
                             public void onSyncStarted() {
                                 runOnUiThread(() -> {
+                                    if (isFinishing() || isDestroyed()) return;
                                     updateCloudSyncIcon();
                                     com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                                     if (topBar != null) {
@@ -2171,6 +2180,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             @Override
                             public void onSyncProgress(String stage, int current, int total) {
                                 runOnUiThread(() -> {
+                                    if (isFinishing() || isDestroyed()) return;
                                     updateCloudSyncIcon();
                                     com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                                     if (topBar != null) {
@@ -2189,12 +2199,16 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             @Override
                             public void onSyncCompleted(int uploadedCount, int downloadedCount, int deletedCount) {
                                 runOnUiThread(() -> {
+                                    if (isFinishing() || isDestroyed()) return;
                                     updateCloudSyncIcon();
                                     com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                                     if (topBar != null) {
                                         topBar.setIndeterminate(false);
                                         topBar.setProgressCompat(100, true);
-                                        topBar.postDelayed(() -> topBar.setVisibility(View.GONE), 1200);
+                                        topBar.postDelayed(() -> {
+                                            if (isFinishing() || isDestroyed()) return;
+                                            topBar.setVisibility(View.GONE);
+                                        }, 1200);
                                     }
                                     if (uploadedCount > 0 || downloadedCount > 0 || deletedCount > 0) {
                                         Toast.makeText(NoteEditorActivity.this, "Synced with Google Drive! (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded)", Toast.LENGTH_SHORT).show();
@@ -2207,6 +2221,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                             @Override
                             public void onSyncError(String errorMessage) {
                                 runOnUiThread(() -> {
+                                    if (isFinishing() || isDestroyed()) return;
                                     updateCloudSyncIcon();
                                     com.google.android.material.progressindicator.LinearProgressIndicator topBar = findViewById(R.id.topSyncProgressBar);
                                     if (topBar != null) {
@@ -2477,7 +2492,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         btnExitFullscreen.setOnClickListener(v -> setZenFullscreen(false));
-        DriveSyncManager.getInstance().addListener(editorSyncListener);
     }
 
     private long lastToolClickTime = 0L;
@@ -7503,6 +7517,14 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     @Override
     protected void onDestroy() {
         DriveSyncManager.getInstance().removeListener(editorSyncListener);
+        if (dialogSyncListenerHolder[0] != null) {
+            DriveSyncManager.getInstance().removeListener(dialogSyncListenerHolder[0]);
+            dialogSyncListenerHolder[0] = null;
+        }
+        if (googleDriveSyncDialog != null && googleDriveSyncDialog.isShowing()) {
+            googleDriveSyncDialog.dismiss();
+            googleDriveSyncDialog = null;
+        }
         viewStateDebounceHandler.removeCallbacksAndMessages(null);
         saveDebounceHandler.removeCallbacksAndMessages(null);
         resetZoomHandler.removeCallbacksAndMessages(null);
@@ -7535,7 +7557,6 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         try {
             org.opennotes.app.util.PdfPageRenderer.closeRenderer();
         } catch (Exception ignored) {}
-        DriveSyncManager.getInstance().removeListener(editorSyncListener);
     }
 
     private void enableHighRefreshRate() {
@@ -7644,7 +7665,10 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         com.google.android.material.button.MaterialButton btnSyncNow = dialogView.findViewById(R.id.btnSyncNow);
         View btnSignOut = dialogView.findViewById(R.id.btnSignOut);
 
-        final DriveSyncManager.SyncListener[] dialogSyncListenerHolder = new DriveSyncManager.SyncListener[1];
+        if (dialogSyncListenerHolder[0] != null) {
+            DriveSyncManager.getInstance().removeListener(dialogSyncListenerHolder[0]);
+            dialogSyncListenerHolder[0] = null;
+        }
 
         if (isConnected) {
             layoutSignedOut.setVisibility(View.GONE);
@@ -7680,6 +7704,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 @Override
                 public void onSyncStarted() {
                     runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
                         if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.VISIBLE);
                         if (btnSyncNow != null) btnSyncNow.setEnabled(false);
                         if (textSyncStatusStage != null) textSyncStatusStage.setText("Starting synchronization…");
@@ -7696,6 +7721,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 @Override
                 public void onSyncProgress(String stage, int current, int total) {
                     runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
                         if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.VISIBLE);
                         if (btnSyncNow != null) btnSyncNow.setEnabled(false);
                         if (textSyncStatusStage != null) textSyncStatusStage.setText(stage);
@@ -7722,6 +7748,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 @Override
                 public void onSyncCompleted(int uploadedCount, int downloadedCount, int deletedCount) {
                     runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
                         if (progressSync != null) {
                             progressSync.setIndeterminate(false);
                             progressSync.setProgressCompat(100, true);
@@ -7736,6 +7763,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         updateCloudSyncIcon();
                         if (layoutSyncProgress != null) {
                             layoutSyncProgress.postDelayed(() -> {
+                                if (isFinishing() || isDestroyed()) return;
                                 if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.GONE);
                                 if (btnSyncNow != null) btnSyncNow.setEnabled(true);
                             }, 1200);
@@ -7753,6 +7781,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 @Override
                 public void onSyncError(String errorMessage) {
                     runOnUiThread(() -> {
+                        if (isFinishing() || isDestroyed()) return;
                         if (textSyncStatusStage != null) textSyncStatusStage.setText("Sync failed: " + errorMessage);
                         if (textSyncStatusPill != null) {
                             textSyncStatusPill.setText("● Error");
@@ -7762,6 +7791,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                         updateCloudSyncIcon();
                         if (layoutSyncProgress != null) {
                             layoutSyncProgress.postDelayed(() -> {
+                                if (isFinishing() || isDestroyed()) return;
                                 if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.GONE);
                             }, 2500);
                         }
