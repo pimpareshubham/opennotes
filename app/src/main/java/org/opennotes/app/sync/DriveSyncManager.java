@@ -49,6 +49,10 @@ public final class DriveSyncManager {
     private final AtomicBoolean isSyncing = new AtomicBoolean(false);
     private final List<SyncListener> listeners = new CopyOnWriteArrayList<>();
     private long lastSyncAttemptTime = 0L;
+    private volatile long syncStartTime = 0L;
+    private volatile String currentStage = "Synchronizing with Google Drive…";
+    private volatile int currentProgress = 0;
+    private volatile int currentTotal = 0;
 
     private DriveSyncManager() {}
 
@@ -61,6 +65,18 @@ public final class DriveSyncManager {
 
     public boolean isSyncing() {
         return isSyncing.get();
+    }
+
+    public String getCurrentStage() {
+        return currentStage;
+    }
+
+    public int getCurrentProgress() {
+        return currentProgress;
+    }
+
+    public int getCurrentTotal() {
+        return currentTotal;
     }
 
     public void addListener(@NonNull SyncListener listener) {
@@ -139,12 +155,34 @@ public final class DriveSyncManager {
             return;
         }
 
+        long now = System.currentTimeMillis();
+        // Safety watchdog: reset if previous sync has been running for > 90 seconds
+        if (isSyncing.get() && (now - syncStartTime > 90000L)) {
+            Log.w(TAG, "Sync operation exceeded 90s safety timeout, resetting lock.");
+            isSyncing.set(false);
+        }
+
         if (!isSyncing.compareAndSet(false, true)) {
-            Log.i(TAG, "Sync already in progress, skipping duplicate request.");
+            Log.i(TAG, "Sync already in progress, attaching listener to active session.");
+            if (singleListener != null) {
+                addListener(singleListener);
+                final String stg = currentStage;
+                final int cur = currentProgress;
+                final int tot = currentTotal;
+                mainHandler.post(() -> singleListener.onSyncProgress(stg, cur, tot));
+            }
             return;
         }
 
-        lastSyncAttemptTime = System.currentTimeMillis();
+        syncStartTime = now;
+        lastSyncAttemptTime = now;
+        currentStage = "Starting synchronization…";
+        currentProgress = 0;
+        currentTotal = 0;
+
+        if (singleListener != null) {
+            addListener(singleListener);
+        }
         notifyStarted(singleListener);
 
         try {
@@ -212,13 +250,14 @@ public final class DriveSyncManager {
                 db.deduplicateNotebooks();
                 List<Notebook> localNotebooks = db.getAllNotebooks("All", false, null);
                 int totalLocal = localNotebooks.size();
-                int totalSteps = totalLocal + remoteFiles.size();
+                int totalSteps = Math.max(1, totalLocal + remoteFiles.size());
                 Set<String> processedSyncIds = new HashSet<>();
 
                 for (int i = 0; i < totalLocal; i++) {
                     Notebook localNb = localNotebooks.get(i);
                     if (localNb == null) continue;
 
+                    int stepNum = i + 1;
                     if (localNb.syncId == null || localNb.syncId.trim().isEmpty()) {
                         localNb.syncId = UUID.randomUUID().toString();
                         db.updateNotebook(localNb);
@@ -230,8 +269,8 @@ public final class DriveSyncManager {
 
                     if (remoteFile == null) {
                         // Notebook does not exist in Drive -> upload
-                        notifyProgress("Uploading \"" + localNb.title + "\" (" + (i + 1) + "/" + Math.max(1, totalSteps) + ")…",
-                                i + 1, Math.max(1, totalSteps), singleListener);
+                        notifyProgress("Uploading \"" + localNb.title + "\" (" + stepNum + "/" + totalSteps + ")…",
+                                stepNum, totalSteps, singleListener);
                         File tempArchive = null;
                         try {
                             tempArchive = NativeNoteArchive.exportNotebookToTempArchive(appContext, db, localNb);
@@ -255,8 +294,8 @@ public final class DriveSyncManager {
 
                         if (remoteIsNewer) {
                             // Remote is newer -> download and update local notebook
-                            notifyProgress("Downloading updated \"" + localNb.title + "\"…",
-                                    i + 1, Math.max(1, totalSteps), singleListener);
+                            notifyProgress("Downloading updated \"" + localNb.title + "\" (" + stepNum + "/" + totalSteps + ")…",
+                                    stepNum, totalSteps, singleListener);
                             File tempDown = new File(appContext.getCacheDir(), "down_" + localNb.syncId + "_" + System.nanoTime() + ".tmp");
                             try {
                                 GoogleDriveApiClient.getInstance().downloadFile(appContext, remoteFile.id, tempDown);
@@ -270,8 +309,8 @@ public final class DriveSyncManager {
                             }
                         } else if (localDirty && localIsNewer) {
                             // Local was modified since last sync and is newer than remote -> update remote file
-                            notifyProgress("Updating \"" + localNb.title + "\" in Drive…",
-                                    i + 1, Math.max(1, totalSteps), singleListener);
+                            notifyProgress("Updating \"" + localNb.title + "\" in Drive (" + stepNum + "/" + totalSteps + ")…",
+                                    stepNum, totalSteps, singleListener);
                             File tempArchive = null;
                             try {
                                 tempArchive = NativeNoteArchive.exportNotebookToTempArchive(appContext, db, localNb);
@@ -285,7 +324,9 @@ public final class DriveSyncManager {
                                 }
                             }
                         } else {
-                            // Both are already synchronized; avoid redundant re-compression or upload
+                            // Both are already synchronized; report progress so progress bar advances
+                            notifyProgress("Checking \"" + localNb.title + "\" (" + stepNum + "/" + totalSteps + ")…",
+                                    stepNum, totalSteps, singleListener);
                             if (lastSynced < localUpdated) {
                                 settings.setNotebookLastSyncedTime(localNb.syncId, localUpdated);
                             }
@@ -310,8 +351,8 @@ public final class DriveSyncManager {
                             // Download note
                             remoteIndex++;
                             int currentStep = totalLocal + remoteIndex;
-                            notifyProgress("Downloading note: \"" + (rfTitle.isEmpty() ? rf.name : rfTitle) + "\"…",
-                                    currentStep, Math.max(1, totalSteps), singleListener);
+                            notifyProgress("Downloading note: \"" + (rfTitle.isEmpty() ? rf.name : rfTitle) + "\" (" + currentStep + "/" + totalSteps + ")…",
+                                    currentStep, totalSteps, singleListener);
                             File tempDown = new File(appContext.getCacheDir(), "import_" + System.nanoTime() + ".tmp");
                             try {
                                 GoogleDriveApiClient.getInstance().downloadFile(appContext, rf.id, tempDown);
@@ -330,9 +371,11 @@ public final class DriveSyncManager {
                     }
                 }
 
+                notifyProgress("Finalizing synchronization…", totalSteps, totalSteps, singleListener);
+
                 // 6. Record success
-                long now = System.currentTimeMillis();
-                settings.setGoogleLastSyncTime(now);
+                long nowSuccess = System.currentTimeMillis();
+                settings.setGoogleLastSyncTime(nowSuccess);
                 String statusMsg;
                 if (uploadedCount > 0 || downloadedCount > 0 || deletedCount > 0) {
                     statusMsg = "Synced (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded"
@@ -365,6 +408,9 @@ public final class DriveSyncManager {
     }
 
     private void notifyStarted(@Nullable SyncListener singleListener) {
+        currentStage = "Starting synchronization…";
+        currentProgress = 0;
+        currentTotal = 0;
         mainHandler.post(() -> {
             if (singleListener != null) singleListener.onSyncStarted();
             for (SyncListener l : listeners) {
@@ -374,6 +420,9 @@ public final class DriveSyncManager {
     }
 
     private void notifyProgress(String stage, int current, int total, @Nullable SyncListener singleListener) {
+        currentStage = stage;
+        currentProgress = current;
+        currentTotal = total;
         mainHandler.post(() -> {
             if (singleListener != null) singleListener.onSyncProgress(stage, current, total);
             for (SyncListener l : listeners) {
@@ -383,6 +432,8 @@ public final class DriveSyncManager {
     }
 
     private void notifyCompleted(int uploaded, int downloaded, int deleted, @Nullable SyncListener singleListener) {
+        currentStage = "All notes up to date";
+        currentProgress = Math.max(1, currentTotal);
         mainHandler.post(() -> {
             if (singleListener != null) singleListener.onSyncCompleted(uploaded, downloaded, deleted);
             for (SyncListener l : listeners) {
@@ -392,6 +443,7 @@ public final class DriveSyncManager {
     }
 
     private void notifyError(String error, @Nullable SyncListener singleListener) {
+        currentStage = "Failed: " + error;
         mainHandler.post(() -> {
             if (singleListener != null) singleListener.onSyncError(error);
             for (SyncListener l : listeners) {

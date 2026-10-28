@@ -319,7 +319,7 @@
                         android:id="@+id/textSyncProgressPercent"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="0%"
+                        android:text="…"
                         android:textColor="@color/accent"
                         android:textSize="12sp"
                         android:textStyle="bold"

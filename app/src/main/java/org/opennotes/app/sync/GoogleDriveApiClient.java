@@ -79,14 +79,13 @@ public final class GoogleDriveApiClient {
             try {
                 JSONObject folder = executeWithAuth(context, (token) -> {
                     HttpURLConnection conn = openGet(DRIVE_API_BASE + "/files/" + savedFolderId + "?fields=id,name,trashed", token);
-                    if (conn.getResponseCode() == 200) {
-                        return readJsonResponse(conn);
-                    }
-                    return null;
+                    return readJsonResponse(conn);
                 });
                 if (folder != null && !folder.optBoolean("trashed", false)) {
                     return savedFolderId;
                 }
+            } catch (AuthExpiredException e) {
+                throw e;
             } catch (Throwable t) {
                 Log.w(TAG, "Cached folder ID invalid or inaccessible, searching root: " + t.getMessage());
             }
@@ -418,24 +417,28 @@ public final class GoogleDriveApiClient {
     }
 
     private JSONObject readJsonResponse(HttpURLConnection conn) throws Exception {
-        int code = conn.getResponseCode();
-        if (code == 401) {
-            throw new AuthExpiredException("HTTP 401 Unauthorized from Google Drive API");
-        }
-        if (code < 200 || code >= 300) {
-            String err = readError(conn);
-            throw new IOException("Google Drive API error HTTP " + code + ": " + err);
-        }
-
-        try (InputStream in = new BufferedInputStream(conn.getInputStream())) {
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            byte[] buf = new byte[4096];
-            int len;
-            while ((len = in.read(buf)) != -1) {
-                bos.write(buf, 0, len);
+        try {
+            int code = conn.getResponseCode();
+            if (code == 401) {
+                throw new AuthExpiredException("HTTP 401 Unauthorized from Google Drive API");
             }
-            String str = bos.toString(StandardCharsets.UTF_8.name());
-            return str.trim().isEmpty() ? new JSONObject() : new JSONObject(str);
+            if (code < 200 || code >= 300) {
+                String err = readError(conn);
+                throw new IOException("Google Drive API error HTTP " + code + ": " + err);
+            }
+
+            try (InputStream in = new BufferedInputStream(conn.getInputStream())) {
+                ByteArrayOutputStream bos = new ByteArrayOutputStream();
+                byte[] buf = new byte[4096];
+                int len;
+                while ((len = in.read(buf)) != -1) {
+                    bos.write(buf, 0, len);
+                }
+                String str = bos.toString(StandardCharsets.UTF_8.name());
+                return str.trim().isEmpty() ? new JSONObject() : new JSONObject(str);
+            }
+        } finally {
+            try { conn.disconnect(); } catch (Throwable ignored) {}
         }
     }
 

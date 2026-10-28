@@ -183,6 +183,9 @@ public final class GoogleAuthManager {
         try {
             cachedToken = GoogleAuthUtil.getToken(context.getApplicationContext(), androidAccount, DRIVE_OAUTH_SCOPE_STRING);
             return cachedToken;
+        } catch (com.google.android.gms.auth.UserRecoverableAuthException e) {
+            Log.w(TAG, "Google Play Services requires user authorization consent: " + e.getMessage());
+            throw new IOException("Google Drive permissions require authorization. Please use 'Sign in via Browser' to connect.", e);
         } catch (GoogleAuthException | IOException e) {
             Log.e(TAG, "Failed to obtain Google OAuth access token", e);
             throw e;
@@ -230,15 +233,17 @@ public final class GoogleAuthManager {
 
         int code = conn.getResponseCode();
         if (code != 200) {
-            throw new IOException("Token refresh failed with HTTP " + code);
+            String err = readStream(conn.getErrorStream());
+            throw new IOException("Token refresh failed (HTTP " + code + "): " + err);
         }
 
         String response = readStream(conn.getInputStream());
         JSONObject json = new JSONObject(response);
         String newAccessToken = json.getString("access_token");
+        String newRefreshToken = json.optString("refresh_token", refreshToken);
         long expiresIn = json.optLong("expires_in", 3600L);
 
-        AppSettings.getInstance(context).setGoogleOAuthTokens(newAccessToken, refreshToken, expiresIn);
+        AppSettings.getInstance(context).setGoogleOAuthTokens(newAccessToken, newRefreshToken, expiresIn);
         return newAccessToken;
     }
 

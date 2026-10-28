@@ -7644,6 +7644,8 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         com.google.android.material.button.MaterialButton btnSyncNow = dialogView.findViewById(R.id.btnSyncNow);
         View btnSignOut = dialogView.findViewById(R.id.btnSignOut);
 
+        final DriveSyncManager.SyncListener[] dialogSyncListenerHolder = new DriveSyncManager.SyncListener[1];
+
         if (isConnected) {
             layoutSignedOut.setVisibility(View.GONE);
             layoutSignedIn.setVisibility(View.VISIBLE);
@@ -7674,16 +7676,109 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 });
             });
 
+            DriveSyncManager.SyncListener dialogSyncListener = new DriveSyncManager.SyncListener() {
+                @Override
+                public void onSyncStarted() {
+                    runOnUiThread(() -> {
+                        if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.VISIBLE);
+                        if (btnSyncNow != null) btnSyncNow.setEnabled(false);
+                        if (textSyncStatusStage != null) textSyncStatusStage.setText("Starting synchronization…");
+                        if (textSyncProgressPercent != null) textSyncProgressPercent.setText("0%");
+                        if (progressSync != null) progressSync.setIndeterminate(true);
+                        if (textSyncStatusPill != null) {
+                            textSyncStatusPill.setText("Syncing…");
+                            textSyncStatusPill.setTextColor(0xFF38BDF8);
+                        }
+                        updateCloudSyncIcon();
+                    });
+                }
+
+                @Override
+                public void onSyncProgress(String stage, int current, int total) {
+                    runOnUiThread(() -> {
+                        if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.VISIBLE);
+                        if (btnSyncNow != null) btnSyncNow.setEnabled(false);
+                        if (textSyncStatusStage != null) textSyncStatusStage.setText(stage);
+                        if (progressSync != null) {
+                            if (total > 0) {
+                                int pct = Math.min(100, Math.max(0, (current * 100) / total));
+                                progressSync.setIndeterminate(false);
+                                progressSync.setProgressCompat(pct, true);
+                                if (textSyncProgressPercent != null) {
+                                    textSyncProgressPercent.setText(pct + "% (" + current + "/" + total + ")");
+                                }
+                            } else {
+                                progressSync.setIndeterminate(true);
+                                if (textSyncProgressPercent != null) textSyncProgressPercent.setText("…");
+                            }
+                        }
+                        if (textSyncStatusPill != null) {
+                            textSyncStatusPill.setText("Syncing…");
+                            textSyncStatusPill.setTextColor(0xFF38BDF8);
+                        }
+                    });
+                }
+
+                @Override
+                public void onSyncCompleted(int uploadedCount, int downloadedCount, int deletedCount) {
+                    runOnUiThread(() -> {
+                        if (progressSync != null) {
+                            progressSync.setIndeterminate(false);
+                            progressSync.setProgressCompat(100, true);
+                        }
+                        if (textSyncProgressPercent != null) textSyncProgressPercent.setText("100%");
+                        if (textSyncStatusStage != null) textSyncStatusStage.setText("All notes up to date!");
+                        if (textSyncStatusPill != null) {
+                            textSyncStatusPill.setText("● Complete");
+                            textSyncStatusPill.setTextColor(0xFF34D399);
+                        }
+                        textLastSyncTime.setText("Just now");
+                        updateCloudSyncIcon();
+                        if (layoutSyncProgress != null) {
+                            layoutSyncProgress.postDelayed(() -> {
+                                if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.GONE);
+                                if (btnSyncNow != null) btnSyncNow.setEnabled(true);
+                            }, 1200);
+                        } else if (btnSyncNow != null) {
+                            btnSyncNow.setEnabled(true);
+                        }
+                        if (uploadedCount > 0 || downloadedCount > 0 || deletedCount > 0) {
+                            Toast.makeText(NoteEditorActivity.this, "Sync complete! (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded)", Toast.LENGTH_SHORT).show();
+                        } else {
+                            Toast.makeText(NoteEditorActivity.this, "All notes up to date", Toast.LENGTH_SHORT).show();
+                        }
+                    });
+                }
+
+                @Override
+                public void onSyncError(String errorMessage) {
+                    runOnUiThread(() -> {
+                        if (textSyncStatusStage != null) textSyncStatusStage.setText("Sync failed: " + errorMessage);
+                        if (textSyncStatusPill != null) {
+                            textSyncStatusPill.setText("● Error");
+                            textSyncStatusPill.setTextColor(0xFFF87171);
+                        }
+                        if (btnSyncNow != null) btnSyncNow.setEnabled(true);
+                        updateCloudSyncIcon();
+                        if (layoutSyncProgress != null) {
+                            layoutSyncProgress.postDelayed(() -> {
+                                if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.GONE);
+                            }, 2500);
+                        }
+                        Toast.makeText(NoteEditorActivity.this, "Sync error: " + errorMessage, Toast.LENGTH_LONG).show();
+                    });
+                }
+            };
+
+            DriveSyncManager.getInstance().addListener(dialogSyncListener);
+            dialogSyncListenerHolder[0] = dialogSyncListener;
+
             boolean currentlySyncing = DriveSyncManager.getInstance().isSyncing();
             if (currentlySyncing) {
-                layoutSyncProgress.setVisibility(View.VISIBLE);
-                btnSyncNow.setEnabled(false);
-                if (textSyncStatusStage != null) textSyncStatusStage.setText("Synchronizing with Google Drive…");
-                if (progressSync != null) progressSync.setIndeterminate(true);
-                if (textSyncStatusPill != null) {
-                    textSyncStatusPill.setText("Syncing…");
-                    textSyncStatusPill.setTextColor(0xFF38BDF8);
-                }
+                dialogSyncListener.onSyncProgress(
+                        DriveSyncManager.getInstance().getCurrentStage(),
+                        DriveSyncManager.getInstance().getCurrentProgress(),
+                        DriveSyncManager.getInstance().getCurrentTotal());
             } else {
                 layoutSyncProgress.setVisibility(View.GONE);
                 btnSyncNow.setEnabled(true);
@@ -7697,87 +7792,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     saveNotebookConfig();
 
                     runOnUiThread(() -> {
-                        DriveSyncManager.getInstance().syncNow(this, true, new DriveSyncManager.SyncListener() {
-                            @Override
-                            public void onSyncStarted() {
-                                runOnUiThread(() -> {
-                                    layoutSyncProgress.setVisibility(View.VISIBLE);
-                                    if (textSyncStatusStage != null) textSyncStatusStage.setText("Starting synchronization…");
-                                    if (textSyncProgressPercent != null) textSyncProgressPercent.setText("0%");
-                                    if (progressSync != null) progressSync.setIndeterminate(true);
-                                    if (textSyncStatusPill != null) {
-                                        textSyncStatusPill.setText("Syncing…");
-                                        textSyncStatusPill.setTextColor(0xFF38BDF8);
-                                    }
-                                    btnSyncNow.setEnabled(false);
-                                    updateCloudSyncIcon();
-                                });
-                            }
-
-                            @Override
-                            public void onSyncProgress(String stage, int current, int total) {
-                                runOnUiThread(() -> {
-                                    if (textSyncStatusStage != null) textSyncStatusStage.setText(stage);
-                                    if (progressSync != null) {
-                                        if (total > 0) {
-                                            int pct = Math.min(100, Math.max(0, (current * 100) / total));
-                                            progressSync.setIndeterminate(false);
-                                            progressSync.setProgressCompat(pct, true);
-                                            if (textSyncProgressPercent != null) {
-                                                textSyncProgressPercent.setText(pct + "% (" + current + "/" + total + ")");
-                                            }
-                                        } else {
-                                            progressSync.setIndeterminate(true);
-                                            if (textSyncProgressPercent != null) textSyncProgressPercent.setText("…");
-                                        }
-                                    }
-                                });
-                            }
-
-                            @Override
-                            public void onSyncCompleted(int uploadedCount, int downloadedCount, int deletedCount) {
-                                runOnUiThread(() -> {
-                                    if (progressSync != null) {
-                                        progressSync.setIndeterminate(false);
-                                        progressSync.setProgressCompat(100, true);
-                                    }
-                                    if (textSyncProgressPercent != null) textSyncProgressPercent.setText("100%");
-                                    if (textSyncStatusStage != null) textSyncStatusStage.setText("All notes up to date!");
-                                    if (textSyncStatusPill != null) {
-                                        textSyncStatusPill.setText("● Complete");
-                                        textSyncStatusPill.setTextColor(0xFF34D399);
-                                    }
-                                    textLastSyncTime.setText("Just now");
-                                    updateCloudSyncIcon();
-                                    layoutSyncProgress.postDelayed(() -> {
-                                        if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.GONE);
-                                        if (btnSyncNow != null) btnSyncNow.setEnabled(true);
-                                    }, 1200);
-                                    if (uploadedCount > 0 || downloadedCount > 0 || deletedCount > 0) {
-                                        Toast.makeText(NoteEditorActivity.this, "Sync complete! (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded)", Toast.LENGTH_SHORT).show();
-                                    } else {
-                                        Toast.makeText(NoteEditorActivity.this, "All notes up to date", Toast.LENGTH_SHORT).show();
-                                    }
-                                });
-                            }
-
-                            @Override
-                            public void onSyncError(String errorMessage) {
-                                runOnUiThread(() -> {
-                                    if (textSyncStatusStage != null) textSyncStatusStage.setText("Sync failed: " + errorMessage);
-                                    if (textSyncStatusPill != null) {
-                                        textSyncStatusPill.setText("● Error");
-                                        textSyncStatusPill.setTextColor(0xFFF87171);
-                                    }
-                                    btnSyncNow.setEnabled(true);
-                                    updateCloudSyncIcon();
-                                    layoutSyncProgress.postDelayed(() -> {
-                                        if (layoutSyncProgress != null) layoutSyncProgress.setVisibility(View.GONE);
-                                    }, 2500);
-                                    Toast.makeText(NoteEditorActivity.this, "Sync error: " + errorMessage, Toast.LENGTH_LONG).show();
-                                });
-                            }
-                        });
+                        DriveSyncManager.getInstance().syncNow(NoteEditorActivity.this, true, dialogSyncListener);
                     });
                 });
             });
@@ -7838,7 +7853,12 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                 .setPositiveButton("Close", null)
                 .create();
         ThemeUtils.styleDialog(googleDriveSyncDialog, this);
-        googleDriveSyncDialog.setOnDismissListener(d -> googleDriveSyncDialog = null);
+        googleDriveSyncDialog.setOnDismissListener(d -> {
+            if (dialogSyncListenerHolder[0] != null) {
+                DriveSyncManager.getInstance().removeListener(dialogSyncListenerHolder[0]);
+            }
+            googleDriveSyncDialog = null;
+        });
         googleDriveSyncDialog.show();
     }
 
