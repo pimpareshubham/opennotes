@@ -206,6 +206,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_pages_nb ON " + TABLE_PAGES + "(" + COL_PAGE_NB_ID + ", " + COL_PAGE_INDEX + ");");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_perf ON " + TABLE_NOTEBOOKS + "(" + COL_NB_FAVORITE + ", " + COL_NB_FOLDER + ", " + COL_NB_UPDATED_AT + " DESC);");
             db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_updated ON " + TABLE_NOTEBOOKS + "(" + COL_NB_UPDATED_AT + " DESC);");
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_sync_id ON " + TABLE_NOTEBOOKS + "(" + COL_NB_SYNC_ID + ");");
         } catch (Throwable ignored) {}
     }
 
@@ -255,6 +256,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         db.execSQL("CREATE INDEX idx_pages_nb ON " + TABLE_PAGES + "(" + COL_PAGE_NB_ID + ", " + COL_PAGE_INDEX + ");");
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_perf ON " + TABLE_NOTEBOOKS + "(" + COL_NB_FAVORITE + ", " + COL_NB_FOLDER + ", " + COL_NB_UPDATED_AT + " DESC);");
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_updated ON " + TABLE_NOTEBOOKS + "(" + COL_NB_UPDATED_AT + " DESC);");
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_sync_id ON " + TABLE_NOTEBOOKS + "(" + COL_NB_SYNC_ID + ");");
     }
 
     @Override
@@ -479,13 +481,45 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_NB_LAST_PAN_X, nb.lastPanX);
         cv.put(COL_NB_LAST_PAN_Y, nb.lastPanY);
         cv.put(COL_NB_UPDATED_AT, System.currentTimeMillis());
-        if (nb.syncId != null && !nb.syncId.isEmpty()) {
-            cv.put(COL_NB_SYNC_ID, nb.syncId);
+        if (nb.syncId == null || nb.syncId.trim().isEmpty()) {
+            Notebook existing = getNotebook(nb.id);
+            if (existing != null && existing.syncId != null && !existing.syncId.trim().isEmpty()) {
+                nb.syncId = existing.syncId.trim();
+            } else {
+                nb.syncId = java.util.UUID.randomUUID().toString();
+            }
         }
+        cv.put(COL_NB_SYNC_ID, nb.syncId);
 
         db.update(TABLE_NOTEBOOKS, cv, COL_NB_ID + "=?", new String[]{String.valueOf(nb.id)});
         if (nb != null) {
             notebookCache.put(nb.id, nb);
+        }
+        invalidateCachedNotebooksAsync();
+    }
+
+    public synchronized void touchNotebookUpdatedAt(long notebookId, long updatedAt) {
+        if (notebookId <= 0) return;
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put(COL_NB_UPDATED_AT, updatedAt);
+        db.update(TABLE_NOTEBOOKS, cv, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+        Notebook cached = notebookCache.get(notebookId);
+        if (cached != null) {
+            cached.updatedAt = updatedAt;
+        }
+        invalidateCachedNotebooksAsync();
+    }
+
+    public synchronized void updateNotebookSyncId(long notebookId, String syncId) {
+        if (notebookId <= 0 || syncId == null || syncId.trim().isEmpty()) return;
+        SQLiteDatabase db = getWritableDatabase();
+        ContentValues cv = new ContentValues();
+        cv.put(COL_NB_SYNC_ID, syncId.trim());
+        db.update(TABLE_NOTEBOOKS, cv, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+        Notebook cached = notebookCache.get(notebookId);
+        if (cached != null) {
+            cached.syncId = syncId.trim();
         }
         invalidateCachedNotebooksAsync();
     }
@@ -733,7 +767,10 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         if (syncIdIdx != -1 && !c.isNull(syncIdIdx)) {
             nb.syncId = c.getString(syncIdIdx);
         }
-        if (nb.syncId == null || nb.syncId.trim().isEmpty()) {
+        if (nb.syncId != null) {
+            nb.syncId = nb.syncId.trim();
+        }
+        if (nb.syncId == null || nb.syncId.isEmpty()) {
             nb.syncId = java.util.UUID.randomUUID().toString();
             try {
                 ContentValues syncCv = new ContentValues();
@@ -746,15 +783,22 @@ public class NotesDbHelper extends SQLiteOpenHelper {
 
     public synchronized Notebook getNotebookBySyncId(String syncId) {
         if (syncId == null || syncId.trim().isEmpty()) return null;
+        String targetSyncId = syncId.trim();
         for (Notebook nb : notebookCache.values()) {
-            if (syncId.equals(nb.syncId)) return nb;
+            if (nb != null && targetSyncId.equalsIgnoreCase(nb.syncId)) return nb;
         }
         SQLiteDatabase db = getReadableDatabase();
-        Cursor c = db.query(TABLE_NOTEBOOKS, null, COL_NB_SYNC_ID + "=?", new String[]{syncId}, null, null, null);
+        Cursor c = null;
         Notebook nb = null;
-        if (c != null && c.moveToFirst()) {
-            nb = cursorToNotebook(c);
-            c.close();
+        try {
+            c = db.query(TABLE_NOTEBOOKS, null, COL_NB_SYNC_ID + "=? COLLATE NOCASE", new String[]{targetSyncId}, null, null, null);
+            if (c != null && c.moveToFirst()) {
+                nb = cursorToNotebook(c);
+            }
+        } catch (Throwable t) {
+            Log.w("NotesDbHelper", "Error querying notebook by syncId: " + t.getMessage());
+        } finally {
+            if (c != null) c.close();
         }
         if (nb != null) {
             notebookCache.put(nb.id, nb);
@@ -853,14 +897,15 @@ public class NotesDbHelper extends SQLiteOpenHelper {
 
         int removedCount = 0;
 
-        // Pass 1: Deduplicate by exact syncId
+        // Pass 1: Deduplicate by exact syncId (case-insensitive)
         java.util.Map<String, List<Notebook>> bySyncId = new java.util.HashMap<>();
         for (Notebook nb : all) {
             if (nb == null || nb.syncId == null || nb.syncId.trim().isEmpty()) continue;
-            List<Notebook> list = bySyncId.get(nb.syncId);
+            String key = nb.syncId.trim().toLowerCase(java.util.Locale.US);
+            List<Notebook> list = bySyncId.get(key);
             if (list == null) {
                 list = new ArrayList<>();
-                bySyncId.put(nb.syncId, list);
+                bySyncId.put(key, list);
             }
             list.add(nb);
         }
@@ -912,6 +957,42 @@ public class NotesDbHelper extends SQLiteOpenHelper {
                     Log.i("NotesDbHelper", "Deduplicating identical clone for \"" + nb.title + "\" (id=" + nb.id + ")");
                     deleteDuplicateNotebookInternal(nb.id);
                     removedCount++;
+                }
+            }
+        }
+
+        // Pass 3: Deduplicate empty 1-page redundant shells sharing title and folder with populated notebook
+        all = getAllNotebooks("All", false, null);
+        java.util.Map<String, List<Notebook>> byTitleFolder = new java.util.HashMap<>();
+        for (Notebook nb : all) {
+            if (nb == null || nb.title == null) continue;
+            String normTitle = nb.title.trim().toLowerCase(java.util.Locale.US);
+            String normFolder = (nb.folder != null ? nb.folder.trim().toLowerCase(java.util.Locale.US) : "default");
+            String key = normFolder + ":::" + normTitle;
+            List<Notebook> list = byTitleFolder.get(key);
+            if (list == null) {
+                list = new ArrayList<>();
+                byTitleFolder.put(key, list);
+            }
+            list.add(nb);
+        }
+
+        for (List<Notebook> sameTitleNotes : byTitleFolder.values()) {
+            if (sameTitleNotes.size() <= 1) continue;
+            Notebook populated = null;
+            for (Notebook nb : sameTitleNotes) {
+                if (nb.pageCount > 1) {
+                    populated = nb;
+                    break;
+                }
+            }
+            if (populated != null) {
+                for (Notebook nb : sameTitleNotes) {
+                    if (nb.id != populated.id && nb.pageCount <= 1 && Math.abs(nb.createdAt - populated.createdAt) < 300000L) {
+                        Log.i("NotesDbHelper", "Deduplicating empty shell for \"" + nb.title + "\" (id=" + nb.id + ")");
+                        deleteDuplicateNotebookInternal(nb.id);
+                        removedCount++;
+                    }
                 }
             }
         }

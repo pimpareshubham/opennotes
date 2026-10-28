@@ -25,6 +25,7 @@ import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * Communicates directly with Google Drive REST API v3 via lightweight, reliable HTTPS connections.
@@ -160,8 +161,13 @@ public final class GoogleDriveApiClient {
                 String syncId = "";
                 long updatedAt = 0L;
                 if (appProps != null) {
-                    syncId = appProps.optString("syncId", "");
-                    updatedAt = appProps.optLong("updatedAt", 0L);
+                    syncId = appProps.optString("syncId", "").trim();
+                    String upStr = appProps.optString("updatedAt", "").trim();
+                    if (!upStr.isEmpty()) {
+                        try {
+                            updatedAt = Long.parseLong(upStr);
+                        } catch (Throwable ignored) {}
+                    }
                 }
                 if (syncId.isEmpty() && name.contains("[") && name.contains("]")) {
                     try {
@@ -171,6 +177,12 @@ public final class GoogleDriveApiClient {
                             syncId = name.substring(start + 1, end).trim();
                         }
                     } catch (Throwable ignored) {}
+                }
+                if (syncId.isEmpty()) {
+                    // Untagged file in Drive folder:
+                    // Compute a deterministic, permanent UUID from the Google Drive file ID.
+                    // This ensures the ID NEVER changes for this file across any sync passes.
+                    syncId = UUID.nameUUIDFromBytes(("gdrive_file_" + id).getBytes(StandardCharsets.UTF_8)).toString();
                 }
 
                 String modifiedTimeStr = f.optString("modifiedTime", "");
@@ -208,11 +220,26 @@ public final class GoogleDriveApiClient {
         metadata.put("appProperties", appProps);
 
         JSONObject result = executeWithAuth(context, (token) -> {
-            HttpURLConnection conn = openPost(UPLOAD_API_BASE + "/files?uploadType=multipart&fields=id,name,mimeType,size,appProperties,trashed",
+            HttpURLConnection conn = openPost(UPLOAD_API_BASE + "/files?uploadType=multipart&fields=id,name,mimeType,size,modifiedTime,appProperties,trashed",
                     token, "multipart/related; boundary=" + boundary);
             writeMultipartBody(conn, boundary, metadata, file);
             return readJsonResponse(conn);
         });
+
+        long retUpdatedAt = updatedAt;
+        JSONObject retProps = result.optJSONObject("appProperties");
+        if (retProps != null) {
+            String upStr = retProps.optString("updatedAt", "").trim();
+            if (!upStr.isEmpty()) {
+                try { retUpdatedAt = Long.parseLong(upStr); } catch (Throwable ignored) {}
+            }
+        }
+        if (retUpdatedAt <= 0L) {
+            String modTime = result.optString("modifiedTime", "");
+            if (!modTime.isEmpty()) {
+                retUpdatedAt = parseRfc3339(modTime);
+            }
+        }
 
         return new DriveFile(
                 result.getString("id"),
@@ -220,7 +247,7 @@ public final class GoogleDriveApiClient {
                 result.optString("mimeType", "application/zip"),
                 file.length(),
                 syncId,
-                updatedAt,
+                retUpdatedAt > 0L ? retUpdatedAt : updatedAt,
                 false
         );
     }
@@ -245,11 +272,26 @@ public final class GoogleDriveApiClient {
         metadata.put("appProperties", appProps);
 
         JSONObject result = executeWithAuth(context, (token) -> {
-            HttpURLConnection conn = openConnection(UPLOAD_API_BASE + "/files/" + fileId + "?uploadType=multipart&fields=id,name,mimeType,size,appProperties,trashed",
+            HttpURLConnection conn = openConnection(UPLOAD_API_BASE + "/files/" + fileId + "?uploadType=multipart&fields=id,name,mimeType,size,modifiedTime,appProperties,trashed",
                     "PATCH", token, "multipart/related; boundary=" + boundary);
             writeMultipartBody(conn, boundary, metadata, file);
             return readJsonResponse(conn);
         });
+
+        long retUpdatedAt = updatedAt;
+        JSONObject retProps = result.optJSONObject("appProperties");
+        if (retProps != null) {
+            String upStr = retProps.optString("updatedAt", "").trim();
+            if (!upStr.isEmpty()) {
+                try { retUpdatedAt = Long.parseLong(upStr); } catch (Throwable ignored) {}
+            }
+        }
+        if (retUpdatedAt <= 0L) {
+            String modTime = result.optString("modifiedTime", "");
+            if (!modTime.isEmpty()) {
+                retUpdatedAt = parseRfc3339(modTime);
+            }
+        }
 
         return new DriveFile(
                 result.getString("id"),
@@ -257,7 +299,7 @@ public final class GoogleDriveApiClient {
                 result.optString("mimeType", "application/zip"),
                 file.length(),
                 syncId,
-                updatedAt,
+                retUpdatedAt > 0L ? retUpdatedAt : updatedAt,
                 false
         );
     }

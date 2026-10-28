@@ -49,8 +49,12 @@ public final class NativeNoteArchive {
         if (context == null || db == null || notebook == null) {
             throw new IllegalArgumentException("Context, db, and notebook required.");
         }
+        if (notebook.syncId == null || notebook.syncId.trim().isEmpty()) {
+            notebook.syncId = UUID.randomUUID().toString();
+            db.updateNotebookSyncId(notebook.id, notebook.syncId);
+        }
         List<Page> pages = db.getPagesForNotebook(notebook.id);
-        File tempFile = new File(context.getCacheDir(), "sync_" + (notebook.syncId != null ? notebook.syncId : notebook.id) + "_" + System.currentTimeMillis() + ".tmp");
+        File tempFile = new File(context.getCacheDir(), "sync_" + notebook.syncId + "_" + System.currentTimeMillis() + ".tmp");
         try (FileOutputStream fos = new FileOutputStream(tempFile)) {
             writeNotebook(context, notebook, pages, fos);
         }
@@ -190,6 +194,12 @@ public final class NativeNoteArchive {
 
     public static long importNotebook(Context context, NotesDbHelper db, InputStream input)
             throws IOException, JSONException {
+        return importNotebook(context, db, input, null, 0L);
+    }
+
+    public static long importNotebook(Context context, NotesDbHelper db, InputStream input,
+                                      String fallbackSyncId, long remoteUpdatedAt)
+            throws IOException, JSONException {
         if (context == null || db == null || input == null) {
             throw new IllegalArgumentException("Notebook source is unavailable.");
         }
@@ -259,10 +269,42 @@ public final class NativeNoteArchive {
                 pages.add(page);
             }
             if (pages.isEmpty()) throw new IOException("The notebook archive contains no pages.");
+
+            // Resolve immutable syncId: manifest > fallbackSyncId
+            if (notebook.syncId == null || notebook.syncId.trim().isEmpty()) {
+                if (fallbackSyncId != null && !fallbackSyncId.trim().isEmpty()) {
+                    notebook.syncId = fallbackSyncId.trim();
+                }
+            }
+
+            // Look up existing notebook strictly by syncId first
+            Notebook existing = (notebook.syncId != null && !notebook.syncId.trim().isEmpty())
+                    ? db.getNotebookBySyncId(notebook.syncId)
+                    : null;
+
+            // If not found by syncId, check if an existing local notebook matches by title and folder
+            // to link it and prevent duplicate creation!
+            if (existing == null && notebook.title != null && !notebook.title.trim().isEmpty()) {
+                existing = db.getNotebookByTitle(notebook.title, notebook.folder);
+                if (existing != null) {
+                    if (existing.syncId != null && !existing.syncId.trim().isEmpty()) {
+                        notebook.syncId = existing.syncId;
+                    } else if (notebook.syncId != null && !notebook.syncId.trim().isEmpty()) {
+                        db.updateNotebookSyncId(existing.id, notebook.syncId);
+                    }
+                }
+            }
+
+            // If still no syncId, assign a new permanent UUID
             if (notebook.syncId == null || notebook.syncId.trim().isEmpty()) {
                 notebook.syncId = java.util.UUID.randomUUID().toString();
             }
-            Notebook existing = db.getNotebookBySyncId(notebook.syncId);
+
+            // Align updatedAt with remote file's acknowledged timestamp
+            if (remoteUpdatedAt > 0L) {
+                notebook.updatedAt = Math.max(notebook.updatedAt, remoteUpdatedAt);
+            }
+
             long id;
             if (existing != null) {
                 db.updateNotebookWithPages(existing.id, notebook, pages);
