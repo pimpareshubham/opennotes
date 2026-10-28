@@ -842,73 +842,76 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     }
 
     /**
-     * Finds and removes redundant duplicate notebooks that have identical title and folder.
-     * Evaluates content, non-empty pages, page count, and updatedAt to preserve the richest user notebook.
+     * Safely removes true redundant duplicate notebooks in SQLite:
+     * 1. Duplicate rows that share the EXACT same syncId.
+     * 2. Accidental clone duplicates imported from the same archive that share the exact same createdAt timestamp, folder, and title.
+     * Notebooks with different createdAt timestamps and distinct user content are separate notebooks and are NEVER removed.
      */
     public synchronized int deduplicateNotebooks() {
         List<Notebook> all = getAllNotebooks("All", false, null);
         if (all == null || all.size() <= 1) return 0;
 
-        java.util.Map<String, List<Notebook>> groups = new java.util.HashMap<>();
+        int removedCount = 0;
+
+        // Pass 1: Deduplicate by exact syncId
+        java.util.Map<String, List<Notebook>> bySyncId = new java.util.HashMap<>();
+        for (Notebook nb : all) {
+            if (nb == null || nb.syncId == null || nb.syncId.trim().isEmpty()) continue;
+            List<Notebook> list = bySyncId.get(nb.syncId);
+            if (list == null) {
+                list = new ArrayList<>();
+                bySyncId.put(nb.syncId, list);
+            }
+            list.add(nb);
+        }
+
+        for (List<Notebook> duplicates : bySyncId.values()) {
+            if (duplicates.size() <= 1) continue;
+            Notebook keep = duplicates.get(0);
+            for (Notebook nb : duplicates) {
+                if (nb.updatedAt > keep.updatedAt || nb.pageCount > keep.pageCount) {
+                    keep = nb;
+                }
+            }
+            for (Notebook nb : duplicates) {
+                if (nb.id != keep.id) {
+                    Log.i("NotesDbHelper", "Deduplicating syncId collision for \"" + nb.title + "\" (id=" + nb.id + ")");
+                    deleteDuplicateNotebookInternal(nb.id);
+                    removedCount++;
+                }
+            }
+        }
+
+        // Pass 2: Deduplicate identical clones (same title + same folder + same createdAt timestamp)
+        // Two independent user notebooks never share the exact same System.currentTimeMillis() createdAt timestamp!
+        all = getAllNotebooks("All", false, null);
+        java.util.Map<String, List<Notebook>> byCloneKey = new java.util.HashMap<>();
         for (Notebook nb : all) {
             if (nb == null || nb.title == null) continue;
             String normTitle = nb.title.trim().toLowerCase(java.util.Locale.US);
             String normFolder = (nb.folder != null ? nb.folder.trim().toLowerCase(java.util.Locale.US) : "default");
-            String key = normFolder + ":::" + normTitle;
-            List<Notebook> group = groups.get(key);
-            if (group == null) {
-                group = new ArrayList<>();
-                groups.put(key, group);
+            String key = normFolder + ":::" + normTitle + ":::" + nb.createdAt;
+            List<Notebook> list = byCloneKey.get(key);
+            if (list == null) {
+                list = new ArrayList<>();
+                byCloneKey.put(key, list);
             }
-            group.add(nb);
+            list.add(nb);
         }
 
-        int removedCount = 0;
-        for (List<Notebook> group : groups.values()) {
-            if (group.size() <= 1) continue;
-
-            Notebook best = null;
-            int bestScore = -1;
-            long latestUpdated = -1L;
-
-            for (Notebook nb : group) {
-                int score = 0;
-                List<Page> pages = getPagesForNotebook(nb.id);
-                int nonEmptyPages = 0;
-                if (pages != null) {
-                    for (Page p : pages) {
-                        if (p != null) {
-                            String strokes = p.strokesToJson();
-                            String images = p.imagesToJson();
-                            String shapes = p.shapesToJson();
-                            String texts = p.textsToJson();
-                            if ((strokes != null && !strokes.isEmpty() && !"[]".equals(strokes.trim()))
-                                    || (images != null && !images.isEmpty() && !"[]".equals(images.trim()))
-                                    || (shapes != null && !shapes.isEmpty() && !"[]".equals(shapes.trim()))
-                                    || (texts != null && !texts.isEmpty() && !"[]".equals(texts.trim()))) {
-                                nonEmptyPages++;
-                            }
-                        }
-                    }
-                }
-                score += nonEmptyPages * 1000 + nb.pageCount * 10;
-                if (nb.isFavorite) score += 5;
-                if (nb.isPinned) score += 5;
-
-                if (score > bestScore || (score == bestScore && nb.updatedAt > latestUpdated)) {
-                    bestScore = score;
-                    latestUpdated = nb.updatedAt;
-                    best = nb;
+        for (List<Notebook> clones : byCloneKey.values()) {
+            if (clones.size() <= 1) continue;
+            Notebook keep = clones.get(0);
+            for (Notebook nb : clones) {
+                if (nb.updatedAt > keep.updatedAt || nb.pageCount > keep.pageCount) {
+                    keep = nb;
                 }
             }
-
-            if (best != null) {
-                for (Notebook nb : group) {
-                    if (nb.id != best.id) {
-                        Log.i("NotesDbHelper", "Deduplicating: removing duplicate notebook \"" + nb.title + "\" (id=" + nb.id + ") in favor of id=" + best.id);
-                        deleteDuplicateNotebookInternal(nb.id);
-                        removedCount++;
-                    }
+            for (Notebook nb : clones) {
+                if (nb.id != keep.id) {
+                    Log.i("NotesDbHelper", "Deduplicating identical clone for \"" + nb.title + "\" (id=" + nb.id + ")");
+                    deleteDuplicateNotebookInternal(nb.id);
+                    removedCount++;
                 }
             }
         }

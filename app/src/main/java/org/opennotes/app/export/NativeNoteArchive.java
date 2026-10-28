@@ -259,17 +259,12 @@ public final class NativeNoteArchive {
                 pages.add(page);
             }
             if (pages.isEmpty()) throw new IOException("The notebook archive contains no pages.");
-            Notebook existing = (notebook.syncId != null && !notebook.syncId.isEmpty())
-                    ? db.getNotebookBySyncId(notebook.syncId)
-                    : null;
-            if (existing == null && notebook.title != null && !notebook.title.trim().isEmpty()) {
-                existing = db.getNotebookByTitle(notebook.title, notebook.folder);
+            if (notebook.syncId == null || notebook.syncId.trim().isEmpty()) {
+                notebook.syncId = java.util.UUID.randomUUID().toString();
             }
+            Notebook existing = db.getNotebookBySyncId(notebook.syncId);
             long id;
             if (existing != null) {
-                if (notebook.syncId != null && !notebook.syncId.isEmpty()) {
-                    existing.syncId = notebook.syncId;
-                }
                 db.updateNotebookWithPages(existing.id, notebook, pages);
                 id = existing.id;
             } else {

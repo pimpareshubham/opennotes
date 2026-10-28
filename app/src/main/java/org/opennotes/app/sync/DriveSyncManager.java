@@ -166,14 +166,15 @@ public final class DriveSyncManager {
                 List<GoogleDriveApiClient.DriveFile> remoteFiles =
                         GoogleDriveApiClient.getInstance().listFolderFiles(appContext, folderId);
 
+                // Index remote files strictly by syncId.
+                // Distinct notebooks can share the same display title, but each has a unique syncId.
+                // If the exact same syncId exists multiple times on Drive (e.g. from an accidental double upload),
+                // keep the newest version and trash the obsolete duplicate with that same syncId.
                 Map<String, GoogleDriveApiClient.DriveFile> remoteBySyncId = new HashMap<>();
-                Map<String, GoogleDriveApiClient.DriveFile> remoteByTitle = new HashMap<>();
 
                 for (GoogleDriveApiClient.DriveFile rf : remoteFiles) {
                     if (rf == null || rf.name == null || !rf.name.endsWith(".opennote")) continue;
-                    String title = extractTitleFromFileName(rf.name, rf.syncId).toLowerCase(java.util.Locale.US);
 
-                    // Deduplicate remote files by syncId (keep newest, trash older duplicate)
                     if (rf.syncId != null && !rf.syncId.isEmpty()) {
                         GoogleDriveApiClient.DriveFile existing = remoteBySyncId.get(rf.syncId);
                         if (existing != null) {
@@ -182,28 +183,9 @@ public final class DriveSyncManager {
                                 remoteBySyncId.put(rf.syncId, rf);
                             } else {
                                 try { GoogleDriveApiClient.getInstance().trashFile(appContext, rf.id); } catch (Exception ignored) {}
-                                continue;
                             }
                         } else {
                             remoteBySyncId.put(rf.syncId, rf);
-                        }
-                    }
-
-                    // Deduplicate remote files by title (keep newest, trash older duplicate)
-                    if (!title.isEmpty()) {
-                        GoogleDriveApiClient.DriveFile existingByTitle = remoteByTitle.get(title);
-                        if (existingByTitle != null) {
-                            if (rf.updatedAt > existingByTitle.updatedAt) {
-                                try { GoogleDriveApiClient.getInstance().trashFile(appContext, existingByTitle.id); } catch (Exception ignored) {}
-                                remoteByTitle.put(title, rf);
-                                if (existingByTitle.syncId != null) remoteBySyncId.remove(existingByTitle.syncId);
-                                if (rf.syncId != null) remoteBySyncId.put(rf.syncId, rf);
-                            } else {
-                                try { GoogleDriveApiClient.getInstance().trashFile(appContext, rf.id); } catch (Exception ignored) {}
-                                continue;
-                            }
-                        } else {
-                            remoteByTitle.put(title, rf);
                         }
                     }
                 }
@@ -237,29 +219,13 @@ public final class DriveSyncManager {
                     Notebook localNb = localNotebooks.get(i);
                     if (localNb == null) continue;
 
-                    String normTitle = localNb.title != null ? localNb.title.trim().toLowerCase(java.util.Locale.US) : "";
-                    GoogleDriveApiClient.DriveFile remoteFile = null;
-
-                    if (localNb.syncId != null && !localNb.syncId.trim().isEmpty()) {
-                        remoteFile = remoteBySyncId.get(localNb.syncId);
-                    }
-
-                    // If not matched by syncId, match by Title to prevent redundant duplicate creations
-                    if (remoteFile == null && !normTitle.isEmpty()) {
-                        remoteFile = remoteByTitle.get(normTitle);
-                        if (remoteFile != null && remoteFile.syncId != null && !remoteFile.syncId.isEmpty()) {
-                            localNb.syncId = remoteFile.syncId;
-                            db.updateNotebook(localNb);
-                            remoteBySyncId.put(localNb.syncId, remoteFile);
-                        }
-                    }
-
                     if (localNb.syncId == null || localNb.syncId.trim().isEmpty()) {
                         localNb.syncId = UUID.randomUUID().toString();
                         db.updateNotebook(localNb);
                     }
                     processedSyncIds.add(localNb.syncId);
 
+                    GoogleDriveApiClient.DriveFile remoteFile = remoteBySyncId.get(localNb.syncId);
                     long lastSynced = settings.getNotebookLastSyncedTime(localNb.syncId);
 
                     if (remoteFile == null) {
@@ -340,14 +306,6 @@ public final class DriveSyncManager {
                             } catch (Exception ignored) {}
                         } else {
                             String rfTitle = extractTitleFromFileName(rf.name, rf.syncId);
-                            Notebook existingLocal = db.getNotebookByTitle(rfTitle, "Default");
-                            if (existingLocal != null) {
-                                if (rf.syncId != null && !rf.syncId.isEmpty()) {
-                                    existingLocal.syncId = rf.syncId;
-                                    db.updateNotebook(existingLocal);
-                                    processedSyncIds.add(rf.syncId);
-                                }
-                            }
 
                             // Download note
                             remoteIndex++;
@@ -361,6 +319,9 @@ public final class DriveSyncManager {
                                     NativeNoteArchive.importNotebook(appContext, db, fis);
                                     downloadedCount++;
                                     settings.setNotebookLastSyncedTime(rf.syncId, rf.updatedAt > 0L ? rf.updatedAt : System.currentTimeMillis());
+                                    if (rf.syncId != null && !rf.syncId.isEmpty()) {
+                                        processedSyncIds.add(rf.syncId);
+                                    }
                                 }
                             } finally {
                                 if (tempDown.exists()) tempDown.delete();
