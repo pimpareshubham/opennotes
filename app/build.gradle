@@ -48,4 +48,6 @@ dependencies {
     // candidates; ML Kit Text Recognition is image OCR, not a handwriting-specific model.
     implementation 'com.google.mlkit:text-recognition:16.0.1'
     implementation 'com.google.mlkit:text-recognition-devanagari:16.0.1'
+    // Google Sign-In and Google Drive synchronization
+    implementation 'com.google.android.gms:play-services-auth:21.3.0'
 }

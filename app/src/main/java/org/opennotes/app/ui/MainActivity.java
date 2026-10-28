@@ -1,6 +1,7 @@
 package org.opennotes.app.ui;
 
 import android.content.ClipData;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Bitmap;
@@ -49,7 +50,15 @@ import androidx.activity.result.ActivityResultLauncher;
 import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.appcompat.widget.SwitchCompat;
+import com.google.android.gms.auth.api.signin.GoogleSignIn;
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
+import com.google.android.gms.common.api.ApiException;
+import com.google.android.gms.common.api.CommonStatusCodes;
+import com.google.android.gms.tasks.Task;
 import com.google.android.material.progressindicator.LinearProgressIndicator;
+import org.opennotes.app.sync.GoogleAuthManager;
+import org.opennotes.app.sync.DriveSyncManager;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -131,6 +140,30 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
     private TextView backupProgressStatus;
     private TextView backupProgressPercent;
 
+    private AlertDialog googleDriveSyncDialog;
+
+    private final ActivityResultLauncher<Intent> googleSignInLauncher =
+            registerForActivityResult(new ActivityResultContracts.StartActivityForResult(), result -> {
+                if (result.getData() != null) {
+                    Task<GoogleSignInAccount> task = GoogleSignIn.getSignedInAccountFromIntent(result.getData());
+                    try {
+                        GoogleSignInAccount account = task.getResult(ApiException.class);
+                        if (account != null) {
+                            GoogleAuthManager.getInstance().onSignInSuccess(this, account);
+                            Toast.makeText(this, "Signed in as " + account.getEmail(), Toast.LENGTH_SHORT).show();
+                            updateCloudSyncIcon();
+                            DriveSyncManager.getInstance().syncNow(this, true, null);
+                            if (googleDriveSyncDialog != null && googleDriveSyncDialog.isShowing()) {
+                                googleDriveSyncDialog.dismiss();
+                                showGoogleDriveSyncDialog();
+                            }
+                        }
+                    } catch (ApiException e) {
+                        handleGoogleSignInError(e);
+                    }
+                }
+            });
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -192,10 +225,40 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
             btnImportPdf.setOnClickListener(v -> openPdfPicker());
         }
 
+        ImageView btnCloudSync = findViewById(R.id.btnCloudSync);
+        if (btnCloudSync != null) {
+            btnCloudSync.setOnClickListener(v -> showGoogleDriveSyncDialog());
+        }
+
         ImageView btnMenuMore = findViewById(R.id.btnMenuMore);
         if (btnMenuMore != null) {
             btnMenuMore.setOnClickListener(v -> showSettingsMenu());
         }
+
+        DriveSyncManager.getInstance().addListener(new DriveSyncManager.SyncListener() {
+            @Override
+            public void onSyncStarted() {
+                runOnUiThread(MainActivity.this::updateCloudSyncIcon);
+            }
+
+            @Override
+            public void onSyncProgress(String stage, int current, int total) {}
+
+            @Override
+            public void onSyncCompleted(int uploaded, int downloaded, int deleted) {
+                runOnUiThread(() -> {
+                    updateCloudSyncIcon();
+                    if (downloaded > 0 || deleted > 0) {
+                        loadNotebooks();
+                    }
+                });
+            }
+
+            @Override
+            public void onSyncError(String errorMessage) {
+                runOnUiThread(MainActivity.this::updateCloudSyncIcon);
+            }
+        });
 
         recyclerView.post(this::offerHandwritingModelSetup);
         handlePdfIntent(getIntent());
@@ -293,6 +356,8 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         super.onResume();
         enableHighRefreshRate();
         FullscreenMode.apply(this);
+        updateCloudSyncIcon();
+        DriveSyncManager.getInstance().scheduleAutoSync(this);
         List<Notebook> cached = dbHelper.getCachedNotebooks();
         if (cached != null && !cached.isEmpty() && adapter != null) {
             adapter.updateData(cached, false);
@@ -1194,6 +1259,11 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         boolean isVerticalScroll = settings.isContinuousVerticalScroll();
         boolean isHoldSearch = settings.isTwoFingerSearchGestureEnabled();
 
+        boolean isGoogleConnected = GoogleAuthManager.getInstance().isSignedIn(this);
+        String googleSubtitle = isGoogleConnected
+                ? "Connected (" + settings.getGoogleAccountEmail() + ") • " + getSyncTimeAgo(settings.getGoogleLastSyncTime())
+                : "Sign in with Google to automatically sync all notes with Google Drive";
+
         new ModernOptionsSelectorDialog.Builder(this)
                 .setTitle("Settings & Options")
                 .setSubtitle("Configure gestures, navigation, and backups")
@@ -1207,7 +1277,10 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                                 ? "Two-finger hold gesture: ENABLED (" + settings.getSearchAssistTargetName() + ")"
                                 : "Two-finger hold gesture: DISABLED (Tap to configure or enable)",
                         isHoldSearch, this::showSearchAssistConfigDialog)
-                .addOption(3, "💾", "Local Backup & Restore",
+                .addOption(3, "☁️", "Google Drive Cloud Sync",
+                        googleSubtitle,
+                        isGoogleConnected, this::showGoogleDriveSyncDialog)
+                .addOption(4, "💾", "Local Backup & Restore",
                         "Backup all notes, pages, drawings & media locally or restore",
                         false, this::showBackupRestoreDialog)
                 .show();
@@ -1442,6 +1515,273 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         searchDebounceHandler.removeCallbacksAndMessages(null);
         notebookIoExecutor.shutdown();
         super.onDestroy();
+    }
+
+    private void handleGoogleSignInError(ApiException e) {
+        int statusCode = e.getStatusCode();
+        if (statusCode == 12501 || statusCode == CommonStatusCodes.CANCELED) {
+            return;
+        }
+
+        if (statusCode == CommonStatusCodes.DEVELOPER_ERROR) {
+            new MaterialAlertDialogBuilder(this)
+                    .setTitle("Google Sign-In Options")
+                    .setMessage("Android OAuth client is not registered yet in project " + GoogleAuthManager.PROJECT_ID + ".\n\n"
+                            + "Would you like to sign in immediately using your Client ID in the browser, or setup the Android Client ID?")
+                    .setPositiveButton("Sign in via Browser", (d, w) -> {
+                        Toast.makeText(this, "Opening Google sign-in in browser…", Toast.LENGTH_SHORT).show();
+                        GoogleAuthManager.getInstance().startBrowserOAuth(this, new GoogleAuthManager.BrowserAuthCallback() {
+                            @Override
+                            public void onSuccess(String email, String displayName) {
+                                Toast.makeText(MainActivity.this, "Signed in as " + email, Toast.LENGTH_SHORT).show();
+                                updateCloudSyncIcon();
+                                DriveSyncManager.getInstance().syncNow(MainActivity.this, true, null);
+                                if (googleDriveSyncDialog != null && googleDriveSyncDialog.isShowing()) {
+                                    googleDriveSyncDialog.dismiss();
+                                    showGoogleDriveSyncDialog();
+                                }
+                            }
+
+                            @Override
+                            public void onError(String errorMessage) {
+                                Toast.makeText(MainActivity.this, errorMessage, Toast.LENGTH_LONG).show();
+                            }
+                        });
+                    })
+                    .setNeutralButton("Setup Android Client", (d, w) -> {
+                        showGoogleCloudSetupDialog(
+                                "Google Cloud Project: " + GoogleAuthManager.PROJECT_ID + "\n\n"
+                                + "Installed Client ID: " + GoogleAuthManager.DEFAULT_CLIENT_ID + "\n\n"
+                                + "To enable native Google Play Services 1-tap sign-in:\n"
+                                + "1. Go to console.cloud.google.com/apis/credentials?project=" + GoogleAuthManager.PROJECT_ID + "\n"
+                                + "2. Create an OAuth 2.0 Client ID for Android:\n"
+                                + "   • Package name: " + getPackageName() + "\n"
+                                + "   • SHA-1: " + GoogleAuthManager.DEBUG_SHA1_FINGERPRINT + "\n"
+                                + "3. Enable 'Google Drive API' in Enabled APIs & Services."
+                        );
+                    })
+                    .setNegativeButton("Cancel", null)
+                    .show();
+        } else {
+            Toast.makeText(this, "Sign-in error (Code " + statusCode + "): " + e.getMessage(), Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void showGoogleCloudSetupDialog(String details) {
+        new MaterialAlertDialogBuilder(this)
+                .setTitle("Google Cloud Setup Info")
+                .setMessage(details)
+                .setPositiveButton("Copy SHA-1", (d, w) -> {
+                    android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(ClipData.newPlainText("SHA-1 Fingerprint", GoogleAuthManager.DEBUG_SHA1_FINGERPRINT));
+                        Toast.makeText(this, "SHA-1 copied to clipboard", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNeutralButton("Copy Package", (d, w) -> {
+                    android.content.ClipboardManager clipboard = (android.content.ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                    if (clipboard != null) {
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Package Name", getPackageName()));
+                        Toast.makeText(this, "Package name copied to clipboard", Toast.LENGTH_SHORT).show();
+                    }
+                })
+                .setNegativeButton("OK", null)
+                .show();
+    }
+
+    private void showGoogleDriveSyncDialog() {
+        if (isFinishing() || isDestroyed()) return;
+        AppSettings settings = AppSettings.getInstance(this);
+        boolean isConnected = GoogleAuthManager.getInstance().isSignedIn(this);
+
+        View dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_google_drive_sync, null);
+        View layoutSignedOut = dialogView.findViewById(R.id.layoutSignedOut);
+        View layoutSignedIn = dialogView.findViewById(R.id.layoutSignedIn);
+        View btnSignInGoogle = dialogView.findViewById(R.id.btnSignInGoogle);
+        View btnSignInBrowser = dialogView.findViewById(R.id.btnSignInBrowser);
+        View btnSetupGuide = dialogView.findViewById(R.id.btnSetupGuide);
+
+        TextView textUserAvatar = dialogView.findViewById(R.id.textUserAvatar);
+        TextView textUserName = dialogView.findViewById(R.id.textUserName);
+        TextView textUserEmail = dialogView.findViewById(R.id.textUserEmail);
+        TextView textLastSyncTime = dialogView.findViewById(R.id.textLastSyncTime);
+        SwitchCompat switchAutoSync = dialogView.findViewById(R.id.switchAutoSync);
+        View layoutSyncProgress = dialogView.findViewById(R.id.layoutSyncProgress);
+        TextView textSyncStatusStage = dialogView.findViewById(R.id.textSyncStatusStage);
+        com.google.android.material.button.MaterialButton btnSyncNow = dialogView.findViewById(R.id.btnSyncNow);
+        View btnSignOut = dialogView.findViewById(R.id.btnSignOut);
+
+        if (isConnected) {
+            layoutSignedOut.setVisibility(View.GONE);
+            layoutSignedIn.setVisibility(View.VISIBLE);
+
+            String name = settings.getGoogleAccountDisplayName();
+            String email = settings.getGoogleAccountEmail();
+            textUserName.setText(!name.isEmpty() ? name : "Google User");
+            textUserEmail.setText(email);
+            textUserAvatar.setText(!name.isEmpty() ? name.substring(0, 1).toUpperCase(java.util.Locale.US) : "G");
+
+            long lastSync = settings.getGoogleLastSyncTime();
+            textLastSyncTime.setText(getSyncTimeAgo(lastSync));
+
+            switchAutoSync.setChecked(settings.isGoogleAutoSyncEnabled());
+            switchAutoSync.setOnCheckedChangeListener((v, isChecked) -> {
+                settings.setGoogleAutoSyncEnabled(isChecked);
+                Toast.makeText(this, isChecked ? "Auto-sync enabled" : "Auto-sync disabled", Toast.LENGTH_SHORT).show();
+            });
+
+            btnSignOut.setOnClickListener(v -> {
+                GoogleAuthManager.getInstance().signOut(this, () -> {
+                    Toast.makeText(this, "Signed out of Google", Toast.LENGTH_SHORT).show();
+                    updateCloudSyncIcon();
+                    if (googleDriveSyncDialog != null && googleDriveSyncDialog.isShowing()) {
+                        googleDriveSyncDialog.dismiss();
+                        showGoogleDriveSyncDialog();
+                    }
+                });
+            });
+
+            boolean currentlySyncing = DriveSyncManager.getInstance().isSyncing();
+            layoutSyncProgress.setVisibility(currentlySyncing ? View.VISIBLE : View.GONE);
+            btnSyncNow.setEnabled(!currentlySyncing);
+
+            btnSyncNow.setOnClickListener(v -> {
+                DriveSyncManager.getInstance().syncNow(this, true, new DriveSyncManager.SyncListener() {
+                    @Override
+                    public void onSyncStarted() {
+                        runOnUiThread(() -> {
+                            layoutSyncProgress.setVisibility(View.VISIBLE);
+                            textSyncStatusStage.setText("Starting synchronization…");
+                            btnSyncNow.setEnabled(false);
+                            updateCloudSyncIcon();
+                        });
+                    }
+
+                    @Override
+                    public void onSyncProgress(String stage, int current, int total) {
+                        runOnUiThread(() -> textSyncStatusStage.setText(stage));
+                    }
+
+                    @Override
+                    public void onSyncCompleted(int uploadedCount, int downloadedCount, int deletedCount) {
+                        runOnUiThread(() -> {
+                            layoutSyncProgress.setVisibility(View.GONE);
+                            btnSyncNow.setEnabled(true);
+                            textLastSyncTime.setText(getSyncTimeAgo(System.currentTimeMillis()));
+                            updateCloudSyncIcon();
+                            Toast.makeText(MainActivity.this, "Sync complete! (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded)", Toast.LENGTH_SHORT).show();
+                            if (downloadedCount > 0 || deletedCount > 0) {
+                                loadNotebooks();
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onSyncError(String errorMessage) {
+                        runOnUiThread(() -> {
+                            layoutSyncProgress.setVisibility(View.GONE);
+                            btnSyncNow.setEnabled(true);
+                            updateCloudSyncIcon();
+                            Toast.makeText(MainActivity.this, "Sync error: " + errorMessage, Toast.LENGTH_LONG).show();
+                        });
+                    }
+                });
+            });
+
+        } else {
+            layoutSignedOut.setVisibility(View.VISIBLE);
+            layoutSignedIn.setVisibility(View.GONE);
+
+            btnSignInGoogle.setOnClickListener(v -> {
+                try {
+                    Intent signInIntent = GoogleAuthManager.getInstance().getSignInIntent(this);
+                    googleSignInLauncher.launch(signInIntent);
+                } catch (Exception e) {
+                    Toast.makeText(this, "Could not open Google Sign-In: " + e.getMessage(), Toast.LENGTH_SHORT).show();
+                }
+            });
+
+            if (btnSignInBrowser != null) {
+                btnSignInBrowser.setOnClickListener(v -> {
+                    Toast.makeText(this, "Opening Google sign-in in browser…", Toast.LENGTH_SHORT).show();
+                    GoogleAuthManager.getInstance().startBrowserOAuth(this, new GoogleAuthManager.BrowserAuthCallback() {
+                        @Override
+                        public void onSuccess(String email, String displayName) {
+                            Toast.makeText(MainActivity.this, "Signed in as " + email, Toast.LENGTH_SHORT).show();
+                            updateCloudSyncIcon();
+                            DriveSyncManager.getInstance().syncNow(MainActivity.this, true, null);
+                            if (googleDriveSyncDialog != null && googleDriveSyncDialog.isShowing()) {
+                                googleDriveSyncDialog.dismiss();
+                                showGoogleDriveSyncDialog();
+                            }
+                        }
+
+                        @Override
+                        public void onError(String errorMessage) {
+                            Toast.makeText(MainActivity.this, errorMessage, Toast.LENGTH_LONG).show();
+                        }
+                    });
+                });
+            }
+
+            btnSetupGuide.setOnClickListener(v -> {
+                showGoogleCloudSetupDialog(
+                        "Google Cloud Configuration Details:\n\n"
+                        + "• Project ID: " + GoogleAuthManager.PROJECT_ID + "\n"
+                        + "• Package Name: " + getPackageName() + "\n"
+                        + "• Debug SHA-1: " + GoogleAuthManager.DEBUG_SHA1_FINGERPRINT + "\n"
+                        + "• Client ID: " + GoogleAuthManager.DEFAULT_CLIENT_ID + "\n\n"
+                        + "To connect Google Drive with 1-tap Google Play Services:\n"
+                        + "1. Go to console.cloud.google.com/apis/credentials?project=" + GoogleAuthManager.PROJECT_ID + "\n"
+                        + "2. Create an OAuth 2.0 Client ID for Android with the package name and SHA-1 above.\n"
+                        + "3. Enable 'Google Drive API' in Enabled APIs & Services."
+                );
+            });
+        }
+
+        googleDriveSyncDialog = new MaterialAlertDialogBuilder(this)
+                .setView(dialogView)
+                .setPositiveButton("Close", null)
+                .create();
+        ThemeUtils.styleDialog(googleDriveSyncDialog, this);
+        googleDriveSyncDialog.show();
+    }
+
+    private String getSyncTimeAgo(long timestamp) {
+        if (timestamp <= 0L) return "Never";
+        long diff = System.currentTimeMillis() - timestamp;
+        if (diff < 60_000L) return "Just now";
+        if (diff < 3600_000L) return (diff / 60_000L) + "m ago";
+        if (diff < 86400_000L) return (diff / 3600_000L) + "h ago";
+        return new java.text.SimpleDateFormat("MMM dd, HH:mm", java.util.Locale.getDefault()).format(new java.util.Date(timestamp));
+    }
+
+    private void updateCloudSyncIcon() {
+        ImageView btnCloudSync = findViewById(R.id.btnCloudSync);
+        if (btnCloudSync == null) return;
+        boolean signedIn = GoogleAuthManager.getInstance().isSignedIn(this);
+        boolean isSyncing = DriveSyncManager.getInstance().isSyncing();
+
+        if (isSyncing) {
+            btnCloudSync.setColorFilter(androidx.core.content.ContextCompat.getColor(this, R.color.accent));
+            if (btnCloudSync.getAnimation() == null) {
+                android.view.animation.RotateAnimation rotate = new android.view.animation.RotateAnimation(
+                        0, 360,
+                        android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f,
+                        android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f);
+                rotate.setDuration(1200);
+                rotate.setRepeatCount(android.view.animation.Animation.INFINITE);
+                rotate.setInterpolator(new android.view.animation.LinearInterpolator());
+                btnCloudSync.startAnimation(rotate);
+            }
+        } else {
+            btnCloudSync.clearAnimation();
+            if (signedIn) {
+                btnCloudSync.setColorFilter(androidx.core.content.ContextCompat.getColor(this, R.color.accent));
+            } else {
+                btnCloudSync.clearColorFilter();
+            }
+        }
     }
 
     private void enableHighRefreshRate() {

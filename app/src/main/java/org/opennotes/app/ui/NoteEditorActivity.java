@@ -2733,6 +2733,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         saveCurrentPage();
         saveNotebookViewState();
         saveNotebookConfig();
+        try {
+            org.opennotes.app.sync.DriveSyncManager.getInstance().scheduleAutoSync(this);
+        } catch (Throwable ignored) {}
         super.finish();
         overridePendingTransition(R.anim.activity_close_enter, R.anim.activity_close_exit);
     }
@@ -7305,6 +7308,9 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         saveCurrentPage();
         saveNotebookViewState();
         saveNotebookConfig();
+        try {
+            org.opennotes.app.sync.DriveSyncManager.getInstance().scheduleAutoSync(this);
+        } catch (Throwable ignored) {}
     }
 
     @Override

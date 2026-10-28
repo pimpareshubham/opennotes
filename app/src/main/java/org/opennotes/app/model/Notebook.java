@@ -2,6 +2,7 @@ package org.opennotes.app.model;
 
 public class Notebook {
     public long id;
+    public String syncId;
     public String title;
     public String folder;
     public int coverColor;
@@ -24,6 +25,7 @@ public class Notebook {
 
     public Notebook(String title, int coverColor, PaperTemplate defaultTemplate) {
         this.id = 0;
+        this.syncId = java.util.UUID.randomUUID().toString();
         this.title = title;
         this.folder = "Default";
         this.coverColor = coverColor;

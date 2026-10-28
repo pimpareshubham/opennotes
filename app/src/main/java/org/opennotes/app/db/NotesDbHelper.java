@@ -43,11 +43,12 @@ import org.opennotes.app.util.NotebookViewStateManager;
 
 public class NotesDbHelper extends SQLiteOpenHelper {
     private static final String DATABASE_NAME = "opennotes.db";
-    private static final int DATABASE_VERSION = 7;
+    private static final int DATABASE_VERSION = 8;
 
     // Notebooks table
     public static final String TABLE_NOTEBOOKS = "notebooks";
     public static final String COL_NB_ID = "id";
+    public static final String COL_NB_SYNC_ID = "sync_id";
     public static final String COL_NB_TITLE = "title";
     public static final String COL_NB_FOLDER = "folder";
     public static final String COL_NB_COVER_COLOR = "cover_color";
@@ -212,6 +213,7 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE " + TABLE_NOTEBOOKS + " ("
                 + COL_NB_ID + " INTEGER PRIMARY KEY AUTOINCREMENT, "
+                + COL_NB_SYNC_ID + " TEXT, "
                 + COL_NB_TITLE + " TEXT NOT NULL, "
                 + COL_NB_FOLDER + " TEXT DEFAULT 'Default', "
                 + COL_NB_COVER_COLOR + " INTEGER, "
@@ -293,6 +295,10 @@ public class NotesDbHelper extends SQLiteOpenHelper {
             try { db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_COVER_IMAGE + " TEXT;"); } catch (Exception ignored) {}
             try { db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_COVER_TEXT + " TEXT;"); } catch (Exception ignored) {}
         }
+        if (oldVersion < 8) {
+            try { db.execSQL("ALTER TABLE " + TABLE_NOTEBOOKS + " ADD COLUMN " + COL_NB_SYNC_ID + " TEXT;"); } catch (Exception ignored) {}
+            try { db.execSQL("CREATE INDEX IF NOT EXISTS idx_notebooks_sync ON " + TABLE_NOTEBOOKS + "(" + COL_NB_SYNC_ID + ");"); } catch (Exception ignored) {}
+        }
     }
 
     /** Remove the old auto-created sample only when it still has its untouched default page. */
@@ -356,6 +362,10 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     public synchronized long insertNotebook(Notebook nb) {
         SQLiteDatabase db = getWritableDatabase();
         ContentValues cv = new ContentValues();
+        if (nb.syncId == null || nb.syncId.trim().isEmpty()) {
+            nb.syncId = java.util.UUID.randomUUID().toString();
+        }
+        cv.put(COL_NB_SYNC_ID, nb.syncId);
         cv.put(COL_NB_TITLE, nb.title);
         cv.put(COL_NB_FOLDER, nb.folder);
         cv.put(COL_NB_COVER_COLOR, nb.coverColor);
@@ -395,6 +405,10 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         db.beginTransaction();
         try {
             ContentValues values = new ContentValues();
+            if (notebook.syncId == null || notebook.syncId.trim().isEmpty()) {
+                notebook.syncId = java.util.UUID.randomUUID().toString();
+            }
+            values.put(COL_NB_SYNC_ID, notebook.syncId);
             values.put(COL_NB_TITLE, notebook.title != null ? notebook.title : "Imported Notebook");
             values.put(COL_NB_FOLDER, notebook.folder != null ? notebook.folder : "Default");
             values.put(COL_NB_COVER_COLOR, notebook.coverColor);
@@ -465,6 +479,9 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         cv.put(COL_NB_LAST_PAN_X, nb.lastPanX);
         cv.put(COL_NB_LAST_PAN_Y, nb.lastPanY);
         cv.put(COL_NB_UPDATED_AT, System.currentTimeMillis());
+        if (nb.syncId != null && !nb.syncId.isEmpty()) {
+            cv.put(COL_NB_SYNC_ID, nb.syncId);
+        }
 
         db.update(TABLE_NOTEBOOKS, cv, COL_NB_ID + "=?", new String[]{String.valueOf(nb.id)});
         if (nb != null) {
@@ -517,6 +534,10 @@ public class NotesDbHelper extends SQLiteOpenHelper {
     }
 
     public synchronized void deleteNotebook(long notebookId) {
+        Notebook nbToDelete = getNotebook(notebookId);
+        if (nbToDelete != null && nbToDelete.syncId != null && !nbToDelete.syncId.trim().isEmpty()) {
+            org.opennotes.app.db.AppSettings.getInstance(appContext).recordDeletedSyncId(nbToDelete.syncId);
+        }
         SQLiteDatabase db = getWritableDatabase();
         Cursor dc = null;
         try {
@@ -708,7 +729,108 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         if (lastPanYIdx != -1 && !c.isNull(lastPanYIdx)) {
             nb.lastPanY = c.getFloat(lastPanYIdx);
         }
+        int syncIdIdx = c.getColumnIndex(COL_NB_SYNC_ID);
+        if (syncIdIdx != -1 && !c.isNull(syncIdIdx)) {
+            nb.syncId = c.getString(syncIdIdx);
+        }
+        if (nb.syncId == null || nb.syncId.trim().isEmpty()) {
+            nb.syncId = java.util.UUID.randomUUID().toString();
+            try {
+                ContentValues syncCv = new ContentValues();
+                syncCv.put(COL_NB_SYNC_ID, nb.syncId);
+                getWritableDatabase().update(TABLE_NOTEBOOKS, syncCv, COL_NB_ID + "=?", new String[]{String.valueOf(nb.id)});
+            } catch (Throwable ignored) {}
+        }
         return nb;
+    }
+
+    public synchronized Notebook getNotebookBySyncId(String syncId) {
+        if (syncId == null || syncId.trim().isEmpty()) return null;
+        for (Notebook nb : notebookCache.values()) {
+            if (syncId.equals(nb.syncId)) return nb;
+        }
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor c = db.query(TABLE_NOTEBOOKS, null, COL_NB_SYNC_ID + "=?", new String[]{syncId}, null, null, null);
+        Notebook nb = null;
+        if (c != null && c.moveToFirst()) {
+            nb = cursorToNotebook(c);
+            c.close();
+        }
+        if (nb != null) {
+            notebookCache.put(nb.id, nb);
+        }
+        return nb;
+    }
+
+    /**
+     * Atomically updates an existing notebook and all its pages from cloud synchronization.
+     */
+    public synchronized void updateNotebookWithPages(long notebookId, Notebook notebook, List<Page> pages) {
+        if (notebook == null) throw new IllegalArgumentException("Notebook metadata is missing.");
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            ContentValues values = new ContentValues();
+            values.put(COL_NB_TITLE, notebook.title != null ? notebook.title : "Imported Notebook");
+            values.put(COL_NB_FOLDER, notebook.folder != null ? notebook.folder : "Default");
+            values.put(COL_NB_COVER_COLOR, notebook.coverColor);
+            values.put(COL_NB_COVER_STYLE, notebook.coverStyle);
+            if (notebook.coverImagePath != null) {
+                values.put(COL_NB_COVER_IMAGE, notebook.coverImagePath);
+            }
+            values.put(COL_NB_COVER_TEXT, notebook.coverText);
+            values.put(COL_NB_TEMPLATE, (notebook.defaultTemplate != null
+                    ? notebook.defaultTemplate : PaperTemplate.BLANK).name());
+            values.put(COL_NB_DEFAULT_BG_COLOR, notebook.defaultBgColor);
+            values.put(COL_NB_DEFAULT_IS_INFINITE, notebook.defaultIsInfinite ? 1 : 0);
+            values.put(COL_NB_PAGE_COUNT, Math.max(1, pages == null ? 0 : pages.size()));
+            values.put(COL_NB_FAVORITE, notebook.isFavorite ? 1 : 0);
+            values.put(COL_NB_PINNED, notebook.isPinned ? 1 : 0);
+            values.put(COL_NB_LAST_PAGE_INDEX, notebook.lastPageIndex);
+            values.put(COL_NB_LAST_SCROLL_Y, notebook.lastScrollY);
+            values.put(COL_NB_LAST_ZOOM, notebook.lastZoomPercent > 0 ? notebook.lastZoomPercent : 100f);
+            values.put(COL_NB_LAST_PAN_X, notebook.lastPanX);
+            values.put(COL_NB_LAST_PAN_Y, notebook.lastPanY);
+            values.put(COL_NB_UPDATED_AT, notebook.updatedAt > 0L ? notebook.updatedAt : System.currentTimeMillis());
+            if (notebook.syncId != null && !notebook.syncId.isEmpty()) {
+                values.put(COL_NB_SYNC_ID, notebook.syncId);
+            }
+            db.update(TABLE_NOTEBOOKS, values, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+
+            // Clean up and delete existing pages for this notebook
+            Cursor dc = null;
+            try {
+                dc = db.query(TABLE_PAGES, new String[]{COL_PAGE_STROKES, COL_PAGE_IMAGES},
+                        COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)},
+                        null, null, null);
+                if (dc != null) {
+                    while (dc.moveToNext()) {
+                        deleteLargeDataFile(dc.getString(0));
+                        deleteLargeDataFile(dc.getString(1));
+                    }
+                }
+            } catch (Throwable ignored) {
+            } finally {
+                if (dc != null) dc.close();
+            }
+            db.delete(TABLE_PAGES, COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+
+            // Insert updated pages
+            if (pages != null && !pages.isEmpty()) {
+                int index = 0;
+                for (Page page : pages) {
+                    if (page == null) continue;
+                    page.notebookId = notebookId;
+                    page.pageIndex = index++;
+                    insertPage(page);
+                }
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+        notebookCache.remove(notebookId);
+        invalidateCachedNotebooksAsync();
     }
 
     // --- File-Based Storage for Drawings (Zero CursorWindow Limits) ---

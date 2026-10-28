@@ -44,6 +44,19 @@ public final class NativeNoteArchive {
 
     private NativeNoteArchive() {}
 
+    /** Exports a notebook to a temporary .opennote archive file for cloud upload. */
+    public static File exportNotebookToTempArchive(Context context, NotesDbHelper db, Notebook notebook) throws IOException, JSONException {
+        if (context == null || db == null || notebook == null) {
+            throw new IllegalArgumentException("Context, db, and notebook required.");
+        }
+        List<Page> pages = db.getPagesForNotebook(notebook.id);
+        File tempFile = new File(context.getCacheDir(), "sync_" + (notebook.syncId != null ? notebook.syncId : notebook.id) + "_" + System.currentTimeMillis() + ".tmp");
+        try (FileOutputStream fos = new FileOutputStream(tempFile)) {
+            writeNotebook(context, notebook, pages, fos);
+        }
+        return tempFile;
+    }
+
     public static void writeNotebook(Context context, Notebook notebook, List<Page> pages,
                                      OutputStream output) throws IOException, JSONException {
         if (context == null || notebook == null || pages == null || output == null) {
@@ -105,6 +118,7 @@ public final class NativeNoteArchive {
             notebookJson.put("pinned", notebook.isPinned);
             notebookJson.put("createdAt", notebook.createdAt);
             notebookJson.put("updatedAt", notebook.updatedAt);
+            notebookJson.put("syncId", notebook.syncId != null ? notebook.syncId : "");
             manifest.put("notebook", notebookJson);
             manifest.put("pages", pageEntries);
             putJsonEntry(zip, MANIFEST, manifest);
@@ -245,7 +259,16 @@ public final class NativeNoteArchive {
                 pages.add(page);
             }
             if (pages.isEmpty()) throw new IOException("The notebook archive contains no pages.");
-            long id = db.importNotebookWithPages(notebook, pages);
+            Notebook existing = (notebook.syncId != null && !notebook.syncId.isEmpty())
+                    ? db.getNotebookBySyncId(notebook.syncId)
+                    : null;
+            long id;
+            if (existing != null) {
+                db.updateNotebookWithPages(existing.id, notebook, pages);
+                id = existing.id;
+            } else {
+                id = db.importNotebookWithPages(notebook, pages);
+            }
             committed = true;
             return id;
         } catch (JSONException e) {
@@ -281,6 +304,10 @@ public final class NativeNoteArchive {
         notebook.isPinned = json.optBoolean("pinned", false);
         notebook.createdAt = json.optLong("createdAt", notebook.createdAt);
         notebook.updatedAt = json.optLong("updatedAt", notebook.updatedAt);
+        String syncId = json.optString("syncId", "");
+        if (!syncId.isEmpty()) {
+            notebook.syncId = syncId;
+        }
         return notebook;
     }
 

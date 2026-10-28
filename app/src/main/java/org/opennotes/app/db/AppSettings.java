@@ -416,5 +416,130 @@ public class AppSettings {
     public void setNoScrollMode(boolean noScroll) {
         setContinuousVerticalScroll(!noScroll);
     }
+
+    // Google Sign-In and Google Drive Cloud Synchronization Settings
+    private static final String KEY_GOOGLE_ACCOUNT_EMAIL = "google_account_email";
+    private static final String KEY_GOOGLE_ACCOUNT_NAME = "google_account_name";
+    private static final String KEY_GOOGLE_ACCOUNT_PHOTO_URL = "google_account_photo_url";
+    private static final String KEY_GOOGLE_DRIVE_FOLDER_ID = "google_drive_folder_id";
+    private static final String KEY_GOOGLE_AUTO_SYNC_ENABLED = "google_auto_sync_enabled";
+    private static final String KEY_GOOGLE_LAST_SYNC_TIME = "google_last_sync_time";
+    private static final String KEY_GOOGLE_LAST_SYNC_STATUS = "google_last_sync_status";
+    private static final String KEY_GOOGLE_DELETED_SYNC_IDS = "google_deleted_sync_ids";
+    private static final String KEY_GOOGLE_OAUTH_ACCESS_TOKEN = "google_oauth_access_token";
+    private static final String KEY_GOOGLE_OAUTH_REFRESH_TOKEN = "google_oauth_refresh_token";
+    private static final String KEY_GOOGLE_OAUTH_EXPIRES_AT = "google_oauth_expires_at";
+
+    public boolean isGoogleSignedIn() {
+        return !getGoogleAccountEmail().isEmpty();
+    }
+
+    public String getGoogleAccountEmail() {
+        return prefs.getString(KEY_GOOGLE_ACCOUNT_EMAIL, "");
+    }
+
+    public String getGoogleAccountDisplayName() {
+        return prefs.getString(KEY_GOOGLE_ACCOUNT_NAME, "");
+    }
+
+    public String getGoogleAccountPhotoUrl() {
+        return prefs.getString(KEY_GOOGLE_ACCOUNT_PHOTO_URL, "");
+    }
+
+    public String getGoogleOAuthAccessToken() {
+        return prefs.getString(KEY_GOOGLE_OAUTH_ACCESS_TOKEN, "");
+    }
+
+    public String getGoogleOAuthRefreshToken() {
+        return prefs.getString(KEY_GOOGLE_OAUTH_REFRESH_TOKEN, "");
+    }
+
+    public long getGoogleOAuthExpiresAt() {
+        return prefs.getLong(KEY_GOOGLE_OAUTH_EXPIRES_AT, 0L);
+    }
+
+    public void setGoogleOAuthTokens(String accessToken, String refreshToken, long expiresInSeconds) {
+        long expiresAt = System.currentTimeMillis() + (expiresInSeconds * 1000L);
+        SharedPreferences.Editor editor = prefs.edit()
+                .putString(KEY_GOOGLE_OAUTH_ACCESS_TOKEN, accessToken != null ? accessToken : "")
+                .putLong(KEY_GOOGLE_OAUTH_EXPIRES_AT, expiresAt);
+        if (refreshToken != null && !refreshToken.isEmpty()) {
+            editor.putString(KEY_GOOGLE_OAUTH_REFRESH_TOKEN, refreshToken);
+        }
+        editor.apply();
+    }
+
+    public void setGoogleAccount(String email, String displayName, String photoUrl) {
+        prefs.edit()
+                .putString(KEY_GOOGLE_ACCOUNT_EMAIL, email != null ? email : "")
+                .putString(KEY_GOOGLE_ACCOUNT_NAME, displayName != null ? displayName : "")
+                .putString(KEY_GOOGLE_ACCOUNT_PHOTO_URL, photoUrl != null ? photoUrl : "")
+                .apply();
+    }
+
+    public void clearGoogleAccount() {
+        prefs.edit()
+                .remove(KEY_GOOGLE_ACCOUNT_EMAIL)
+                .remove(KEY_GOOGLE_ACCOUNT_NAME)
+                .remove(KEY_GOOGLE_ACCOUNT_PHOTO_URL)
+                .remove(KEY_GOOGLE_DRIVE_FOLDER_ID)
+                .remove(KEY_GOOGLE_LAST_SYNC_TIME)
+                .remove(KEY_GOOGLE_LAST_SYNC_STATUS)
+                .remove(KEY_GOOGLE_OAUTH_ACCESS_TOKEN)
+                .remove(KEY_GOOGLE_OAUTH_REFRESH_TOKEN)
+                .remove(KEY_GOOGLE_OAUTH_EXPIRES_AT)
+                .apply();
+    }
+
+    public String getGoogleDriveFolderId() {
+        return prefs.getString(KEY_GOOGLE_DRIVE_FOLDER_ID, "");
+    }
+
+    public void setGoogleDriveFolderId(String folderId) {
+        prefs.edit().putString(KEY_GOOGLE_DRIVE_FOLDER_ID, folderId != null ? folderId : "").apply();
+    }
+
+    public boolean isGoogleAutoSyncEnabled() {
+        return prefs.getBoolean(KEY_GOOGLE_AUTO_SYNC_ENABLED, true);
+    }
+
+    public void setGoogleAutoSyncEnabled(boolean enabled) {
+        prefs.edit().putBoolean(KEY_GOOGLE_AUTO_SYNC_ENABLED, enabled).apply();
+    }
+
+    public long getGoogleLastSyncTime() {
+        return prefs.getLong(KEY_GOOGLE_LAST_SYNC_TIME, 0L);
+    }
+
+    public void setGoogleLastSyncTime(long time) {
+        prefs.edit().putLong(KEY_GOOGLE_LAST_SYNC_TIME, time).apply();
+    }
+
+    public String getGoogleLastSyncStatus() {
+        return prefs.getString(KEY_GOOGLE_LAST_SYNC_STATUS, "");
+    }
+
+    public void setGoogleLastSyncStatus(String status) {
+        prefs.edit().putString(KEY_GOOGLE_LAST_SYNC_STATUS, status != null ? status : "").apply();
+    }
+
+    public synchronized void recordDeletedSyncId(String syncId) {
+        if (syncId == null || syncId.trim().isEmpty()) return;
+        java.util.Set<String> set = new java.util.HashSet<>(prefs.getStringSet(KEY_GOOGLE_DELETED_SYNC_IDS, new java.util.HashSet<>()));
+        set.add(syncId);
+        prefs.edit().putStringSet(KEY_GOOGLE_DELETED_SYNC_IDS, set).apply();
+    }
+
+    public synchronized java.util.Set<String> getDeletedSyncIds() {
+        return new java.util.HashSet<>(prefs.getStringSet(KEY_GOOGLE_DELETED_SYNC_IDS, new java.util.HashSet<>()));
+    }
+
+    public synchronized void clearDeletedSyncId(String syncId) {
+        if (syncId == null) return;
+        java.util.Set<String> set = new java.util.HashSet<>(prefs.getStringSet(KEY_GOOGLE_DELETED_SYNC_IDS, new java.util.HashSet<>()));
+        if (set.remove(syncId)) {
+            prefs.edit().putStringSet(KEY_GOOGLE_DELETED_SYNC_IDS, set).apply();
+        }
+    }
 }
 
