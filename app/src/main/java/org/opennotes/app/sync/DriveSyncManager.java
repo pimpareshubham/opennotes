@@ -249,7 +249,35 @@ public final class DriveSyncManager {
                 db.deduplicateNotebooks();
                 List<Notebook> localNotebooks = db.getAllNotebooks("All", false, null);
                 int totalLocal = localNotebooks.size();
-                int totalSteps = Math.max(1, totalLocal + remoteBySyncId.size());
+
+                // Resolve the same title-based legacy matches used below before calculating
+                // progress. Remote files that belong to local notebooks are already covered
+                // by the local pass and must not be counted a second time.
+                Set<String> matchedRemoteSyncIds = new HashSet<>();
+                for (Notebook localNb : localNotebooks) {
+                    if (localNb == null) continue;
+                    if (localNb.syncId == null || localNb.syncId.trim().isEmpty()) {
+                        localNb.syncId = UUID.randomUUID().toString();
+                        db.updateNotebookSyncId(localNb.id, localNb.syncId);
+                    }
+
+                    GoogleDriveApiClient.DriveFile matchedRemote = remoteBySyncId.get(localNb.syncId);
+                    if (matchedRemote == null && localNb.title != null && !localNb.title.trim().isEmpty()) {
+                        for (GoogleDriveApiClient.DriveFile rf : remoteBySyncId.values()) {
+                            if (matchedRemoteSyncIds.contains(rf.syncId)) continue;
+                            String rfTitle = extractTitleFromFileName(rf.name, rf.syncId);
+                            if (localNb.title.trim().equalsIgnoreCase(rfTitle.trim())) {
+                                matchedRemote = rf;
+                                localNb.syncId = rf.syncId;
+                                db.updateNotebookSyncId(localNb.id, rf.syncId);
+                                break;
+                            }
+                        }
+                    }
+                    if (matchedRemote != null) matchedRemoteSyncIds.add(matchedRemote.syncId);
+                }
+
+                int totalSteps = Math.max(1, totalLocal + remoteBySyncId.size() - matchedRemoteSyncIds.size());
                 Set<String> processedSyncIds = new HashSet<>();
 
                 for (int i = 0; i < totalLocal; i++) {
@@ -257,11 +285,6 @@ public final class DriveSyncManager {
                     if (localNb == null) continue;
 
                     int stepNum = i + 1;
-                    if (localNb.syncId == null || localNb.syncId.trim().isEmpty()) {
-                        localNb.syncId = UUID.randomUUID().toString();
-                        db.updateNotebookSyncId(localNb.id, localNb.syncId);
-                    }
-
                     GoogleDriveApiClient.DriveFile remoteFile = remoteBySyncId.get(localNb.syncId);
                     // If remote file not found by syncId, check if a remote file matches by title so we link them instead of creating a duplicate
                     if (remoteFile == null && localNb.title != null && !localNb.title.trim().isEmpty()) {
