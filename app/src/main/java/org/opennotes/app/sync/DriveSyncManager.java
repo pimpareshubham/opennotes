@@ -32,7 +32,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class DriveSyncManager {
     private static final String TAG = "DriveSyncManager";
-    private static final long DEBOUNCE_INTERVAL_MS = 15000L;
+    private static final long DEBOUNCE_INTERVAL_MS = 10000L;
+    private static final long REMOTE_POLL_INTERVAL_MS = 5 * 60 * 1000L;
 
     public interface SyncListener {
         void onSyncStarted();
@@ -73,8 +74,34 @@ public final class DriveSyncManager {
     }
 
     /**
+     * Checks if there are pending local changes (new, edited, or deleted notebooks)
+     * that require uploading or syncing to Google Drive.
+     */
+    public boolean hasPendingLocalChanges(@NonNull Context context) {
+        AppSettings settings = AppSettings.getInstance(context);
+        Set<String> deleted = settings.getDeletedSyncIds();
+        if (deleted != null && !deleted.isEmpty()) {
+            return true;
+        }
+        NotesDbHelper db = NotesDbHelper.getInstance(context);
+        List<Notebook> list = db.getAllNotebooks("All", false, null);
+        for (Notebook nb : list) {
+            if (nb == null) continue;
+            if (nb.syncId == null || nb.syncId.trim().isEmpty()) {
+                return true;
+            }
+            long lastSynced = settings.getNotebookLastSyncedTime(nb.syncId);
+            if (nb.updatedAt > lastSynced) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
      * Schedules an automatic background sync (e.g., triggered on note save, note exit, or app resume).
-     * Debounced to avoid unnecessary network pressure.
+     * Avoids redundant syncs: runs only if there are pending local changes or if the periodic
+     * remote polling interval (5 minutes) has elapsed.
      */
     public void scheduleAutoSync(@NonNull Context context) {
         Context appContext = context.getApplicationContext();
@@ -85,6 +112,15 @@ public final class DriveSyncManager {
 
         long now = System.currentTimeMillis();
         if (now - lastSyncAttemptTime < DEBOUNCE_INTERVAL_MS) {
+            return;
+        }
+
+        boolean hasLocalChanges = hasPendingLocalChanges(appContext);
+        long lastSyncTime = settings.getGoogleLastSyncTime();
+        boolean remotePollDue = (now - lastSyncTime) > REMOTE_POLL_INTERVAL_MS;
+
+        if (!hasLocalChanges && !remotePollDue) {
+            // Nothing changed locally and remote was checked recently. No redundant sync!
             return;
         }
 
@@ -111,12 +147,14 @@ public final class DriveSyncManager {
         lastSyncAttemptTime = System.currentTimeMillis();
         notifyStarted(singleListener);
 
-        syncExecutor.execute(() -> {
-            int uploadedCount = 0;
-            int downloadedCount = 0;
-            int deletedCount = 0;
+        try {
+            syncExecutor.execute(() -> {
+                int uploadedCount = 0;
+                int downloadedCount = 0;
+                int deletedCount = 0;
+                String syncError = null;
 
-            try {
+                try {
                 notifyProgress("Connecting to Google Drive…", 0, 0, singleListener);
 
                 // 1. Locate or create OpenNotes folder in Google Drive root
@@ -149,6 +187,7 @@ public final class DriveSyncManager {
                         }
                     }
                     settings.clearDeletedSyncId(deletedSyncId);
+                    settings.clearNotebookLastSyncedTime(deletedSyncId);
                 }
 
                 // 4. Compare and sync local notebooks to Google Drive
@@ -168,6 +207,8 @@ public final class DriveSyncManager {
                     processedSyncIds.add(localNb.syncId);
 
                     GoogleDriveApiClient.DriveFile remoteFile = remoteBySyncId.get(localNb.syncId);
+                    long lastSynced = settings.getNotebookLastSyncedTime(localNb.syncId);
+
                     if (remoteFile == null) {
                         // Notebook does not exist in Drive -> upload
                         notifyProgress("Uploading \"" + localNb.title + "\" (" + (i + 1) + "/" + totalLocal + ")…",
@@ -178,32 +219,22 @@ public final class DriveSyncManager {
                             GoogleDriveApiClient.getInstance().uploadNotebook(appContext, folderId,
                                     localNb.syncId, localNb.title, localNb.updatedAt, tempArchive);
                             uploadedCount++;
+                            settings.setNotebookLastSyncedTime(localNb.syncId, localNb.updatedAt);
                         } finally {
                             if (tempArchive != null && tempArchive.exists()) {
                                 tempArchive.delete();
                             }
                         }
                     } else {
-                        // Notebook exists in both -> compare timestamps
+                        // Notebook exists in both -> compare timestamps and dirty state
                         long localUpdated = localNb.updatedAt;
                         long remoteUpdated = remoteFile.updatedAt;
 
-                        if (localUpdated > remoteUpdated + 2000L) {
-                            // Local is newer -> update remote file
-                            notifyProgress("Updating \"" + localNb.title + "\" in Drive…",
-                                    i + 1, totalLocal, singleListener);
-                            File tempArchive = null;
-                            try {
-                                tempArchive = NativeNoteArchive.exportNotebookToTempArchive(appContext, db, localNb);
-                                GoogleDriveApiClient.getInstance().updateNotebook(appContext, remoteFile.id,
-                                        localNb.syncId, localNb.title, localNb.updatedAt, tempArchive);
-                                uploadedCount++;
-                            } finally {
-                                if (tempArchive != null && tempArchive.exists()) {
-                                    tempArchive.delete();
-                                }
-                            }
-                        } else if (remoteUpdated > localUpdated + 2000L) {
+                        boolean remoteIsNewer = remoteUpdated > localUpdated + 2000L;
+                        boolean localIsNewer = localUpdated > remoteUpdated + 2000L;
+                        boolean localDirty = localUpdated > lastSynced;
+
+                        if (remoteIsNewer) {
                             // Remote is newer -> download and update local notebook
                             notifyProgress("Downloading updated \"" + localNb.title + "\"…",
                                     i + 1, totalLocal, singleListener);
@@ -213,10 +244,33 @@ public final class DriveSyncManager {
                                 try (FileInputStream fis = new FileInputStream(tempDown)) {
                                     NativeNoteArchive.importNotebook(appContext, db, fis);
                                     downloadedCount++;
+                                    settings.setNotebookLastSyncedTime(localNb.syncId, Math.max(localUpdated, remoteUpdated));
                                 }
                             } finally {
                                 if (tempDown.exists()) tempDown.delete();
                             }
+                        } else if (localDirty && localIsNewer) {
+                            // Local was modified since last sync and is newer than remote -> update remote file
+                            notifyProgress("Updating \"" + localNb.title + "\" in Drive…",
+                                    i + 1, totalLocal, singleListener);
+                            File tempArchive = null;
+                            try {
+                                tempArchive = NativeNoteArchive.exportNotebookToTempArchive(appContext, db, localNb);
+                                GoogleDriveApiClient.getInstance().updateNotebook(appContext, remoteFile.id,
+                                        localNb.syncId, localNb.title, localNb.updatedAt, tempArchive);
+                                uploadedCount++;
+                                settings.setNotebookLastSyncedTime(localNb.syncId, localNb.updatedAt);
+                            } finally {
+                                if (tempArchive != null && tempArchive.exists()) {
+                                    tempArchive.delete();
+                                }
+                            }
+                        } else {
+                            // Both are already synchronized; avoid redundant re-compression or upload
+                            if (lastSynced < localUpdated) {
+                                settings.setNotebookLastSyncedTime(localNb.syncId, localUpdated);
+                            }
+                            Log.d(TAG, "Notebook \"" + localNb.title + "\" is in sync, skipping redundant upload.");
                         }
                     }
                 }
@@ -242,6 +296,7 @@ public final class DriveSyncManager {
                                 try (FileInputStream fis = new FileInputStream(tempDown)) {
                                     NativeNoteArchive.importNotebook(appContext, db, fis);
                                     downloadedCount++;
+                                    settings.setNotebookLastSyncedTime(rf.syncId, rf.updatedAt > 0L ? rf.updatedAt : System.currentTimeMillis());
                                 }
                             } finally {
                                 if (tempDown.exists()) tempDown.delete();
@@ -253,24 +308,35 @@ public final class DriveSyncManager {
                 // 6. Record success
                 long now = System.currentTimeMillis();
                 settings.setGoogleLastSyncTime(now);
-                String statusMsg = "Synced successfully";
-                if (uploadedCount > 0 || downloadedCount > 0) {
-                    statusMsg += " (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded)";
+                String statusMsg;
+                if (uploadedCount > 0 || downloadedCount > 0 || deletedCount > 0) {
+                    statusMsg = "Synced (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded"
+                            + (deletedCount > 0 ? ", " + deletedCount + " deleted" : "") + ")";
+                } else {
+                    statusMsg = "All notes up to date";
                 }
                 settings.setGoogleLastSyncStatus(statusMsg);
 
                 Log.i(TAG, "Google Drive sync completed: " + statusMsg);
-                notifyCompleted(uploadedCount, downloadedCount, deletedCount, singleListener);
 
             } catch (Throwable t) {
                 Log.e(TAG, "Google Drive synchronization failed", t);
-                String errorMsg = t.getMessage() != null ? t.getMessage() : "Sync failed";
-                AppSettings.getInstance(appContext).setGoogleLastSyncStatus("Failed: " + errorMsg);
-                notifyError(errorMsg, singleListener);
+                syncError = t.getMessage() != null ? t.getMessage() : "Sync failed";
+                AppSettings.getInstance(appContext).setGoogleLastSyncStatus("Failed: " + syncError);
             } finally {
                 isSyncing.set(false);
             }
+
+            if (syncError == null) {
+                notifyCompleted(uploadedCount, downloadedCount, deletedCount, singleListener);
+            } else {
+                notifyError(syncError, singleListener);
+            }
         });
+        } catch (Throwable t) {
+            isSyncing.set(false);
+            notifyError("Could not start background sync: " + t.getMessage(), singleListener);
+        }
     }
 
     private void notifyStarted(@Nullable SyncListener singleListener) {

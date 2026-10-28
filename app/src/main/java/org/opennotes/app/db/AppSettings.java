@@ -541,5 +541,20 @@ public class AppSettings {
             prefs.edit().putStringSet(KEY_GOOGLE_DELETED_SYNC_IDS, set).apply();
         }
     }
+
+    public long getNotebookLastSyncedTime(String syncId) {
+        if (syncId == null || syncId.isEmpty()) return 0L;
+        return prefs.getLong("sync_time_" + syncId, 0L);
+    }
+
+    public void setNotebookLastSyncedTime(String syncId, long timestamp) {
+        if (syncId == null || syncId.isEmpty()) return;
+        prefs.edit().putLong("sync_time_" + syncId, timestamp).apply();
+    }
+
+    public void clearNotebookLastSyncedTime(String syncId) {
+        if (syncId == null || syncId.isEmpty()) return;
+        prefs.edit().remove("sync_time_" + syncId).apply();
+    }
 }
 

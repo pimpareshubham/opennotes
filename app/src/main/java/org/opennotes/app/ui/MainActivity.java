@@ -1669,7 +1669,11 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
                             btnSyncNow.setEnabled(true);
                             textLastSyncTime.setText(getSyncTimeAgo(System.currentTimeMillis()));
                             updateCloudSyncIcon();
-                            Toast.makeText(MainActivity.this, "Sync complete! (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded)", Toast.LENGTH_SHORT).show();
+                            if (uploadedCount > 0 || downloadedCount > 0 || deletedCount > 0) {
+                                Toast.makeText(MainActivity.this, "Sync complete! (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded)", Toast.LENGTH_SHORT).show();
+                            } else {
+                                Toast.makeText(MainActivity.this, "All notes up to date", Toast.LENGTH_SHORT).show();
+                            }
                             if (downloadedCount > 0 || deletedCount > 0) {
                                 loadNotebooks();
                             }
@@ -1765,17 +1769,31 @@ public class MainActivity extends AppCompatActivity implements NotebookAdapter.O
         if (isSyncing) {
             btnCloudSync.setColorFilter(androidx.core.content.ContextCompat.getColor(this, R.color.accent));
             if (btnCloudSync.getAnimation() == null) {
-                android.view.animation.RotateAnimation rotate = new android.view.animation.RotateAnimation(
-                        0, 360,
+                android.view.animation.AnimationSet animSet = new android.view.animation.AnimationSet(true);
+                animSet.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+
+                android.view.animation.AlphaAnimation fade = new android.view.animation.AlphaAnimation(1.0f, 0.35f);
+                fade.setDuration(900);
+                fade.setRepeatCount(android.view.animation.Animation.INFINITE);
+                fade.setRepeatMode(android.view.animation.Animation.REVERSE);
+                animSet.addAnimation(fade);
+
+                android.view.animation.ScaleAnimation scale = new android.view.animation.ScaleAnimation(
+                        1.0f, 1.08f, 1.0f, 1.08f,
                         android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f,
                         android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f);
-                rotate.setDuration(1200);
-                rotate.setRepeatCount(android.view.animation.Animation.INFINITE);
-                rotate.setInterpolator(new android.view.animation.LinearInterpolator());
-                btnCloudSync.startAnimation(rotate);
+                scale.setDuration(900);
+                scale.setRepeatCount(android.view.animation.Animation.INFINITE);
+                scale.setRepeatMode(android.view.animation.Animation.REVERSE);
+                animSet.addAnimation(scale);
+
+                btnCloudSync.startAnimation(animSet);
             }
         } else {
             btnCloudSync.clearAnimation();
+            btnCloudSync.setAlpha(1.0f);
+            btnCloudSync.setScaleX(1.0f);
+            btnCloudSync.setScaleY(1.0f);
             if (signedIn) {
                 btnCloudSync.setColorFilter(androidx.core.content.ContextCompat.getColor(this, R.color.accent));
             } else {

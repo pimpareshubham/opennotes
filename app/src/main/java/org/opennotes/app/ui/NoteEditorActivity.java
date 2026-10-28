@@ -299,6 +299,27 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
     private long recordStartTime = 0;
     private AlertDialog googleDriveSyncDialog;
     private ActivityResultLauncher<Intent> googleSignInLauncher;
+    private final DriveSyncManager.SyncListener editorSyncListener = new DriveSyncManager.SyncListener() {
+        @Override
+        public void onSyncStarted() {
+            runOnUiThread(NoteEditorActivity.this::updateCloudSyncIcon);
+        }
+
+        @Override
+        public void onSyncProgress(String stage, int current, int total) {
+            runOnUiThread(NoteEditorActivity.this::updateCloudSyncIcon);
+        }
+
+        @Override
+        public void onSyncCompleted(int uploaded, int downloaded, int deleted) {
+            runOnUiThread(NoteEditorActivity.this::updateCloudSyncIcon);
+        }
+
+        @Override
+        public void onSyncError(String errorMessage) {
+            runOnUiThread(NoteEditorActivity.this::updateCloudSyncIcon);
+        }
+    };
 
     private final int[] QUICK_TOOL_COLORS = {
             0xFFFFFFFF, // Pure White
@@ -2114,7 +2135,11 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
                     public void onSyncCompleted(int uploadedCount, int downloadedCount, int deletedCount) {
                         runOnUiThread(() -> {
                             updateCloudSyncIcon();
-                            Toast.makeText(NoteEditorActivity.this, "Synced with Google Drive! (" + uploadedCount + " uploaded)", Toast.LENGTH_SHORT).show();
+                            if (uploadedCount > 0 || downloadedCount > 0 || deletedCount > 0) {
+                                Toast.makeText(NoteEditorActivity.this, "Synced with Google Drive! (" + uploadedCount + " uploaded, " + downloadedCount + " downloaded)", Toast.LENGTH_SHORT).show();
+                            } else {
+                                Toast.makeText(NoteEditorActivity.this, "All notes up to date", Toast.LENGTH_SHORT).show();
+                            }
                         });
                     }
 
@@ -2385,6 +2410,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         }
 
         btnExitFullscreen.setOnClickListener(v -> setZenFullscreen(false));
+        DriveSyncManager.getInstance().addListener(editorSyncListener);
     }
 
     private long lastToolClickTime = 0L;
@@ -7441,6 +7467,7 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         try {
             org.opennotes.app.util.PdfPageRenderer.closeRenderer();
         } catch (Exception ignored) {}
+        DriveSyncManager.getInstance().removeListener(editorSyncListener);
     }
 
     private void enableHighRefreshRate() {
@@ -7482,17 +7509,31 @@ public class NoteEditorActivity extends AppCompatActivity implements CanvasView.
         if (isSyncing) {
             btnCloudSync.setColorFilter(ContextCompat.getColor(this, R.color.accent));
             if (btnCloudSync.getAnimation() == null) {
-                android.view.animation.RotateAnimation rotate = new android.view.animation.RotateAnimation(
-                        0, 360,
+                android.view.animation.AnimationSet animSet = new android.view.animation.AnimationSet(true);
+                animSet.setInterpolator(new android.view.animation.AccelerateDecelerateInterpolator());
+
+                android.view.animation.AlphaAnimation fade = new android.view.animation.AlphaAnimation(1.0f, 0.35f);
+                fade.setDuration(900);
+                fade.setRepeatCount(android.view.animation.Animation.INFINITE);
+                fade.setRepeatMode(android.view.animation.Animation.REVERSE);
+                animSet.addAnimation(fade);
+
+                android.view.animation.ScaleAnimation scale = new android.view.animation.ScaleAnimation(
+                        1.0f, 1.08f, 1.0f, 1.08f,
                         android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f,
                         android.view.animation.Animation.RELATIVE_TO_SELF, 0.5f);
-                rotate.setDuration(1200);
-                rotate.setRepeatCount(android.view.animation.Animation.INFINITE);
-                rotate.setInterpolator(new android.view.animation.LinearInterpolator());
-                btnCloudSync.startAnimation(rotate);
+                scale.setDuration(900);
+                scale.setRepeatCount(android.view.animation.Animation.INFINITE);
+                scale.setRepeatMode(android.view.animation.Animation.REVERSE);
+                animSet.addAnimation(scale);
+
+                btnCloudSync.startAnimation(animSet);
             }
         } else {
             btnCloudSync.clearAnimation();
+            btnCloudSync.setAlpha(1.0f);
+            btnCloudSync.setScaleX(1.0f);
+            btnCloudSync.setScaleY(1.0f);
             if (signedIn) {
                 btnCloudSync.setColorFilter(ContextCompat.getColor(this, R.color.accent));
             } else {

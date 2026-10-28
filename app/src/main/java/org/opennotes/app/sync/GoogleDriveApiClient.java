@@ -174,6 +174,11 @@ public final class GoogleDriveApiClient {
                     } catch (Throwable ignored) {}
                 }
 
+                String modifiedTimeStr = f.optString("modifiedTime", "");
+                if (updatedAt <= 0L && !modifiedTimeStr.isEmpty()) {
+                    updatedAt = parseRfc3339(modifiedTimeStr);
+                }
+
                 list.add(new DriveFile(id, name, mimeType, size, syncId, updatedAt, trashed));
             }
         }
@@ -360,7 +365,12 @@ public final class GoogleDriveApiClient {
     private HttpURLConnection openConnection(String urlStr, String method, String token, String contentType) throws IOException {
         URL url = new URL(urlStr);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod(method);
+        if ("PATCH".equalsIgnoreCase(method)) {
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("X-HTTP-Method-Override", "PATCH");
+        } else {
+            conn.setRequestMethod(method);
+        }
         conn.setConnectTimeout(TIMEOUT_MS);
         conn.setReadTimeout(TIMEOUT_MS);
         conn.setRequestProperty("Authorization", "Bearer " + token);
@@ -442,5 +452,27 @@ public final class GoogleDriveApiClient {
         } catch (Throwable t) {
             return "Unable to read error stream: " + t.getMessage();
         }
+    }
+
+    public static long parseRfc3339(String timestamp) {
+        if (timestamp == null || timestamp.isEmpty()) return 0L;
+        try {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                return java.time.Instant.parse(timestamp).toEpochMilli();
+            }
+        } catch (Throwable ignored) {}
+        try {
+            java.text.SimpleDateFormat sdf = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US);
+            sdf.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            java.util.Date d = sdf.parse(timestamp);
+            if (d != null) return d.getTime();
+        } catch (Throwable ignored) {}
+        try {
+            java.text.SimpleDateFormat sdf2 = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", java.util.Locale.US);
+            sdf2.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            java.util.Date d2 = sdf2.parse(timestamp);
+            if (d2 != null) return d2.getTime();
+        } catch (Throwable ignored) {}
+        return 0L;
     }
 }
