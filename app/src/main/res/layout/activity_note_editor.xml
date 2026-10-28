@@ -239,6 +239,17 @@
             </LinearLayout>
         </HorizontalScrollView>
 
+        <!-- Editor Top Sync Progress Indicator -->
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/topSyncProgressBar"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:indeterminate="true"
+            android:visibility="gone"
+            app:trackThickness="3dp"
+            app:trackColor="@android:color/transparent"
+            app:indicatorColor="@color/accent" />
+
         <View
             android:layout_width="match_parent"
             android:layout_height="1dp"

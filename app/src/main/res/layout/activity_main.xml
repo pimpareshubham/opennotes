@@ -95,6 +95,20 @@
                     android:contentDescription="More options" />
             </LinearLayout>
 
+            <!-- Top Sync Linear Progress Indicator -->
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/topSyncProgressBar"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:indeterminate="true"
+                android:visibility="gone"
+                app:trackThickness="3.5dp"
+                app:trackCornerRadius="2dp"
+                app:trackColor="@android:color/transparent"
+                app:indicatorColor="@color/accent"
+                android:layout_marginHorizontal="20dp"
+                android:layout_marginBottom="6dp" />
+
             <!-- Search Bar -->
             <LinearLayout
                 android:id="@+id/homeSearchBar"

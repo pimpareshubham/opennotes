@@ -762,6 +762,163 @@ public class NotesDbHelper extends SQLiteOpenHelper {
         return nb;
     }
 
+    public synchronized Notebook getNotebookByTitle(String title, String folder) {
+        if (title == null || title.trim().isEmpty()) return null;
+        String targetTitle = title.trim();
+        String targetFolder = (folder == null || folder.trim().isEmpty()) ? "Default" : folder.trim();
+
+        for (Notebook nb : notebookCache.values()) {
+            if (targetTitle.equalsIgnoreCase(nb.title != null ? nb.title.trim() : "")
+                    && targetFolder.equalsIgnoreCase(nb.folder != null ? nb.folder.trim() : "Default")) {
+                return nb;
+            }
+        }
+
+        SQLiteDatabase db = getReadableDatabase();
+        Cursor c = null;
+        Notebook nb = null;
+        try {
+            c = db.query(TABLE_NOTEBOOKS, null,
+                    "LOWER(TRIM(" + COL_NB_TITLE + ")) = LOWER(TRIM(?)) AND LOWER(TRIM(" + COL_NB_FOLDER + ")) = LOWER(TRIM(?))",
+                    new String[]{targetTitle, targetFolder},
+                    null, null, COL_NB_UPDATED_AT + " DESC", "1");
+            if (c != null && c.moveToFirst()) {
+                nb = cursorToNotebook(c);
+            }
+        } catch (Throwable t) {
+            Log.w("NotesDbHelper", "Error querying notebook by title: " + t.getMessage());
+        } finally {
+            if (c != null) c.close();
+        }
+
+        if (nb == null) {
+            try {
+                c = db.query(TABLE_NOTEBOOKS, null,
+                        "LOWER(TRIM(" + COL_NB_TITLE + ")) = LOWER(TRIM(?))",
+                        new String[]{targetTitle},
+                        null, null, COL_NB_UPDATED_AT + " DESC", "1");
+                if (c != null && c.moveToFirst()) {
+                    nb = cursorToNotebook(c);
+                }
+            } catch (Throwable t) {
+                Log.w("NotesDbHelper", "Error fallback querying notebook by title: " + t.getMessage());
+            } finally {
+                if (c != null) c.close();
+            }
+        }
+
+        if (nb != null) {
+            notebookCache.put(nb.id, nb);
+        }
+        return nb;
+    }
+
+    /**
+     * Safely deletes a duplicate redundant notebook row without recording its syncId as deleted
+     * to prevent trashing the remote backup file in cloud sync.
+     */
+    public synchronized void deleteDuplicateNotebookInternal(long notebookId) {
+        SQLiteDatabase db = getWritableDatabase();
+        Cursor dc = null;
+        try {
+            dc = db.query(TABLE_PAGES, new String[]{COL_PAGE_STROKES, COL_PAGE_IMAGES},
+                    COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)},
+                    null, null, null);
+            if (dc != null) {
+                while (dc.moveToNext()) {
+                    deleteLargeDataFile(dc.getString(0));
+                    deleteLargeDataFile(dc.getString(1));
+                }
+            }
+        } catch (Throwable ignored) {
+        } finally {
+            if (dc != null) dc.close();
+        }
+        db.delete(TABLE_PAGES, COL_PAGE_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+        db.delete(TABLE_NOTEBOOKS, COL_NB_ID + "=?", new String[]{String.valueOf(notebookId)});
+        notebookCache.remove(notebookId);
+        NotebookConfigManager.clearConfig(appContext, notebookId);
+        NotebookViewStateManager.clearState(appContext, notebookId);
+    }
+
+    /**
+     * Finds and removes redundant duplicate notebooks that have identical title and folder.
+     * Evaluates content, non-empty pages, page count, and updatedAt to preserve the richest user notebook.
+     */
+    public synchronized int deduplicateNotebooks() {
+        List<Notebook> all = getAllNotebooks("All", false, null);
+        if (all == null || all.size() <= 1) return 0;
+
+        java.util.Map<String, List<Notebook>> groups = new java.util.HashMap<>();
+        for (Notebook nb : all) {
+            if (nb == null || nb.title == null) continue;
+            String normTitle = nb.title.trim().toLowerCase(java.util.Locale.US);
+            String normFolder = (nb.folder != null ? nb.folder.trim().toLowerCase(java.util.Locale.US) : "default");
+            String key = normFolder + ":::" + normTitle;
+            List<Notebook> group = groups.get(key);
+            if (group == null) {
+                group = new ArrayList<>();
+                groups.put(key, group);
+            }
+            group.add(nb);
+        }
+
+        int removedCount = 0;
+        for (List<Notebook> group : groups.values()) {
+            if (group.size() <= 1) continue;
+
+            Notebook best = null;
+            int bestScore = -1;
+            long latestUpdated = -1L;
+
+            for (Notebook nb : group) {
+                int score = 0;
+                List<Page> pages = getPagesForNotebook(nb.id);
+                int nonEmptyPages = 0;
+                if (pages != null) {
+                    for (Page p : pages) {
+                        if (p != null) {
+                            String strokes = p.strokesToJson();
+                            String images = p.imagesToJson();
+                            String shapes = p.shapesToJson();
+                            String texts = p.textsToJson();
+                            if ((strokes != null && !strokes.isEmpty() && !"[]".equals(strokes.trim()))
+                                    || (images != null && !images.isEmpty() && !"[]".equals(images.trim()))
+                                    || (shapes != null && !shapes.isEmpty() && !"[]".equals(shapes.trim()))
+                                    || (texts != null && !texts.isEmpty() && !"[]".equals(texts.trim()))) {
+                                nonEmptyPages++;
+                            }
+                        }
+                    }
+                }
+                score += nonEmptyPages * 1000 + nb.pageCount * 10;
+                if (nb.isFavorite) score += 5;
+                if (nb.isPinned) score += 5;
+
+                if (score > bestScore || (score == bestScore && nb.updatedAt > latestUpdated)) {
+                    bestScore = score;
+                    latestUpdated = nb.updatedAt;
+                    best = nb;
+                }
+            }
+
+            if (best != null) {
+                for (Notebook nb : group) {
+                    if (nb.id != best.id) {
+                        Log.i("NotesDbHelper", "Deduplicating: removing duplicate notebook \"" + nb.title + "\" (id=" + nb.id + ") in favor of id=" + best.id);
+                        deleteDuplicateNotebookInternal(nb.id);
+                        removedCount++;
+                    }
+                }
+            }
+        }
+
+        if (removedCount > 0) {
+            invalidateCachedNotebooksAsync();
+        }
+        return removedCount;
+    }
+
     /**
      * Atomically updates an existing notebook and all its pages from cloud synchronization.
      */

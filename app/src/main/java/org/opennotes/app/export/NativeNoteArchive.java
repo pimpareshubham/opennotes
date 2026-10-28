@@ -262,8 +262,14 @@ public final class NativeNoteArchive {
             Notebook existing = (notebook.syncId != null && !notebook.syncId.isEmpty())
                     ? db.getNotebookBySyncId(notebook.syncId)
                     : null;
+            if (existing == null && notebook.title != null && !notebook.title.trim().isEmpty()) {
+                existing = db.getNotebookByTitle(notebook.title, notebook.folder);
+            }
             long id;
             if (existing != null) {
+                if (notebook.syncId != null && !notebook.syncId.isEmpty()) {
+                    existing.syncId = notebook.syncId;
+                }
                 db.updateNotebookWithPages(existing.id, notebook, pages);
                 id = existing.id;
             } else {
